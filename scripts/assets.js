@@ -22,6 +22,8 @@ const EXPECTED = [
 	'webview/katex/katex.min.css',
 	'webview/katex/fonts/KaTeX_Main-Regular.woff2',
 	'webview/mermaid.js',
+	'sqljs/sql-wasm.wasm',
+	'continuityWorker.js',
 	'THIRD_PARTY_NOTICES.txt',
 ];
 
@@ -64,6 +66,9 @@ function copyAssets(root, dist = path.join(root, 'dist')) {
 	for (const f of fs.readdirSync(path.join(katex, 'fonts')).filter((f) => f.endsWith('.woff2'))) {
 		fs.copyFileSync(path.join(katex, 'fonts', f), path.join(kout, 'fonts', f));
 	}
+	// sql.js (continuity index): the JS is bundled into dist/continuityWorker.js, the WebAssembly binary is loaded from here.
+	copy(mod(root, 'sql.js', 'dist', 'sql-wasm.wasm'), path.join(dist, 'sqljs', 'sql-wasm.wasm'));
+	copy(mod(root, 'sql.js', 'LICENSE'), path.join(dist, 'sqljs', 'LICENSE'));
 	writeNotices(root, dist);
 }
 
@@ -88,6 +93,7 @@ function writeNotices(root, dist) {
 			read(mod(root, 'dompurify', 'LICENSE'))
 		),
 		section('KaTeX (MIT), dist/webview/katex', read(mod(root, 'katex', 'LICENSE'))),
+		section('sql.js (MIT; SQLite is public domain), dist/sqljs and dist/continuityWorker.js', read(mod(root, 'sql.js', 'LICENSE'))),
 	];
 	fs.writeFileSync(path.join(dist, 'THIRD_PARTY_NOTICES.txt'), parts.filter(Boolean).join('\n'));
 }

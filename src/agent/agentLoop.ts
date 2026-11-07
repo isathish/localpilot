@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
 import { ContextManager, effectiveContextWindow, FitResult, MIN_CONTEXT_WINDOW, tokenCalibration } from '../context/contextManager';
@@ -14,7 +16,7 @@ import { parseArgs, ToolRegistry } from '../tools/registry';
 import { approvalModeFor, deniedResultText, effectiveApproval, toDecision } from './approvalLevel';
 import type { TestSummary } from './healing/parsers/testSummary';
 import { isReadOnlyOrSafe } from './commandGuard';
-import { AgentEvent, ApprovalDecision, ApprovalOptions, TerminalApprovalMode, ChatMessage, HealingRawOutcome, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolCallDecision, ToolContext, ToolDefinition, ToolResult, isWriteMode } from '../types';
+import { AgentEvent, ApprovalDecision, ApprovalOptions, TerminalApprovalMode, ChatMessage, CompactionDetails, HealingRawOutcome, ModelInfo, ProviderUsage, Session, Tool, ToolCall, ToolCallDecision, ToolContext, ToolDefinition, ToolResult, isWriteMode } from '../types';
 import { addUsage } from './usage';
 import { withCost } from '../providers/pricing';
 import { ParallelPool } from './parallel';
@@ -38,7 +40,9 @@ import { firstTokenFloor } from '../providers/providerOptions';
 import { canonicalToolName, claudeToolInput, defaultModeDecision, evaluatePermission, fromClaudeToolInput, toolNames } from './permissions';
 import { audit, autoApprovedMode, flooredApproval, getManagedPolicy, policyVerdict, toolAllowed, WEB_TOOLS } from './managedPolicy';
 import { emptySettings, ProjectSettings } from './settings';
-import { runDigest, saveRunMemories } from './autoMemory';
+import { MemoryTurnHooks, runDigest, saveRunMemories } from './autoMemory';
+import type { ContextTurnHooks, ExcludedRef } from './contextHooks';
+import type { RunEndInfo, RunHandle, SessionRunHooks } from './sessionHooks';
 import { editToolsToOmit, irrelevantTools } from './toolRelevance';
 import { withEditPreview } from '../ui/editPreview';
 import { MistakeCounter, mistakeLimitMessage } from './mistakes';
@@ -176,6 +180,8 @@ export interface AgentRunOptions {
   resume?: boolean;
   /** The task-queue entry this run executes: kept in the recovery state, so interventions find their queue task. */
   taskId?: string;
+  /** The chat's Trace recorder id for this run (continuity: the agent session id derives from it). */
+  traceId?: string;
 }
 
 const MAX_ITERATIONS_DEFAULT = 40;
@@ -267,6 +273,14 @@ export class AgentRunner {
   archive?: TranscriptArchive;
   /** Self-healing engine service (detect, retry, fix, verify); absent = the loop behaves exactly as without it. */
   healing?: HealingService;
+  /** 1.7 conversation and task memory (continuity); absent = 1.6 behaviour. */
+  memoryHooks?: MemoryTurnHooks;
+  /** 1.7 context snapshots, the local-only policy and restoration notes (continuity); absent = 1.6 behaviour. */
+  contextHooks?: ContextTurnHooks;
+  /** 1.7 agent sessions, execution events and drafts of partial answers (continuity SESSION); absent = 1.6 behaviour. */
+  sessionHooks?: SessionRunHooks;
+  /** The last compaction summary of each chat's running turn (conversation memory). */
+  private readonly turnCompactions = new Map<string, string>();
 
   async run(o: AgentRunOptions): Promise<string> {
     // The user is waiting on this run: background model work from earlier runs gives way.
@@ -283,7 +297,30 @@ export class AgentRunner {
     let reply: string | undefined;
     const span = startRunSpan(this.telemetry?.tracing, { sid: o.session.id, mode: o.mode ?? o.session.mode, depth: o.depth ?? 0, agent: (o.depth ?? 0) > 0 ? o.session.title.split(':')[0] : undefined, input: () => o.session.messages.filter((m) => m.role === 'user').pop()?.content });
     /** The turn's healing engine, disposed when the run ends (stop reason `shutdown` -> interrupted, a user stop -> cancelled). */
-    const life: { heal?: HealingEngine } = {};
+    const life: { heal?: HealingEngine; run?: RunHandle } = {};
+    // Continuity (SESSION): the run becomes an agent session; its events, execution events; its streaming text, a draft.
+    if (topLevel && !o.scratch && this.sessionHooks) {
+      try {
+        life.run = this.sessionHooks.start({ session: o.session, userMessage: o.userMessage, run: o.userMessage.meta?.checkpoint, traceId: o.traceId, mode: o.mode ?? o.session.mode, specialist: o.specialist ?? o.session.specialist, model: o.modelRef ?? o.session.model, root: o.workspaceRoot ?? this.workspace.root });
+      } catch (e) {
+        this.log.warn(`continuity: run start: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      const h = life.run;
+      if (h) {
+        const base = o.emit;
+        o = {
+          ...o,
+          emit: (e) => {
+            base(e);
+            try {
+              h.event(e);
+            } catch {
+              // never breaks the run
+            }
+          },
+        };
+      }
+    }
     try {
       const tracing = this.telemetry?.tracing;
       const text = await (tracing ? tracing.with(span, () => this.runTurn(o, stats, life)) : this.runTurn(o, stats, life));
@@ -302,6 +339,13 @@ export class AgentRunner {
         await life.heal.dispose(reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : o.signal.aborted ? 'cancelled' : undefined).catch((e) => this.log.warn(`Self-healing: could not close the recovery state: ${e instanceof Error ? e.message : String(e)}`));
       }
       this.unassign(o.session.id);
+      if (life.run) {
+        try {
+          life.run.end(this.runEnd(o, stats, outcome, error));
+        } catch (e) {
+          this.log.warn(`continuity: run end: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       if (topLevel && !o.scratch && (outcome === 'stopped' || error)) {
         this.endHook(o, outcome === 'stopped' ? 'TaskCancel' : 'TaskError', error);
       }
@@ -329,6 +373,33 @@ export class AgentRunner {
         this.telemetry?.record({ type: 'task', sid: o.session.id, action: outcome === 'done' ? done : outcome === 'stopped' ? 'aborted' : 'failed', mode: o.mode ?? o.session.mode });
       }
     }
+  }
+
+  /** What the SESSION hooks record when a run ends: the outcome (a shutdown stop is `interrupted`), tokens, files touched. */
+  private runEnd(o: AgentRunOptions, stats: RunStats, outcome: 'done' | 'stopped' | 'failed', error: string | undefined): RunEndInfo {
+    const reason: unknown = o.signal.aborted ? o.signal.reason : undefined;
+    const why = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : '';
+    const root = o.workspaceRoot ?? this.workspace.root;
+    const run = o.userMessage.meta?.checkpoint;
+    const filesTouched: NonNullable<RunEndInfo['filesTouched']> = [];
+    if (run !== undefined && this.tracker) {
+      for (const [fsPath, original] of this.tracker.turnOriginals(o.session.id, run)) {
+        if (filesTouched.length >= 200) {
+          break;
+        }
+        const rel = root ? path.relative(root, fsPath) : fsPath;
+        const shown = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep).join('/') : fsPath;
+        filesTouched.push({ path: shown, status: original === undefined ? 'A' : fs.existsSync(fsPath) ? 'M' : 'D' });
+      }
+    }
+    return {
+      outcome: outcome === 'stopped' ? (/shutdown/i.test(why) ? 'interrupted' : 'stopped') : outcome === 'failed' || error ? 'error' : 'ok',
+      ...(error ? { error } : {}),
+      ...(stats.model ? { model: stats.model } : {}),
+      ...(stats.promptTokens ? { promptTokens: stats.promptTokens } : {}),
+      ...(stats.completionTokens ? { completionTokens: stats.completionTokens } : {}),
+      filesTouched,
+    };
   }
 
   /**
@@ -361,7 +432,7 @@ export class AgentRunner {
     return true;
   }
 
-  private async runTurn(o: AgentRunOptions, stats: HealedStats, life: { heal?: HealingEngine } = {}): Promise<string> {
+  private async runTurn(o: AgentRunOptions, stats: HealedStats, life: { heal?: HealingEngine; run?: RunHandle } = {}): Promise<string> {
     const cfg = getConfig();
     const depth = o.depth ?? 0;
     const session = o.session;
@@ -480,7 +551,9 @@ export class AgentRunner {
     // Conditional rules (`paths:` / `globs:` front matter) follow the files in context this turn.
     const contextPaths = o.scratch ? [] : this.workspace.contextPaths(o.userMessage.content, session.workingSet);
     // About 5% of the window for memory (1.5k–12k characters), so notes never crowd out the conversation on a small model.
-    const memorySection = cfg.memoryEnabled && depth === 0 && !o.scratch ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05)))) : undefined;
+    // Notes the prompt leaves out (local only for a cloud model, over budget) are listed in the context snapshot.
+    const memoryExcluded: ExcludedRef[] = [];
+    const memorySection = cfg.memoryEnabled && depth === 0 && !o.scratch ? await this.memory?.promptSection(Math.min(12_000, Math.max(1_500, Math.floor(model.contextWindow * 4 * 0.05))), { sessionId: session.id, cloud: !!model.remote, excluded: memoryExcluded }) : undefined;
     const system = await buildSystemPrompt({
       contextPaths,
       mode: turnMode,
@@ -510,7 +583,10 @@ export class AgentRunner {
     if (conditional.length) {
       emit({ sessionId: session.id, type: 'rules_applied', payload: { files: conditional.map((f) => f.label) } });
     }
-    const turnContext = buildTurnContext({ mode: turnMode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
+    const turnContextBase = buildTurnContext({ mode: turnMode, workspace: this.workspace, workingSet: session.workingSet, todos: session.todos });
+    // A chat reopened after its files changed elsewhere: say which ones, once (continuity's context restoration).
+    const changedNote = depth === 0 && !o.scratch ? this.contextHooks?.turnNote?.(session) : undefined;
+    const turnContext = changedNote ? (turnContextBase ? turnContextBase.replace(/<\/turn-context>$/, `\n${changedNote}\n</turn-context>`) : `<turn-context>\n${changedNote}\n</turn-context>`) : turnContextBase;
     const isolated = !!o.isolatedFrom;
     const systemIsolated = isolated && !o.scratch
       ? `${system}\n\n# Isolated workspace\nYou are working in an isolated copy of the repository (a git worktree at ${o.workspaceRoot}). It mirrors the user's checkout including their uncommitted work. Use relative paths as usual; file, search and terminal tools already run inside the copy. The user reviews your changes afterwards and applies them to the real workspace, so finish the task completely here — do not ask them to copy anything.`
@@ -526,6 +602,19 @@ export class AgentRunner {
       }
       emit({ sessionId: session.id, type: 'context', payload: { contextTokens: session.contextTokens, contextWindow: model.contextWindow, ...(depth === 0 ? { breakdown: session.contextBreakdown } : {}) } });
     };
+    // Continuity (1.7): what the model saw, per turn and around each compaction. Never fails the turn.
+    const recordContext = (phase: 'turn' | 'before-compaction' | 'after-compaction', history: readonly ChatMessage[], usedTokens: number, compaction?: CompactionDetails) => {
+      if (depth !== 0 || o.scratch || !this.contextHooks?.snapshot) {
+        return;
+      }
+      try {
+        this.contextHooks.snapshot({ session, model, phase, messages: history, usedTokens, breakdown: phase === 'turn' && session.contextBreakdown ? session.contextBreakdown : breakdownOf(history), memorySection, memoryExcluded, rules: rulesText, ruleLabels: conditional.map((f) => f.label), compaction, root: o.workspaceRoot ?? this.workspace.root });
+      } catch (e) {
+        this.log.debug(`context snapshot skipped: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    };
+    /** The history and size of the turn's latest request (the turn's snapshot). */
+    let lastRequest: { messages: ChatMessage[]; tokens: number } | undefined;
 
     const wasEmpty = session.messages.length === 0;
     // A chat with earlier messages that this runner has not run yet was reopened (history, `--resume`): SessionStart `resume`.
@@ -540,6 +629,11 @@ export class AgentRunner {
     session.messages.push(turnMessage);
     if (depth === 0) {
       o.onUserMessage?.(turnMessage);
+      try {
+        life.run?.userMessage?.(turnMessage);
+      } catch {
+        // continuity never breaks a run
+      }
     }
     if (depth === 0 && !o.scratch && this.checkpoints) {
       // Before hooks and the first model call, so everything this turn changes (shell commands included) can be rolled back.
@@ -814,6 +908,13 @@ export class AgentRunner {
         set: (items) => {
           session.todos = items;
           emit({ sessionId: session.id, type: 'todos', payload: items });
+          if (depth === 0 && !o.scratch) {
+            try {
+              this.memoryHooks?.onTodos?.(session, items);
+            } catch (e) {
+              this.log.debug(`memory: task note skipped: ${String(e)}`);
+            }
+          }
         },
       },
       // The approval setting is read at each request, so a change in the composer's auto-approve bar applies mid-run.
@@ -1098,12 +1199,19 @@ export class AgentRunner {
         }
         if (fit.compactions.length) {
           archiveCompaction(depth === 0 ? this.archive : undefined, session.id, session.compactions, session.messages, fit.messages);
+          recordContext('before-compaction', session.messages, budget.historyTokens + budget.systemTokens + budget.toolsTokens, fit.compactions[0].details);
         }
         session.messages = fit.messages;
         budget = fit.budget;
+        if (fit.compactions.length) {
+          recordContext('after-compaction', session.messages, budget.historyTokens + budget.systemTokens + budget.toolsTokens, fit.compactions[fit.compactions.length - 1].details);
+        }
         for (const result of fit.compactions) {
           session.compactions++;
           emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary, details: result.details } });
+          if (depth === 0 && result.summary) {
+            this.turnCompactions.set(session.id, result.summary);
+          }
         }
       }
       session.contextTokens = budget.historyTokens + budget.systemTokens + budget.toolsTokens;
@@ -1162,11 +1270,31 @@ export class AgentRunner {
           session.usage = addUsage(session.usage, priced, model.modelId, model.providerId);
           o.onUsage?.(priced, model.modelId, model.providerId);
         };
+        // Continuity's context policy: a cloud model never gets blocks marked local only (memory notes, context sets,
+        // conversations); a conversation tagged local-only is not sent to one at all.
+        let outgoing = withTurnContext(systemWithTextTools, session.messages, turnMessage, turnContext, !model.supportsVision);
+        if (this.contextHooks?.beforeRequest && !o.scratch) {
+          const policed = await this.contextHooks.beforeRequest({ session, model, messages: outgoing, depth, memoryExcluded }).catch((e) => {
+            this.log.warn(`context policy: ${e instanceof Error ? e.message : String(e)}`);
+            return undefined;
+          });
+          if (policed?.block) {
+            o.signal.removeEventListener('abort', onAbort);
+            this.release(model.id, session.id);
+            emit({ sessionId: session.id, type: 'error', payload: { message: policed.block, kind: 'other' } });
+            session.messages.push({ role: 'assistant', content: `(error: ${policed.block})`, meta: { timestamp: Date.now(), error: policed.block } });
+            const err = new Error(policed.block);
+            (err as Error & { reported?: boolean }).reported = true;
+            throw err;
+          }
+          outgoing = policed?.messages ?? outgoing;
+        }
+        lastRequest = { messages: session.messages.slice(), tokens: budget.historyTokens + budget.systemTokens + budget.toolsTokens };
         stats.steps++;
         try {
           const stream = provider.chat({
             model: model.modelId,
-            messages: withTurnContext(systemWithTextTools, session.messages, turnMessage, turnContext, !model.supportsVision),
+            messages: outgoing,
             tools: nativeTools && toolDefs.length ? toolDefs : undefined,
             temperature: model.temperature ?? cfg.temperature,
             maxTokens: cfg.maxOutputTokens,
@@ -1331,12 +1459,17 @@ export class AgentRunner {
             }
             if (result.removed > 0) {
               archiveCompaction(depth === 0 ? this.archive : undefined, session.id, session.compactions, session.messages, result.messages);
+              recordContext('before-compaction', session.messages, budget.historyTokens + budget.systemTokens + budget.toolsTokens, result.details);
             }
             session.messages = prunedForOverflow;
             if (result.removed > 0) {
               session.messages = result.messages;
+              recordContext('after-compaction', session.messages, budgetOf(session.messages).historyTokens, result.details);
               session.compactions++;
               emit({ sessionId: session.id, type: 'compaction', payload: { before: result.before, after: result.after, removed: result.removed, summary: result.summary, details: result.details } });
+              if (depth === 0 && result.summary) {
+                this.turnCompactions.set(session.id, result.summary);
+              }
             }
             // Re-measure, so the retry's real count calibrates against the prompt actually sent.
             budget = budgetOf(session.messages);
@@ -1805,16 +1938,24 @@ export class AgentRunner {
       healed = { outcome, ...(contract ? { contract } : {}), ...(recovery ? { recovery } : {}) };
     }
     emit({ sessionId: session.id, type: 'turn_end', payload: { text: finalText, completed, contextTokens: session.contextTokens, durationMs, steps: stats.steps, toolCalls: stats.toolCalls, model: stats.model, promptTokens: stats.promptTokens, completionTokens: stats.completionTokens, ...healed } });
+    if (lastRequest) {
+      recordContext('turn', lastRequest.messages, session.contextTokens || lastRequest.tokens);
+    }
     // Keep what a substantial run taught about the project, after the answer is out (never delays the reply).
     const turnStart = session.messages.indexOf(turnMessage);
     const turnMsgs = turnStart >= 0 ? session.messages.slice(turnStart) : session.messages.slice(-30);
     const savedByModel = turnMsgs.some((m) => m.toolCalls?.some((c) => c.name === 'memory_save'));
+    const turnCompaction = depth === 0 ? this.turnCompactions.get(session.id) : undefined;
+    if (depth === 0) {
+      this.turnCompactions.delete(session.id);
+    }
+    let autoSave: Promise<unknown> = Promise.resolve();
     // Not for scratch runs: benchmark tasks run in throwaway folders whose facts do not belong to this project.
     if (this.memory && cfg.memoryEnabled && cfg.memoryAutoSave && depth === 0 && !o.scratch && !o.signal.aborted && stats.toolCalls >= 3 && finalText && !savedByModel && ['agent', 'debug', 'multitask'].includes(turnMode)) {
       // At most 90 s, and cancelled by the next run: on a one-slot server it must never hold the model the user is waiting for.
       const memoryAbort = new AbortController();
       this.backgroundAborts.add(memoryAbort);
-      this.track(saveRunMemories(this.memory, { provider, model: model.modelId, contextWindow: model.contextWindow, keepAlive: cfg.keepAlive || undefined, signal: AbortSignal.any([memoryAbort.signal, AbortSignal.timeout(90_000)]) }, runDigest(userText(o.userMessage.content), turnMsgs, finalText))
+      autoSave = saveRunMemories(this.memory, { provider, model: model.modelId, contextWindow: model.contextWindow, keepAlive: cfg.keepAlive || undefined, signal: AbortSignal.any([memoryAbort.signal, AbortSignal.timeout(90_000)]) }, runDigest(userText(o.userMessage.content), turnMsgs, finalText))
         .finally(() => this.backgroundAborts.delete(memoryAbort))
         .then((saved) => {
           if (saved.length) {
@@ -1822,7 +1963,22 @@ export class AgentRunner {
             emit({ sessionId: session.id, type: 'memory', payload: { saved } });
           }
         })
-        .catch((e) => this.log.debug(`memory: automatic save skipped: ${e instanceof Error ? e.message : String(e)}`)));
+        .catch((e) => this.log.debug(`memory: automatic save skipped: ${e instanceof Error ? e.message : String(e)}`));
+      this.track(autoSave);
+    }
+    // 1.7 conversation memory: the chat's summary after a compaction (free) or every 20 messages (one request to the
+    // same model), after the automatic save so a one-slot server is asked one thing at a time; never delays the answer.
+    const afterTurn = this.memoryHooks?.afterTurn;
+    if (afterTurn && cfg.memoryEnabled && depth === 0 && !o.scratch && !o.signal.aborted && finalText) {
+      const summaryAbort = new AbortController();
+      this.backgroundAborts.add(summaryAbort);
+      this.track(
+        autoSave
+          .catch(() => undefined)
+          .then(() => afterTurn({ session, provider, model: model.modelId, contextWindow: model.contextWindow, keepAlive: cfg.keepAlive || undefined, signal: AbortSignal.any([summaryAbort.signal, AbortSignal.timeout(90_000)]), compaction: turnCompaction }))
+          .finally(() => this.backgroundAborts.delete(summaryAbort))
+          .catch((e) => this.log.debug(`memory: conversation summary skipped: ${e instanceof Error ? e.message : String(e)}`))
+      );
     }
     return finalText;
   }

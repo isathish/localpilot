@@ -1695,6 +1695,37 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-co
 .rec-files li.more { font-family: var(--vscode-font-family); color: var(--muted); }
 .rec-next { flex-basis: 100%; font-weight: 400; color: var(--fg); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .run-int .rec-cause { color: var(--muted); }
+/* Continuity (SESSION): what the cut-off run did, the files it changed, and the partial answer kept from its draft. */
+.rec-ran { font-size: var(--fs-xs); }
+.rec-ran > summary { cursor: pointer; color: var(--fg-2); width: max-content; max-width: 100%; }
+.rec-ran > summary .count { color: var(--muted); margin-left: 2px; }
+.rec-ran ol { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 1px; }
+.rec-ran li { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.rec-ran li .m { flex: none; width: 12px; display: inline-grid; place-items: center; color: var(--muted); align-self: center; }
+.rec-ran li .m svg { width: 11px; height: 11px; }
+.rec-ran li.error .m, .rec-ran li.denied .m { color: var(--error-text); }
+.rec-ran li.running .m { color: var(--warn-text); }
+.rec-ran li .n { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.rec-ran li:not(.k-tool) .n { font-family: inherit; color: var(--fg-2); }
+.rec-ran li .d { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.rec-ran li.error .d { color: var(--error-text); }
+.rec-ran li.running .d { color: var(--warn-text); }
+.rec-changed .rec-files li { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.rec-changed .rec-files li .f { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-changed .rec-files .st { flex: none; width: 12px; text-align: center; font-weight: 600; font-family: var(--mono); }
+.rec-changed .rec-files .st-A { color: var(--ok-text); } .rec-changed .rec-files .st-D { color: var(--error-text); } .rec-changed .rec-files .st-M { color: var(--warn-text); }
+.rec-changed .rec-files .btn { flex: none; height: 20px; padding: 0 6px; font-size: var(--fs-xs); font-family: var(--vscode-font-family); }
+.rec-changed .rec-files .btn svg { width: 11px; height: 11px; }
+.rec-fileacts { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 4px; }
+.rec-fileacts .btn { height: 22px; font-size: var(--fs-xs); }
+.rec-fileacts .btn svg { width: 11px; height: 11px; }
+.rec-fileacts .btn:disabled, .rec-changed .rec-files .btn:disabled { opacity: .5; }
+.afoot .info .partial-tag { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--warn-text); overflow: visible; }
+.afoot .info .partial-tag svg { width: 10px; height: 10px; }
+@container messages (max-width: 360px) {
+  .rec-changed .rec-files .btn span { display: none; }
+  .rec-ran li .n { max-width: 55%; }
+}
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.tool-fail, .note.wait .lim, .tests-badge i, .work.paused .time) { opacity: 1; }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .note.route { background: none; }
 @media (prefers-reduced-motion: reduce) { .step.flash > summary, .card.flash { animation: none; } }
@@ -1888,3 +1919,27 @@ body.vscode-high-contrast .pl-scope .pick.on, body.vscode-high-contrast-light .p
 .ratecard .rc-x svg { width: 12px; height: 12px; }
 @media (prefers-reduced-motion: reduce) { .ratecard { animation: none; } .ratecard .rc-star svg { transition: none; } }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .ratecard { background: transparent; border-color: var(--vscode-contrastBorder, var(--border)); }
+
+/* ---- Context (continuity 1.7): the ring card's tabs, related earlier conversations above the message box ---- */
+.ctxcard .ctabs { display: flex; gap: 2px; margin: -2px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border-soft); }
+.ctxcard .ctab { flex: 1 1 0; min-width: 0; padding: 2px 4px; border-radius: var(--radius-sm); color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctxcard .ctab i { font-style: normal; font-variant-numeric: tabular-nums; opacity: .8; }
+.ctxcard .ctab:hover { background: var(--hover); color: var(--fg); }
+.ctxcard .ctab.on { background: var(--tint-2); color: var(--fg); font-weight: 600; }
+.ctxcard .ctab:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.ctxcard .r.sub { font-size: var(--fs-xs); line-height: 1.6; }
+.ctxcard .r.it { line-height: 1.6; }
+.ctxcard .r.it .k { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.ctxcard .r.it .k em { font-style: normal; color: var(--muted); font-size: var(--fs-xs); }
+.ctxcard .r.it b { flex: none; color: var(--muted); font-weight: 500; }
+.relrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 8px 0; font-size: var(--fs-xs); color: var(--muted); min-width: 0; }
+.relrow .rl { display: inline-flex; align-items: center; gap: 4px; }
+.relrow .rl svg { width: 12px; height: 12px; }
+.relrow .rel { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 1px 2px 1px 7px; border-radius: 999px; background: var(--tint); }
+.relrow .rel .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); max-width: 22ch; }
+.relrow .rel .link { padding: 0 2px; color: var(--link); font-size: inherit; }
+.relrow .rel .link:hover { text-decoration: underline; }
+.relrow .rel .x { width: 16px; height: 16px; border-radius: 50%; color: var(--muted); line-height: 1; }
+.relrow .rel .x:hover { background: var(--hover); color: var(--fg); }
+@container (max-width: 330px) { .relrow .rl .long { display: none; } .relrow .rel .t { max-width: 16ch; } }
+body.vscode-high-contrast .relrow .rel, body.vscode-high-contrast-light .relrow .rel { border: 1px solid var(--border); }

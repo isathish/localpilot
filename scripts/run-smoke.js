@@ -23,5 +23,18 @@ esbuild.buildSync({
   outfile: path.resolve(__dirname, '..', 'out', 'pdf', 'extract-child.js'),
   logLevel: 'warning',
 });
+// The continuity index worker, next to the bundle as in dist/, and sql.js's wasm straight from the package.
+const workerOut = path.resolve(__dirname, '..', 'out', 'continuityWorker.js');
+esbuild.buildSync({
+  entryPoints: [path.resolve(__dirname, '..', 'src', 'continuity', 'data', 'index', 'indexWorker.ts')],
+  bundle: true,
+  platform: 'node',
+  target: 'node18',
+  format: 'cjs',
+  outfile: workerOut,
+  logLevel: 'warning',
+});
+process.env.LOCALPILOT_CONTINUITY_WORKER ??= workerOut;
+process.env.LOCALPILOT_SQLJS_WASM ??= path.resolve(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
 process.env.LOCALPILOT_PDFJS_DIR ??= path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build');
 require(outfile);

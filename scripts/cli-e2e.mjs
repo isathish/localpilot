@@ -273,8 +273,55 @@ try {
   check('-r <id> resumes that session', r.code === 0 && JSON.stringify(seen.localBodies.at(-1)?.messages ?? []).includes('mango'), r.out);
   r = await cli(['-p', '--no-mcp', '-r', 'cli-doesnotexist', 'x']);
   check('-r with an unknown id: exit code 2', r.code === 2 && /no saved session/.test(r.out), r.out);
+  // 1.7: the conversation log behind `history` (search, Trash, tags, export/import), same data root as VS Code.
+  r = await cli(['history', 'search', 'mango', '--all-projects', '--json']);
+  const found = (() => { try { return JSON.parse(r.out.slice(r.out.indexOf('['))); } catch { return []; } })();
+  check('history search finds the chat by what was said', r.code === 0 && found.some((h) => h.conversationId === hist[0].id), r.out.slice(0, 800));
+  r = await cli(['history', 'trash', hist[0].id]);
+  const trashed = await cli(['history', '--view', 'trash', '--all-projects', '--json']);
+  const legacy = await cli(['history', '--json']);
+  check('history trash: in Trash, gone from the folder\'s list', r.code === 0 && JSON.parse(trashed.out.slice(trashed.out.indexOf('['))).some((x) => x.id === hist[0].id) && !JSON.parse(legacy.out.slice(legacy.out.indexOf('['))).some((x) => x.id === hist[0].id), [r.out, trashed.out.slice(0, 400)]);
+  r = await cli(['history', 'restore', hist[0].id]);
+  const back = await cli(['history', '--json']);
+  check('history restore: back in the folder\'s list with its messages', r.code === 0 && JSON.parse(back.out.slice(back.out.indexOf('['))).some((x) => x.id === hist[0].id && x.messages >= 4), [r.out, back.out.slice(0, 400)]);
+  // 1.7 SESSION: each CLI run is an agent session with what it did; nothing was cut off.
+  r = await cli(['history', 'show', '--runs', hist[0].id, '--json']);
+  const runRows = (() => { try { return JSON.parse(r.out.slice(r.out.indexOf('['))); } catch { return []; } })();
+  check('history show --runs: the chat\'s CLI runs as agent sessions with their model calls', r.code === 0 && runRows.length >= 1 && runRows.every((x) => x.outcome === 'ok' && x.writer) && runRows.some((x) => x.events.some((e) => e.kind === 'model')), r.out.slice(0, 600));
+  r = await cli(['recovery', 'runs']);
+  check('recovery runs: no interrupted runs here', r.code === 0 && /No interrupted runs/.test(r.out), r.out);
+  r = await cli(['history', 'tag', hist[0].id, '+e2e']);
+  const tagged = await cli(['history', '--tag', 'e2e', '--all-projects', '--json']);
+  check('history tag + list --tag', r.code === 0 && JSON.parse(tagged.out.slice(tagged.out.indexOf('['))).some((x) => x.id === hist[0].id), tagged.out.slice(0, 400));
+  r = await cli(['history', 'export', hist[0].id, '--format', 'json', '-o', 'chat-export.json']);
+  const exported = fs.existsSync(path.join(ws, 'chat-export.json')) ? JSON.parse(fs.readFileSync(path.join(ws, 'chat-export.json'), 'utf8')) : {};
+  check('history export --format json: a complete, versioned export', r.code === 0 && exported.schema === 'localpilot-conversation/v1' && exported.session?.messages?.length >= 4, r.out);
+  r = await cli(['history', 'import', 'chat-export.json']);
+  check('history import of a JSON export: a new chat', r.code === 0 && /Imported/.test(r.out), r.out);
+  r = await cli(['history', 'share', hist[0].id, '-o', 'chat.lpshare', '--keep']);
+  const code = /Share code \(shown once\): ([A-Z2-7-]+)/.exec(r.out)?.[1];
+  const opened = code ? await cli(['history', 'open-share', 'chat.lpshare', '--code', code]) : { code: 1, out: '' };
+  const wrong = await cli(['history', 'open-share', 'chat.lpshare', '--code', 'AAAA-BBBB']);
+  check('history share / open-share: sealed file opens with its code only', r.code === 0 && !!code && opened.code === 0 && /Opened/.test(opened.out) && wrong.code !== 0, [r.out, opened.out, wrong.out]);
   r = await cli(['history', 'delete', hist[0].id]);
   check('history delete removes the session', r.code === 0 && !JSON.parse((await cli(['history', '--json'])).out.replace(/^[^[]*/, '')).some((s) => s.id === hist[0].id), r.out);
+
+  console.log('[localpilot memory]');
+  r = await cli(['memory', 'add', '--type', 'knowledge', 'release-steps', 'bump the version, then tag the commit']);
+  check('memory add saves a knowledge note', r.code === 0 && /saved knowledge memory "release-steps"/.test(r.out), r.out);
+  r = await cli(['memory', 'add', '--type', 'project', 'build-cmd', '-'], { input: '- `make check` runs every test\n' });
+  check('memory add --type project writes the note file (text from stdin)', r.code === 0 && fs.existsSync(path.join(ws, '.localpilot', 'memory', 'build-cmd.md')), r.out);
+  fs.writeFileSync(path.join(ws, '.localpilot', 'memory', 'hand-made.md'), '- written by hand in the editor\n');
+  r = await cli(['memory', 'list', '--json']);
+  const memRows = (() => { try { return JSON.parse(r.out.replace(/^[^[]*/, '')); } catch { return []; } })();
+  check('memory list shows knowledge, project notes and a hand-written note file', r.code === 0 && ['release-steps', 'build-cmd', 'hand-made'].every((n) => memRows.some((m) => m.name === n)), r.out.slice(0, 800));
+  r = await cli(['memory', 'search', 'tag', 'commit', '--json']);
+  check('memory search finds the note by its words', r.code === 0 && /release-steps/.test(r.out), r.out.slice(0, 500));
+  r = await cli(['memory', 'rm', 'release-steps']);
+  const memTrash = await cli(['memory', 'list', '--trash', '--json']);
+  check('memory rm moves a note to Trash', r.code === 0 && /release-steps/.test(memTrash.out), memTrash.out.slice(0, 500));
+  r = await cli(['memory', 'show', 'build-cmd']);
+  check('memory show prints a note with its file', r.code === 0 && /make check/.test(r.out) && /build-cmd\.md/.test(r.out), r.out);
 
   console.log('[isolated sessions]');
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-cli-repo-'));
@@ -527,6 +574,39 @@ try {
   check('remove a VS Code provider: disabled for the CLI only', r.code === 0 && readCfg().providers.find((p) => p.id === 'vsc')?.enabled === false && fs.readFileSync(vsSettings, 'utf8').includes('"vsc"'), r.out);
   r = await cli(['providers', 'add', 'nope-not-a-provider']);
   check('unknown preset: clear error, exit code 2', r.code === 2 && /Unknown provider/.test(r.out), r.out);
+
+  console.log('\n[localpilot data]');
+  // A 1.6-style CLI chat in a fresh data folder plus a memory note in this throwaway home, imported into
+  // <data>/continuity (earlier runs above already migrated the main data folder once, as designed).
+  const lp = path.join(home, '.localpilot');
+  const data16 = path.join(home, 'data16');
+  const denv = { LOCALPILOT_DATA_DIR: data16 };
+  const chatFile = path.join(data16, 'workspaces', '00aa11bb22cc33dd', 'sessions', 'cli-e2edata0001.json');
+  fs.mkdirSync(path.dirname(chatFile), { recursive: true });
+  const chatJson = JSON.stringify({ id: 'cli-e2edata0001', title: 'Flaky parser test', createdAt: 1, updatedAt: 2, model: 'm', mode: 'agent', messageCount: 2, messages: [{ role: 'user', content: 'Why is parser.test.ts flaky?' }, { role: 'assistant', content: 'A timer leaks between tests.' }], contextTokens: 0, compactions: 0, attachments: [], origin: 'cli' });
+  fs.writeFileSync(chatFile, chatJson);
+  fs.mkdirSync(path.join(lp, 'memory'), { recursive: true });
+  fs.writeFileSync(path.join(lp, 'memory', 'e2e-tools.md'), 'Use pnpm.\n');
+  r = await cli(['data', 'migrate'], { env: denv });
+  check('data migrate imports the CLI chat and memory, keeps a backup copy, leaves the original alone', r.code === 0 && /Imported\s+[2-9] file\(s\)/.test(r.out) && fs.readFileSync(chatFile, 'utf8') === chatJson && fs.existsSync(path.join(data16, 'continuity', 'migration', 'legacy-backup')), r.out);
+  r = await cli(['data', 'stats', '--json'], { env: denv });
+  const stats = r.code === 0 ? JSON.parse(r.stdout) : {};
+  check('data stats --json: one conversation, two messages, index ready', stats.conversations === 1 && stats.messages === 2 && stats.index?.state === 'ready', r.out);
+  const backupFile = path.join(home, 'e2e.lpbackup');
+  r = await cli(['data', 'backup', '--encrypt', '-o', backupFile], { env: { ...denv, LOCALPILOT_BACKUP_PASSPHRASE: 'e2e passphrase' } });
+  check('data backup --encrypt writes a sealed file', r.code === 0 && fs.existsSync(backupFile) && !fs.readFileSync(backupFile).includes('Flaky parser'), r.out);
+  const otherData = path.join(home, 'other-data');
+  r = await cli(['data', 'restore', backupFile], { env: { LOCALPILOT_DATA_DIR: otherData, LOCALPILOT_BACKUP_PASSPHRASE: 'wrong one' } });
+  check('data restore with a wrong passphrase fails and imports nothing', r.code === 1 && /passphrase/.test(r.out), r.out);
+  r = await cli(['data', 'restore', backupFile], { env: { LOCALPILOT_DATA_DIR: otherData, LOCALPILOT_BACKUP_PASSPHRASE: 'e2e passphrase' } });
+  const restored = await cli(['data', 'stats', '--json'], { env: { LOCALPILOT_DATA_DIR: otherData } });
+  check('data restore into another data folder brings the chat over', r.code === 0 && /restored [1-9]/.test(r.out) && JSON.parse(restored.stdout || '{}').conversations === 1, r.out + restored.out);
+  r = await cli(['data', 'rebuild-index'], { env: denv });
+  check('data rebuild-index', r.code === 0 && /index rebuilt/.test(r.out), r.out);
+  r = await cli(['data', 'migrate', '--remove-backup'], { env: denv });
+  check('data migrate --remove-backup', r.code === 0 && !fs.existsSync(path.join(data16, 'continuity', 'migration', 'legacy-backup')), r.out);
+  r = await cli(['data', 'nonsense']);
+  check('data: unknown subcommand is a usage error', r.code === 2 && /unknown data command/.test(r.out), r.out);
 } finally {
   srv.close();
   healSrv.close();

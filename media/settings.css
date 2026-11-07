@@ -1445,3 +1445,17 @@ li.rule-form { padding: 6px 8px; border: 1px solid var(--focus); border-radius: 
 .mk-more:hover { text-decoration: underline; }
 @media (max-width: 480px) { .mk-head .mk-where { flex-basis: 100%; order: 5; } .mk-head .btn span { display: none; } }
 .desc .warn-text svg { width: 12px; height: 12px; vertical-align: -2px; margin-right: 3px; }
+
+/* Continuity & sync */
+.cont-kv .cont-path { word-break: break-all; white-space: normal; }
+.cont-kv dd { min-width: 0; overflow-wrap: anywhere; }
+.cont-mig .spinner { margin-right: 6px; vertical-align: -2px; }
+.cont-mig svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; color: var(--ok, var(--vscode-testing-iconPassed)); }
+.cont-off { display: flex; gap: 8px; align-items: flex-start; }
+.cont-off svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
+.cont-failed td.mono { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cont-body .tblwrap > h3 { margin: 0; padding: 10px 12px 6px; font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.cont-body .tblwrap > h3 .count { color: var(--muted); font-weight: 400; }
+
+/* Memory & history: the Memory manager link between the settings card and the notes table (1.7). */
+.btnrow.mmgr { margin: 10px 2px 12px; }

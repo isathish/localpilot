@@ -123,6 +123,13 @@ export function atRefs(text: string, root: string, exists: (p: string) => boolea
   if (/(?:^|\s)[#@]codebase(?![\w./-])/.test(text) && !exists(path.resolve(root, 'codebase'))) {
     files.push('codebase');
   }
+  // `#memory:<name>`, `#context:<set>`, `#chat:<title or id>` (1.7), resolved by the memory and context modules.
+  for (const m of text.matchAll(/(?:^|\s)#(memory|context|chat):([\w.-]+)/g)) {
+    const ref = `${m[1]}:${m[2].replace(/[.]+$/, '')}`;
+    if (!files.includes(ref)) {
+      files.push(ref);
+    }
+  }
   for (const m of text.matchAll(/(?:^|\s)@([^\s@]+)/g)) {
     const ref = m[1].replace(/[.,;:!?)\]]+$/, '');
     const bare = ref.replace(/#L?\d+(?:-L?\d+)?$/i, '');

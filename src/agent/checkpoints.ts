@@ -250,6 +250,20 @@ export class CheckpointService {
     this.scratchRoot = path.join(o.globalStorageDir, 'checkpoint-scratch');
   }
 
+  /** Continuity (SESSION): a checkpoint was recorded for a chat's turn (becomes a `checkpoint` entity). */
+  onSnapshot?: (session: Session, entry: CheckpointEntry) => void;
+  /** Continuity (SESSION): a checkpoint's files were put back (`restoredAt`). */
+  onRestore?: (sessionId: string, run: number) => void;
+
+  /** Reports a restore made from the file snapshots (no git checkpoint) to `onRestore`. */
+  noteRestored(sessionId: string, run: number): void {
+    try {
+      this.onRestore?.(sessionId, run);
+    } catch {
+      // a listener never breaks a restore
+    }
+  }
+
   /** Takes the checkpoint for `run` of a chat in `cwd` and records it in `session.checkpoints`. */
   async snapshot(session: Session, run: number, cwd: string | undefined): Promise<CheckpointEntry | undefined> {
     if (!this.o.enabled() || !cwd) {
@@ -272,6 +286,11 @@ export class CheckpointService {
       if (d.ref && d.root) {
         void git(['update-ref', '-d', d.ref], d.root);
       }
+    }
+    try {
+      this.onSnapshot?.(session, entry);
+    } catch (e) {
+      this.o.log?.warn(`checkpoint: ${e instanceof Error ? e.message : String(e)}`);
     }
     return entry;
   }
@@ -515,6 +534,11 @@ export class CheckpointService {
       }
     }
     this.o.log?.info(`checkpoint: restored ${entry.ref ?? target} in ${root}${safetyStash ? ` (previous state in stash ${safetyStash.slice(0, 10)})` : ''}`);
+    // `refs/localpilot/checkpoints/<session>/<run>`: the chat and turn this checkpoint belongs to.
+    const m = entry.ref ? /^refs\/localpilot\/checkpoints\/(.+)\/(\d+)$/.exec(entry.ref) : null;
+    if (m) {
+      this.noteRestored(m[1], Number(m[2]));
+    }
     return { ok: true, files, safetyStash };
   }
 

@@ -201,6 +201,7 @@ Recovery state is saved after every step, before any side effect, so it survives
 - **Stop cancels.** The task ends as *Cancelled*, running checks are killed and nothing resumes.
 - If the CLI and VS Code use the same session, only one runs its recovery; the other shows *Recovery is running in another window*.
 - In the CLI, `localpilot -c` prints the interrupted state before the prompt, and `/recovery resume` continues it.
+- A run that was not recovering when it was cut off shows **Run interrupted** instead, with what ran and the files it changed; its recovery phase is also kept with the run. See [Agent runs and crash recovery]({{ '/docs/continuity/' | relative_url }}#agent-runs-and-crash-recovery).
 
 ## Worktrees
 

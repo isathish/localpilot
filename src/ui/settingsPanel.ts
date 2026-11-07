@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { ContinuityAction, ContinuityView } from './continuityData';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
@@ -55,7 +56,7 @@ export { probeProvider, recommendModel };
 export type { ProbeResult };
 
 export type SettingsPage = 'settings' | 'setup';
-export type SettingsSection = 'providers' | 'models' | 'gallery' | 'marketplace' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'mcp' | 'dashboard' | 'telemetry' | 'advanced' | 'customize' | 'documents' | 'shortcuts';
+export type SettingsSection = 'providers' | 'models' | 'gallery' | 'marketplace' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'continuity' | 'mcp' | 'dashboard' | 'telemetry' | 'advanced' | 'customize' | 'documents' | 'shortcuts';
 
 /** One setting as shown in the UI: effective value plus where it comes from. */
 interface SettingEntry {
@@ -178,6 +179,7 @@ type ToSettings =
   | { type: 'customize'; data: CustomizeData }
   | { type: 'otlpTest'; ok: boolean; status?: number; url: string; error?: string }
   | { type: 'redisTest'; ok: boolean; info?: RedisPingInfo; error?: string }
+  | { type: 'continuity'; view: ContinuityView; message?: string }
   | { type: 'mcpCatalog'; entries: McpCatalogEntry[]; registry: boolean; loading?: boolean; error?: string; installed?: string }
   /** Settings → Marketplace: the plugins the configured marketplaces list (`configured` = how many are set up). */
   | { type: 'pluginCatalog'; entries: PluginCatalogEntry[]; errors: { spec: string; error: string }[]; configured: number; loading?: boolean; installed?: string };
@@ -248,6 +250,8 @@ type FromSettings =
   | { type: 'openRecoveryDiff'; sessionId: string; attempt: number; file: string }
   | { type: 'testOtlp' }
   | { type: 'testRedis' }
+  | { type: 'continuityLoad' }
+  | { type: 'continuityAction'; action: ContinuityAction }
   | { type: 'loadCustomize' }
   | { type: 'customToggle'; kind: CustomKind; file: string; enabled: boolean }
   | { type: 'customOpen'; kind: CustomKind; file: string }
@@ -267,13 +271,14 @@ const SETTING_KEYS = [
   'storage.sessionsInMemory', 'storage.redis.enabled', 'storage.redis.url',
   'telemetry.otlp.enabled', 'telemetry.otlp.endpoint', 'telemetry.otlp.headers', 'telemetry.otlp.metricsInterval', 'telemetry.otlp.exporters', 'telemetry.otlp.traceSamplePercent', 'telemetry.otlp.recordContent',
   'pluginPaths', 'hooks.enabled', 'browser.chromePath',
-  'memory.maxNoteChars', 'memory.maxNotes', 'autoMode.enabled', 'autoMode.model', 'queue.concurrency', 'supervisor.enabled', 'supervisor.intervalSeconds', 'supervisor.autoInstall', 'gateways.litellmConfig',
+  'memory.maxNoteChars', 'memory.maxNotes', 'memory.taskExpiryDays', 'autoMode.enabled', 'autoMode.model', 'queue.concurrency', 'supervisor.enabled', 'supervisor.intervalSeconds', 'supervisor.autoInstall', 'gateways.litellmConfig',
   'maxConsecutiveMistakes', 'disabledTools',
   'markdownViewer.scrollSync', 'markdownViewer.outlineDepth', 'markdownViewer.frontMatter', 'markdownViewer.mermaid', 'markdownViewer.exportTheme',
   'pdfViewer.pageColors', 'pdfViewer.sidebar', 'pdfViewer.defaultZoom', 'pdfViewer.rangeThresholdMB', 'pdfViewer.maxFileSizeMB', 'pdf.maxReadSizeMB', 'pdf.maxChars',
   'healing.enabled', 'healing.autoDetect', 'healing.autoRetry', 'healing.autoFix', 'healing.regressionRequired', 'healing.maxRepairAttempts', 'healing.maxTotalAttempts', 'healing.extraSteps', 'healing.taskDeadlineMinutes',
   'healing.checkTiming', 'healing.scopeTests', 'healing.checkTimeoutSeconds', 'healing.checkTimeBudgetSeconds', 'healing.baseline', 'healing.checks', 'healing.policies', 'healing.dependencyInstall', 'healing.gitConflicts',
   'healing.securityCheck', 'healing.delegateFixes', 'healing.memory',
+  'continuity.dataDir', 'continuity.trashRetentionDays', 'continuity.historyDays', 'continuity.indexMaxMB', 'continuity.backup.enabled', 'continuity.backup.intervalDays', 'continuity.backup.keep', 'continuity.relatedConversations', 'continuity.captureToolOutput',
 ] as const;
 
 /** Commands the webview is allowed to trigger. */
@@ -284,6 +289,7 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills', 'localpilot.manageSkills',
   'localpilot.editMcpConfig', 'localpilot.setupRedis', 'localpilot.telemetry.testOtlp', 'localpilot.startColibri', 'localpilot.stopColibri', 'localpilot.startGateway', 'localpilot.stopGateway',
   'localpilot.selectTerminalProfile', 'localpilot.browsePlugins', 'localpilot.managePlugins', 'workbench.action.reloadWindow', 'localpilot.setProviderApiKey',
+  'localpilot.continuity.rebuildIndex', 'localpilot.continuity.backupNow', 'localpilot.continuity.restoreBackup', 'localpilot.continuity.openDataFolder', 'localpilot.continuity.openMemoryManager', 'localpilot.continuity.openContextLibrary', 'localpilot.continuity.openCheckpoints',
 ]);
 
 const PRESETS: Record<'safe' | 'balanced' | 'autonomous', Record<'terminal' | 'write' | 'delete' | 'network' | 'mcp', 'ask' | 'always' | 'never'>> = {
@@ -349,6 +355,8 @@ export class SettingsPanel implements vscode.Disposable {
   loadChecks?: () => Promise<HealingView>;
   /** Opens `.localpilot/checks.json`; defaults to creating it from a template in the first workspace folder. */
   openChecks?: () => Promise<void>;
+  /** Continuity & sync: storage sizes, migration, Trash, backups (set by the extension host). */
+  continuity?: { view: () => Promise<ContinuityView>; action: (a: ContinuityAction) => Promise<string | undefined> };
   /** Installed plugins (set by the extension host): the Marketplace's installed state, refreshed after an install. */
   plugins?: { readonly all: PluginInfo[]; refresh(): Promise<unknown> };
   /** Marketplaces loaded for the Marketplace's plugin rows, kept for Install. */
@@ -480,6 +488,11 @@ export class SettingsPanel implements vscode.Disposable {
 
   private title(): string {
     return this.page === 'setup' ? 'Welcome to LocalPilot' : 'LocalPilot Settings';
+  }
+
+  private async pushContinuity(message?: string): Promise<void> {
+    const view: ContinuityView = this.continuity ? await this.continuity.view().catch((e: unknown) => ({ state: 'degraded' as const, reason: e instanceof Error ? e.message : String(e) })) : { state: 'degraded', reason: 'not available in this window' };
+    this.post({ type: 'continuity', view, ...(message ? { message } : {}) });
   }
 
   private post(m: ToSettings): void {
@@ -757,6 +770,16 @@ export class SettingsPanel implements vscode.Disposable {
         const r = await this.otlpTest().catch((e: unknown) => ({ status: undefined, url: '', error: e instanceof Error ? e.message : String(e) }));
         this.log.info(r.error === undefined ? `OTLP test: HTTP ${r.status} from ${r.url}` : `OTLP test to ${r.url} failed: ${r.error}`);
         return this.post({ type: 'otlpTest', ok: r.error === undefined, status: r.status, url: r.url, error: r.error });
+      }
+      case 'continuityLoad':
+        return this.pushContinuity();
+      case 'continuityAction': {
+        const allowed: readonly ContinuityAction[] = ['rebuildIndex', 'openFolder', 'retryMigration', 'removeMigrationBackup', 'emptyTrash', 'backupNow', 'restoreBackup'];
+        if (!this.continuity || !allowed.includes(m.action)) {
+          return this.post({ type: 'toast', level: 'warn', text: 'Conversation storage is not available in this window' });
+        }
+        const message = await this.continuity.action(m.action).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+        return this.pushContinuity(message);
       }
       case 'testRedis': {
         const url = getConfig().storage.redis.url;

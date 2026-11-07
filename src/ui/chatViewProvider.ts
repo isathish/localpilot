@@ -329,6 +329,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource};" />
 <link rel="stylesheet" href="${media('chat.css')}" />
+<link rel="stylesheet" href="${media('continuity.css')}" />
 <title>LocalPilot</title>
 </head>
 <body data-mermaid="${mermaidSrc}">
@@ -392,6 +393,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <div id="toasts" role="status" aria-live="polite"><div id="toastAlerts" role="alert"></div></div>
 </div>
 <script nonce="${nonce}" src="${media('chat.js')}"></script>
+<script nonce="${nonce}" src="${media('continuity.js')}"></script>
 </body>
 </html>`;
   }

@@ -296,13 +296,32 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 |---|---|---|
 | `localpilot.chat.location` | `sidebar` | Where the chat lives: `sidebar` (Primary Side Bar), `secondarySidebar` (right, where Copilot Chat sits), `panel` (bottom, next to the Terminal) or `editor` (a tab in the main area). The Chat view moves the same way as with drag-and-drop, so **Move View** and **Reset Location** in the view's context menu keep working. The Agents view and the activity bar icon stay in the Primary Side Bar. Also available as **LocalPilot: Move Chat To…** |
 | `localpilot.showTips` | `true` | While the agent has been thinking for more than 4 seconds, rotate short feature tips (steering, `@` mentions, `/compact`, checkpoints, quoting, …) in the chat's status row. The tips are built in |
-| `localpilot.sessions.retention` | `50` | Maximum chats kept per workspace. The oldest idle chats are removed when a new one starts; pinned and running chats do not count. `0` keeps everything |
+| `localpilot.sessions.retention` | `50` | Maximum chats in a workspace's chat list. The oldest idle chats move to Archived when a new one starts (removed only when conversation storage is off); pinned and running chats do not count. `0` keeps everything |
 | `localpilot.history.includeCli` | `true` | List sessions from the `localpilot` CLI for the same folder in the chat history, marked **CLI**. They are read from `~/.localpilot/workspaces/` (or `LOCALPILOT_DATA_DIR`). Takes effect after a window reload |
 | `localpilot.memory.enabled` | `true` | Let the agent save and read durable notes (`.localpilot/memory/` and global storage). Manage notes in **Settings → Memory & history** |
 | `localpilot.memory.autoSave` | `true` | After a run with at least three tool calls in which the agent saved nothing itself, ask the same model whether the run revealed durable project facts (build and test commands, conventions, pitfalls) and append at most three short notes to project memory. Runs after the answer; anything that looks like a credential is dropped. Needs `localpilot.memory.enabled` |
 | `localpilot.memory.maxNoteChars` | `8000` | Largest memory note; longer notes lose their oldest paragraphs. Appending lines a note already has does nothing |
 | `localpilot.memory.maxNotes` | `200` | Notes kept per scope; past it the least recently updated are removed (`README` is kept) |
+| `localpilot.memory.taskExpiryDays` | `14` | Task memory (a plan's or todo list's checklist and notes) moves to Trash this many days after every todo is done |
 | `localpilot.showWelcomeOnStartup` | `true` | Open the **Setup** screen (*LocalPilot: Open Setup*) the first time LocalPilot starts without a reachable model server or default model |
+
+## Conversation storage
+
+Conversations, memory, attachments and backups are kept in one data folder per computer, shared by VS Code and the
+`localpilot` CLI, and managed in **Settings → Continuity & sync**. See
+[Conversations, memory & sync]({{ '/docs/continuity/' | relative_url }}).
+
+| Setting | Default | Description |
+|---|---|---|
+| `localpilot.continuity.dataDir` | `""` | Data folder. Empty uses `~/.localpilot/continuity` (or `$LOCALPILOT_DATA_DIR/continuity`; `LOCALPILOT_CONTINUITY_DIR` sets the folder itself). Machine setting; takes effect after a window reload, and nothing is moved for you |
+| `localpilot.continuity.trashRetentionDays` | `30` | Days deleted items stay in Trash before they are removed for good. `0` keeps them until you empty Trash |
+| `localpilot.continuity.historyDays` | `90` | Days of version history kept (minimum 7). Older changes are folded into the current state |
+| `localpilot.continuity.indexMaxMB` | `256` | Largest search index (minimum 32). Past it, archived and deleted conversations older than 180 days are searchable by title only |
+| `localpilot.continuity.backup.enabled` | `true` | Back up conversations, memory and attachments automatically to the data folder's `backups` folder |
+| `localpilot.continuity.backup.intervalDays` | `7` | Days between automatic backups |
+| `localpilot.continuity.backup.keep` | `4` | Automatic backups kept |
+| `localpilot.continuity.relatedConversations` | `true` | While you write the first message of a new chat, offer up to three related earlier conversations of the project (**Related: … · Add**). Nothing is added until you click **Add** |
+| `localpilot.continuity.captureToolOutput` | `summary` | How much of each tool call's output an agent run's history keeps (**What ran** on the Run interrupted card, `localpilot history show --runs`): `errors` (only the error text of failed steps), `summary` (the first 2 KB of every step) or `full` (everything; over 2 KB as an attachment) |
 
 ## Web search
 

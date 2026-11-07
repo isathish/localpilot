@@ -568,6 +568,12 @@ export class WorkspaceContext implements vscode.Disposable {
   approveUrl?: (url: string) => Promise<boolean>;
 
   /**
+   * `#<kind>:<arg>` mentions resolved by other modules (1.7: `#memory:<name>`; CONTEXT adds `context` and `chat`).
+   * The resolver returns the attachment block; its kind must not look like a path (no `/`, `.`, drive letters).
+   */
+  readonly mentionResolvers = new Map<string, (arg: string, opts: AttachmentOptions) => Promise<string>>();
+
+  /**
    * Reads a file or a `file#L10-L20` reference as attached context; also resolves special mentions. `root` (an
    * isolated chat's worktree folder) replaces the main checkout for relative paths, @git and @workspace.
    */
@@ -582,6 +588,11 @@ export class WorkspaceContext implements vscode.Disposable {
   private async readAttachmentBody(ref: string, root?: string, opts: AttachmentOptions = {}): Promise<string> {
     recordTelemetry({ type: 'mention', kind: mentionKind(ref) });
     const special = ref.replace(/^[@#]/, '');
+    const kinded = /^([a-z]{3,})?:(.+)$/.exec(special);
+    const resolver = kinded?.[1] ? this.mentionResolvers.get(kinded[1]) : undefined;
+    if (resolver) {
+      return resolver(kinded![2], opts);
+    }
     switch (special) {
       case 'codebase':
         return this.codebaseContext(root ?? this.root, opts.query);

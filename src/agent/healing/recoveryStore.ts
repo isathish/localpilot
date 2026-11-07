@@ -163,6 +163,9 @@ export class RecoveryStore {
     this.maxAttempts = opts.maxAttempts ?? (() => 3);
   }
 
+  /** Continuity (SESSION): every state written (the agent session's `recovery` follows its phase). */
+  onSave?: (state: RecoveryState) => void;
+
   statePath(sid: string): string {
     return path.join(this.dir, `${fileKey(sid)}.json`);
   }
@@ -210,6 +213,11 @@ export class RecoveryStore {
     this.revs.set(key, state.rev);
     const body = JSON.stringify(state, null, 2);
     const file = this.statePath(key);
+    try {
+      this.onSave?.(state);
+    } catch {
+      // continuity never breaks a save
+    }
     return this.enqueue(key, () => this.writeAtomic(file, body));
   }
 

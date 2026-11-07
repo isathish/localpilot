@@ -78,7 +78,9 @@ async function main() {
 	const children = fs.existsSync('src/pdf/extractChild.ts')
 		? [await esbuild.context({ ...common, entryPoints: ['src/pdf/extractChild.ts'], outfile: 'dist/pdf/extract-child.js', target: 'node22' })]
 		: [];
-	const contexts = [ext, cli, ...children];
+	// 5. The continuity index worker (sql.js in a worker thread), loaded by the extension and the CLI from dist/.
+	const continuityWorker = await esbuild.context({ ...common, entryPoints: ['src/continuity/data/index/indexWorker.ts'], outfile: 'dist/continuityWorker.js' });
+	const contexts = [ext, cli, ...children, continuityWorker];
 	await mermaid.rebuild();
 	await mermaid.dispose();
 	if (watch) {

@@ -100,7 +100,7 @@ export class FileIndex implements vscode.Disposable {
 
   /** Remembers attached files so they rank right after the open editors. */
   noteAttached(refs: readonly string[]): void {
-    const files = refs.map((r) => r.replace(/#L\d+(?:-L?\d+)?$/, '')).filter((r) => r && !r.startsWith('@'));
+    const files = refs.map((r) => r.replace(/#L\d+(?:-L?\d+)?$/, '')).filter((r) => r && !r.startsWith('@') && !/^[a-z]{3,}:(?![\/])/.test(r));
     this.recent = [...new Set([...files.reverse(), ...this.recent])].slice(0, 50);
   }
 

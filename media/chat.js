@@ -17,6 +17,14 @@
   function saveState() { if (typeof vscode.setState === 'function') { vscode.setState({ ...((typeof vscode.getState === 'function' && vscode.getState()) || {}), openTabs: state.openTabs ? [...state.openTabs] : undefined }); } }
 
   const I = {
+    archive: '<svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v3h-11zM3.5 6.5v6a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-6M6.5 9h3"/></svg>',
+    tag: '<svg viewBox="0 0 16 16"><path d="M2.5 2.5h5l6 6-5 5-6-6z"/><circle cx="5.5" cy="5.5" r=".8"/></svg>',
+    share: '<svg viewBox="0 0 16 16"><circle cx="4" cy="8" r="1.6"/><circle cx="12" cy="4" r="1.6"/><circle cx="12" cy="12" r="1.6"/><path d="M5.4 7.2l5.2-2.4M5.4 8.8l5.2 2.4"/></svg>',
+    branch: '<svg viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M4.5 5v6M11.5 7a3.5 3.5 0 0 1-3.5 3.5H5.5"/></svg>',
+    compare: '<svg viewBox="0 0 16 16"><path d="M2.5 3h4.5v10H2.5zM9 3h4.5v10H9z"/></svg>',
+    merge: '<svg viewBox="0 0 16 16"><circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="12" cy="12.5" r="1.5"/><path d="M4 5v6M4 6a6 6 0 0 0 6.5 6"/></svg>',
+    history: '<svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg>',
+    sync: '<svg viewBox="0 0 16 16"><path d="M13 6.5A5 5 0 0 0 4 4.5M3 9.5a5 5 0 0 0 9 2M3.5 2.5v2.5H6M12.5 13.5V11H10"/></svg>',
     check: '<svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg>',
     bookmark: '<svg viewBox="0 0 16 16"><path d="M4.5 2.5h7v11L8 11l-3.5 2.5z"/></svg>',
     plus: '<svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>',
@@ -61,6 +69,7 @@
     rename: '<svg viewBox="0 0 16 16"><path d="M10.5 3l2.5 2.5L6 12.5H3.5V10z"/><path d="M3 14h10"/></svg>',
     multidiff: '<svg viewBox="0 0 16 16"><path d="M6 4.5v-2h5.5l2 2V11h-2"/><path d="M2.5 4.5h6l2 2v7h-8z"/><path d="M4.5 9.5h4M4.5 11.5h2.5"/></svg>',
     layers: '<svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 3L8 8.5l-5.5-3z"/><path d="M2.5 8.5L8 11.5l5.5-3M2.5 11L8 14l5.5-3"/></svg>',
+    eye: '<svg viewBox="0 0 16 16"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>',
     brain: '<svg viewBox="0 0 16 16"><path d="M6 3a2.5 2.5 0 0 0-2.4 3.2A2.5 2.5 0 0 0 4 11a2.5 2.5 0 0 0 4 1.5A2.5 2.5 0 0 0 12 11a2.5 2.5 0 0 0 .4-4.8A2.5 2.5 0 0 0 10 3a2.5 2.5 0 0 0-2 1 2.5 2.5 0 0 0-2-1z"/></svg>',
     git: '<svg viewBox="0 0 16 16"><circle cx="5" cy="4" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="6" r="1.5"/><path d="M5 5.5v5M11 7.5A3 3 0 0 1 8 10.5H6.5"/></svg>',
     list: '<svg viewBox="0 0 16 16"><path d="M5 4h9M5 8h9M5 12h9M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></svg>',
@@ -132,7 +141,7 @@
 
   const state = {
     session: null, sessions: [], models: [], defaultModel: '', contextWindow: 0, running: new Set(), attachments: [], images: [], skills: [], agents: [], commands: [], openFiles: [],
-    live: new Map(), changes: new Map(), checkpoints: new Map(), history: [], histIdx: -1,
+    live: new Map(), changes: new Map(), checkpoints: new Map(), history: [], histIdx: -1, branches: new Map(), remote: new Map(), ctxItems: new Map(), ctxNotes: new Map(),
     // Per chat: turns with a git checkpoint, files changed since the latest message ({ key, files }); whether checkpoints are on.
     gitCheckpoints: new Map(), lastTurn: new Map(), checkpointsOn: true,
     // Multi-tab bookkeeping: which chats are shown as tabs, the tab we are switching to, live status per running chat,
@@ -1310,12 +1319,16 @@
   function userTurn(m, index) {
     const d = el('div', 'turn user');
     d.dataset.index = index;
+    if (m.meta && m.meta.id) { d.dataset.mid = m.meta.id; }
     const atts = [];
     const text = (m.meta && m.meta.display ? m.meta.display : m.content)
+      .replace(/<context_set name="([^"]*)"[^>]*>[\s\S]*?<\/context_set>\s*/g, (_, nm) => { atts.push(`context:${nm}`); return ''; })
+      .replace(/<chat_ref id="([^"]*)"(?: title="([^"]*)")?[^>]*>[\s\S]*?<\/chat_ref>\s*/g, (_, id, t) => { atts.push(`chat:${id}\u0001${t || id}`); return ''; })
       .replace(/<attachment[^>]*path="([^"]+)"(?:\s+kind="pdf"\s+pages="(\d+(?:-\d+)?) of (\d+)")?(?:\s+lines="(\d+)[^"]*")?[^>]*>[\s\S]*?<\/attachment>\s*/g, (_, p, pg, n, ln) => { atts.push(pg && pg !== `1-${n}` && !(n === '1' && pg === '1') ? `${p}#page=${pg}` : ln ? `${p}#L${ln}` : p); return ''; })
       .replace(/<(workspace_tree|problems|git|open_editors|directory|terminal_output|codebase)[^>]*>[\s\S]*?<\/\1>\s*/g, (_, t) => { atts.push('@' + (t === 'workspace_tree' ? 'workspace' : t === 'open_editors' ? 'editors' : t === 'terminal_output' ? 'terminal' : t)); return ''; })
+      .replace(/<memory_note name="([^"]*)"[^>]*>[\s\S]*?<\/memory_note>\s*/g, (_, nm) => { atts.push(`memory:${nm}`); return ''; })
       .replace(/\n\n\[\d+ images? attached\]$/, '');
-    const act = el('div', 'actions', `<button data-act="copy" title="Copy" aria-label="Copy message">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit this message here, then Reset Chat (keep the files) or Reset Code (also restore the files)" aria-label="Edit message">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: files only, the chat only, or both" aria-label="Restore checkpoint" aria-haspopup="listbox">${I.restore}<span>Restore checkpoint</span></button>` : ''}${index !== undefined && text.trim() && !/^\/\S/.test(text.trim()) ? `<button data-act="savePrompt" title="Save as prompt: reuse this message from the prompt library or as a /command" aria-label="Save as prompt">${I.bookmark}</button>` : ''}`);
+    const act = el('div', 'actions', `<button data-act="copy" title="Copy" aria-label="Copy message">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit this message here, then Reset Chat (keep the files) or Reset Code (also restore the files)" aria-label="Edit message">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: files only, the chat only, or both" aria-label="Restore checkpoint" aria-haspopup="listbox">${I.restore}<span>Restore checkpoint</span></button>` : ''}${index !== undefined && text.trim() && !/^\/\S/.test(text.trim()) ? `<button data-act="savePrompt" title="Save as prompt: reuse this message from the prompt library or as a /command" aria-label="Save as prompt">${I.bookmark}</button>` : ''}${index !== undefined && m.meta && m.meta.id ? `<button data-act="msgmore" title="More: continue or duplicate from here, remember it, save it to knowledge" aria-label="More message actions" aria-haspopup="listbox">${I.list}</button>` : ''}`);
     if (m.meta && m.meta.checkpoint !== undefined) { d.dataset.checkpoint = m.meta.checkpoint; }
     act.onclick = (e) => {
       const b = e.target.closest('[data-act]'); if (!b) { return; }
@@ -1323,6 +1336,7 @@
       if (b.dataset.act === 'edit') { inlineEdit(d, m, index, text); }
       if (b.dataset.act === 'restore') { restoreMenu(b, index); }
       if (b.dataset.act === 'savePrompt') { openPromptLib({ edit: { body: text.trim() }, opener: b }); }
+      if (b.dataset.act === 'msgmore') { messageMenu(b, m.meta.id, 'user'); }
     };
     d.appendChild(act);
     syncRestoreButton(d, state.session && state.session.id);
@@ -1433,11 +1447,17 @@
     const info = [];
     if (mt.model) { info.push(`<span class="mdl" title="Answered by ${esc(mt.model)}">${esc(modelName(mt.model))}</span>`); }
     const out = mt.healing && reportOutcome(mt.healing.report); if (BADGE[out]) { info.unshift(outcomeBadge(out, mt.healing.report)); }
+    // Kept from its draft after a crash or a closed laptop: the generation stopped part way.
+    if (mt.partial) { info.unshift(`<span class="partial-tag" title="LocalPilot closed while this answer was being written; this is the text written so far">${I.pause}Partial answer</span>`); }
     if (mt.outputTokens && mt.genMs > 250) { info.push(`<span title="${mt.outputTokens.toLocaleString()} tokens generated in ${(mt.genMs / 1000).toFixed(1)}s">${Math.round(mt.outputTokens / (mt.genMs / 1000))} tok/s</span>`); }
     const trace = mt.traceId ? `<button data-act="trace" title="Trace: this run's model calls, tool calls, retries, fallbacks and approvals in order, with durations" aria-label="Show run trace">${I.trace}</button>` : '';
-    const f = el('div', 'afoot', `<span class="info">${info.join('<i>·</i>')}</span><span class="acts"><button data-act="copy" title="Copy response" aria-label="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader" aria-label="Open as document">${I.open}</button>` : ''}${trace}</span>`);
+    const f = el('div', 'afoot', `<span class="info">${info.join('<i>·</i>')}</span><span class="acts"><button data-act="copy" title="Copy response" aria-label="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader" aria-label="Open as document">${I.open}</button>` : ''}${trace}${mt.id ? `<button data-act="msgmore" title="More: continue or duplicate from here, compare answers" aria-label="More answer actions" aria-haspopup="listbox">${I.list}</button>` : ''}</span>`);
+    if (mt.id) { f.dataset.mid = mt.id; }
     f.onclick = (e) => {
       const b = e.target.closest('[data-act]'); if (!b) { return; }
+      if (b.dataset.act === 'msgmore') { const turn = b.closest('.turn'); messageMenu(b, mt.id, 'assistant', turn && turn.dataset.mid0); return; }
+      if (b.dataset.act === 'regenWith' && state.session && !state.running.has(state.session.id)) { const sid = state.session.id; modelPickThen = (id) => { if (id) { post({ type: 'regenerateWith', sessionId: sid, model: id }); } return true; }; openModelMenu(''); return; }
+      if (b.dataset.act === 'compare' && state.session) { const turn = b.closest('.turn'); post({ type: 'compareVersions', sessionId: state.session.id, messageId: (turn && turn.dataset.mid0) || mt.id }); return; }
       if (b.dataset.act === 'trace') { if (state.session) { openTrace(state.session.id, mt.traceId, b); } return; }
       if (b.dataset.act === 'doc') { post({ type: 'openMarkdown', text: m.content, title: state.session && state.session.title }); }
       else if (b.dataset.act === 'copy') { copyTo(b, m.content); }
@@ -1512,6 +1532,93 @@
       clearTimeout(btn._t); btn._t = setTimeout(() => { btn.innerHTML = btn.dataset.html; btn.classList.remove('copied'); }, 1400);
     }, () => toast('Could not copy to the clipboard', 'error'));
   }
+  // ---- branches, Compare, remote updates (continuity, 1.7)
+  /** "Continue from here" / "Duplicate from here" (and Compare on answers). */
+  function messageMenu(btn, mid, role, mid0) {
+    if (!state.session) { return; }
+    const sid = state.session.id; const running = state.running.has(sid);
+    const sib = mid0 && (state.branches.get(sid) || { siblings: {} }).siblings[mid0];
+    openMenu(btn, [
+      { label: 'Continue from here', desc: running ? 'Stop the agent first' : 'A new branch from this message; the later ones stay on the current branch', icon: I.branch, disabled: running, onPick: () => !running && post({ type: 'branch', sessionId: sid, action: 'continueFrom', messageId: mid }) },
+      { label: 'Duplicate from here', desc: 'A new conversation with the messages up to this one', icon: I.fork, onPick: () => post({ type: 'branch', sessionId: sid, action: 'duplicateFrom', messageId: mid }) },
+      { label: 'Remember in this chat', desc: 'Keep this message as a note this chat sees in every later turn', icon: I.memory, onPick: () => post({ type: 'memoryAction', action: 'remember', sessionId: sid, messageId: mid }) },
+      { label: 'Save to knowledge', desc: 'Keep it as reference: #memory:name or the agent\'s memory_search finds it', icon: I.book, onPick: () => post({ type: 'memoryAction', action: 'saveKnowledge', sessionId: sid, messageId: mid }) },
+      ...(role === 'assistant' ? [{ label: 'What did the model see?', desc: 'Files, memory and rules it was given; what was left out', icon: I.eye, onPick: () => post({ type: 'contextAction', action: 'inspect', sessionId: sid, messageId: mid, at: msgTime(mid) }) }] : []),
+      ...(role === 'assistant' ? [{ label: 'Compare answers', desc: sib ? `${sib.total} answers to this request, side by side` : 'Regenerate first to get another answer', icon: I.compare, onPick: () => post({ type: 'compareVersions', sessionId: sid, messageId: mid0 || mid }) }] : []),
+      { label: 'Versions of this chat', desc: 'Titles, flags and branches over time', icon: I.history, onPick: () => openContinuityPage('versions', { id: sid }) },
+    ], { label: 'Message actions' });
+  }
+  /** The time of a message by id (a snapshot is found by time when the message has none of its own). */
+  function msgTime(mid) { const s = state.session; const m = s && s.messages.find((x) => x.meta && x.meta.id === mid); return m && m.meta ? m.meta.timestamp : undefined; }
+  /** `< 2/3 >` on messages that were edited or regenerated: the other versions are on other branches. */
+  function applyBranches() {
+    const s = state.session; if (!s) { return; }
+    const b = state.branches.get(s.id); if (!b) { return; }
+    for (const old of els.messages.querySelectorAll('.bswitch, .afoot [data-act="compare"]')) { old.remove(); }
+    for (const [mid, sib] of Object.entries(b.siblings || {})) {
+      // Under the user's bubble (always visible, not in the hover toolbar), or at the start of an answer's footer.
+      const user = els.messages.querySelector(`.turn.user[data-mid="${CSS.escape(mid)}"]`);
+      const turn = els.messages.querySelector(`.turn.assistant[data-mid0="${CSS.escape(mid)}"]`);
+      const host = user || (turn && turn.querySelector(':scope > .afoot .acts'));
+      if (!host) { continue; }
+      const sw = el('span', `bswitch${user ? ' ub' : ''}`, `<button data-sw="-1" aria-label="Previous version" title="Previous version (edited or regenerated)">‹</button><span class="bn" aria-live="polite">${sib.index}/${sib.total}</span><button data-sw="1" aria-label="Next version" title="Next version">›</button>`);
+      sw.dataset.mid = mid; sw.setAttribute('role', 'group'); sw.setAttribute('aria-label', `Version ${sib.index} of ${sib.total}`);
+      sw.onclick = (e) => { const b = e.target.closest('[data-sw]'); e.stopPropagation(); if (b) { stepBranch(b); } };
+      if (user) { host.appendChild(sw); } else { host.prepend(sw); }
+      if (turn && !user) { host.insertAdjacentHTML('beforeend', `<button data-act="compare" title="Compare the ${sib.total} answers side by side" aria-label="Compare answers">${I.compare}</button>`); }
+    }
+  }
+  function stepBranch(b) {
+    const sw = b.closest('.bswitch'); if (!sw || !state.session) { return; }
+    if (state.running.has(state.session.id)) { toast('Stop the agent before switching versions'); return; }
+    sw.classList.add('busy');
+    post({ type: 'branch', sessionId: state.session.id, action: 'step', messageId: sw.dataset.mid, delta: Number(b.dataset.sw) || 1 });
+  }
+  /** "Updated on <device>" / "Continued on <device> too" above the transcript. */
+  function remoteBanner(m) {
+    state.remote.set(m.sessionId, m);
+    if (state.session && state.session.id === m.sessionId) { renderRemoteBanner(); }
+  }
+  function renderRemoteBanner() {
+    const old = document.getElementById('remoteBanner'); if (old) { old.remove(); }
+    const s = state.session; const m = s && state.remote.get(s.id); if (!m) { return; }
+    const n = el('div', `rbanner ${m.kind}`, `<span class="ico">${m.kind === 'continued' ? I.branch : I.sync}</span><span class="t">${m.kind === 'continued' ? `Continued on ${esc(m.device)} too` : `Updated on ${esc(m.device)}`}${m.applied ? '' : ' — reload to see the changes'}</span>${m.applied ? '' : '<button class="btn sm" data-r="reload">Reload</button>'}${m.kind === 'continued' ? '<button class="btn sm ghost" data-r="view">View</button>' : ''}<button class="x" data-r="x" aria-label="Dismiss" title="Dismiss">×</button>`);
+    n.id = 'remoteBanner'; n.setAttribute('role', 'status');
+    n.onclick = (e) => {
+      const b = e.target.closest('[data-r]'); if (!b) { return; }
+      if (b.dataset.r === 'reload') { post({ type: 'remoteReload', sessionId: s.id }); state.remote.delete(s.id); n.remove(); }
+      else if (b.dataset.r === 'view') { openContinuityPage('versions', { id: s.id }); }
+      else { state.remote.delete(s.id); n.remove(); }
+    };
+    els.messages.prepend(n);
+    if (m.applied && m.kind === 'updated') { setTimeout(() => { if (state.remote.get(s.id) === m) { state.remote.delete(s.id); n.remove(); } }, 8000); }
+  }
+  /** CONTEXT notices on a chat: the local -> cloud notice, a smaller window after a model switch, restored context. */
+  function contextNote(sid, note) {
+    const list = (state.ctxNotes.get(sid) || []).filter((n) => n.kind !== note.kind);
+    list.push(note); state.ctxNotes.set(sid, list);
+    if (state.session && state.session.id === sid) { renderContextNotes(); }
+  }
+  function renderContextNotes() {
+    for (const old of document.querySelectorAll('.rbanner.ctxn')) { old.remove(); }
+    const s = state.session; const list = s && state.ctxNotes.get(s.id); if (!list || !list.length) { return; }
+    for (const n of list) {
+      const changed = n.changed || [];
+      const text = n.kind === 'restored'
+        ? `Context restored from this chat's last run${n.parts ? `: ${n.parts}` : ''}.${changed.length ? ` ${changed.length} file${changed.length === 1 ? '' : 's'} changed since: <span class="files">${changed.slice(0, 4).map((c) => `<button class="link" data-f="${esc(c.path)}" title="${c.state === 'deleted' ? 'Deleted since' : 'Open'}">${esc(c.path.split('/').pop())}${c.state === 'deleted' ? ' (deleted)' : ''}</button>`).join(', ')}${changed.length > 4 ? ` and ${changed.length - 4} more` : ''}</span>` : ''}`
+        : esc(n.text);
+      const b = el('div', `rbanner ctxn ${n.kind}`, `<span class="ico">${n.kind === 'cloud' ? I.globe : n.kind === 'window' ? I.warn : I.history}</span><span class="t">${text}</span>${n.kind === 'cloud' ? '<button class="btn sm ghost" data-r="inspect" title="Open what the model saw on the last request">See context</button>' : ''}<button class="x" data-r="x" aria-label="Dismiss" title="Dismiss">×</button>`);
+      b.setAttribute('role', 'status');
+      b.onclick = (e) => {
+        const x = e.target.closest('[data-r],[data-f]'); if (!x) { return; }
+        if (x.dataset.f) { post({ type: 'openFile', path: x.dataset.f, sessionId: s.id }); return; }
+        if (x.dataset.r === 'inspect') { post({ type: 'contextAction', action: 'inspect', sessionId: s.id }); return; }
+        state.ctxNotes.set(s.id, (state.ctxNotes.get(s.id) || []).filter((y) => y !== n)); b.remove();
+      };
+      const rb = document.getElementById('remoteBanner');
+      if (rb) { rb.after(b); } else { els.messages.prepend(b); }
+    }
+  }
   function renderSession() {
     const s = state.session;
     // Same-session refreshes (mode/model change, compaction, restore) must not lose the reader's place.
@@ -1578,6 +1685,7 @@
         if (cur && cur.el === prev) { cur.end = ts || cur.end; if (m.meta && m.meta.durationMs) { cur.dur = m.meta.durationMs; } if (m.meta && m.meta.stopped) { cur.stopped = true; } }
         return;
       }
+      if (m.role !== 'user' && m.meta && m.meta.id) { node.dataset.mid0 = m.meta.id; }
       els.messages.appendChild(node);
       if (m.role !== 'user') { cur = { el: node, start: ts, end: ts, dur: m.meta && m.meta.durationMs, stopped: !!(m.meta && m.meta.stopped) }; }
     });
@@ -1590,7 +1698,11 @@
     // The latest turn: Continue / Discard after a stop, and the actions on steps that failed and were not retried.
     if (!inFlight && lastTurn && lastTurn.classList.contains('assistant')) { settledRunActions(lastTurn, s.id); }
     const foot = !failedBox && !inFlight && lastTurn && lastTurn.classList.contains('assistant') && lastTurn.querySelector(':scope > .afoot .acts');
-    if (foot) { foot.insertAdjacentHTML('beforeend', `<button data-act="regen" title="Regenerate: send your last message again for a new answer (files changed by this turn are kept)" aria-label="Regenerate">${I.refresh}</button>`); }
+    if (foot) { foot.insertAdjacentHTML('beforeend', `<button data-act="regen" title="Regenerate: send your last message again for a new answer (files changed by this turn are kept; the old answer stays as a version)" aria-label="Regenerate">${I.refresh}</button><button data-act="regenWith" title="Regenerate with another model…" aria-label="Regenerate with another model">${I.layers}</button>`); }
+    applyBranches();
+    renderRemoteBanner();
+    renderContextNotes();
+    if (s.messages.some((x) => x.role === 'user') || rel.sid !== s.id) { renderRelated([]); }
     syncViewChanges(s.id);
     // Plan mode finished with a checklist: the "Prepared plan" card — title, summary, todos and one-click Build.
     if (s.mode === 'plan' && s.plan && (s.todos || []).length && !state.running.has(s.id)) { els.messages.appendChild(planCard(s)); }
@@ -1631,21 +1743,47 @@
     const work = turn.querySelector(':scope > .work');
     if (work) { work.after(bar); } else { turn.appendChild(bar); }
   }
-  /** "Run interrupted": a run that never ended (VS Code reloaded or closed mid-run). Resume, Restore checkpoint, Dismiss. */
+  /** "Run interrupted": a run that never ended (VS Code reloaded or closed mid-run). Resume, Restore checkpoint, Dismiss.
+   *  With continuity it also lists What ran and the files the run changed (Keep / Review diff), and when the chat's last
+   *  answer is a partial one kept from its draft it becomes "Interrupted — partial answer" (Continue / Regenerate / Discard). */
+  const RAN_ICON = { ok: 'check', error: 'x', denied: 'x', cancelled: 'stop', running: 'pause' };
+  function ranList(st) {
+    const ran = Array.isArray(st.ran) ? st.ran : []; if (!ran.length) { return ''; }
+    const more = Number(st.ranMore) || 0;
+    const items = ran.map((r) => { const ico = I[RAN_ICON[r.status]] || ''; const tail = r.error || r.detail || ''; return `<li class="ran ${esc(r.status || 'pt')} k-${esc(r.kind || '')}"><span class="m" aria-hidden="true">${ico}</span><span class="n">${esc(r.kind === 'model' ? `Model ${r.name}` : r.name)}</span>${r.status === 'running' ? '<span class="d">was running</span>' : tail ? `<span class="d" title="${esc(tail)}">${short(tail, 90)}</span>` : ''}</li>`; }).join('');
+    return `<details class="rec-ran"><summary>What ran <span class="count">${ran.length + more}</span></summary>${more ? `<div class="rec-vh">${more} earlier step${more === 1 ? '' : 's'} not shown</div>` : ''}<ol>${items}</ol></details>`;
+  }
   function renderRunInterrupted(s) {
-    const st = state.runInt.get(s.id); if (!st) { return; }
-    const changed = state.changes.get(s.id) || [];
-    const files = changed.length ? changed.map((f) => f.path || f.fsPath) : Array.isArray(st.files) ? st.files : [];
-    const facts = [st.steps ? `Stopped during step ${st.steps + 1}` : 'Stopped before it finished', st.tasksTotal ? `Tasks ${st.tasksDone || 0}/${st.tasksTotal}` : '', files.length ? `${files.length} file${files.length === 1 ? '' : 's'} edited` : ''].filter(Boolean).join(' · ');
-    const list = files.slice(0, 6).map((f) => `<li title="${esc(f)}">${esc(f)}</li>`).join('') + (files.length > 6 ? `<li class="more">+${files.length - 6} more</li>` : '');
-    const when = st.startedAt ? new Date(st.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-    const card = el('div', 'rec rec-int run-int warn', `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">Run interrupted</span>${when ? `<span class="when">started ${esc(when)}</span>` : ''}</div><div class="rec-body"><div class="rec-title">${esc(facts)}</div><div class="rec-cause">VS Code closed or reloaded while LocalPilot was working. Nothing ran since.</div>${list ? `<ul class="rec-files">${list}</ul>` : ''}</div><div class="rec-final"><div class="rec-acts"><button class="btn sm primary" data-run="continue" title="Start a turn that checks what was done and carries on">${I.play}<span>Resume</span></button><button class="btn sm" data-run="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button>${files.length ? `<button class="btn sm ghost" data-run="review" title="Open the changes this chat made">${I.diff}<span>Review changes</span></button>` : ''}<button class="btn sm ghost" data-run="dismiss" title="Keep everything as it is and hide this card">Dismiss</button></div></div>`);
-    card.setAttribute('role', 'group'); card.setAttribute('aria-label', 'Run interrupted');
-    card.querySelector('.rec-acts').onclick = (e) => {
+    const st = state.runInt.get(s.id) || null;
+    const msgs = s.messages || []; const last = msgs[msgs.length - 1];
+    const partial = !!(last && last.role === 'assistant' && last.meta && last.meta.partial);
+    if (!st && !partial) { return; }
+    const run = st || { files: [] };
+    const pending = state.changes.get(s.id) || [];
+    // Files the run changed (its agent session) first; else what the chat still has pending review.
+    const changed = Array.isArray(run.changed) && run.changed.length ? run.changed : pending.length ? pending.map((f) => ({ path: f.path || f.fsPath, fsPath: f.fsPath })) : (Array.isArray(run.files) ? run.files : []).map((p) => ({ path: p }));
+    const pendingOf = (p) => pending.find((f) => f.fsPath === p || (f.path || '') === p || (f.fsPath || '').replace(/\\/g, '/').endsWith(`/${p}`));
+    const facts = [partial ? 'Stopped while answering' : run.steps ? `Stopped during step ${run.steps + 1}` : 'Stopped before it finished', run.tasksTotal ? `Tasks ${run.tasksDone || 0}/${run.tasksTotal}` : '', changed.length ? `${changed.length} file${changed.length === 1 ? '' : 's'} changed` : ''].filter(Boolean).join(' · ');
+    const shown = changed.slice(0, 6).map((f) => { const p = pendingOf(f.path); return `<li title="${esc(f.path)}">${f.status ? `<b class="st st-${esc(f.status)}" title="${f.status === 'A' ? 'Added' : f.status === 'D' ? 'Deleted' : 'Modified'}">${esc(f.status)}</b>` : ''}<span class="f">${esc(f.path)}</span>${p ? `<button class="btn sm ghost" data-keep="${esc(p.fsPath)}" title="Keep the changes to ${esc(f.path)}" aria-label="Keep ${esc(f.path)}">${I.check}<span>Keep</span></button>` : ''}</li>`; }).join('') + (changed.length > 6 ? `<li class="more">+${changed.length - 6} more</li>` : '');
+    const cp = run.checkpoint && run.checkpoint.createdAt ? `<span class="rec-vh">Checkpoint before the run · ${esc(new Date(run.checkpoint.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span>` : '';
+    const filesBlock = changed.length ? `<div class="rec-changed"><div class="rec-vh">Changed files${cp ? ' · ' : ''}${cp}</div><ul class="rec-files">${shown}</ul><div class="rec-fileacts">${pending.length ? `<button class="btn sm ghost" data-keepall="1" title="Keep every change this chat made">${I.check}<span>Keep all</span></button>` : ''}<button class="btn sm ghost" data-run="review" title="Open the changes in the diff review">${I.diff}<span>Review diff</span></button></div></div>` : '';
+    const when = run.startedAt ? new Date(run.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    const head = partial ? 'Interrupted — partial answer' : 'Run interrupted';
+    const cause = partial ? 'LocalPilot closed while this answer was being written. The text written so far is kept above.' : 'VS Code closed or reloaded while LocalPilot was working. Nothing ran since.';
+    const acts = partial
+      ? `<button class="btn sm primary" data-draft="continue" title="Ask the model to continue from the partial answer">${I.play}<span>Continue</span></button><button class="btn sm" data-draft="regenerate" title="Drop the partial answer and send your request again">${I.refresh}<span>Regenerate</span></button><button class="btn sm ghost" data-draft="discard" title="Remove the partial answer from the chat">${I.trash}<span>Discard</span></button>`
+      : `<button class="btn sm primary" data-run="continue" title="Start a turn that checks what was done and carries on">${I.play}<span>Resume</span></button><button class="btn sm" data-run="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button><button class="btn sm ghost" data-run="dismiss" title="Keep everything as it is and hide this card">Dismiss</button>`;
+    const card = el('div', `rec rec-int run-int warn${partial ? ' partial' : ''}`, `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">${head}</span>${when ? `<span class="when">started ${esc(when)}</span>` : ''}</div><div class="rec-body"><div class="rec-title">${esc(facts)}</div><div class="rec-cause">${cause}</div>${ranList(run)}${filesBlock}</div><div class="rec-final"><div class="rec-acts">${acts}</div></div>`);
+    card.setAttribute('role', 'group'); card.setAttribute('aria-label', head);
+    card.onclick = (e) => {
+      const k = e.target.closest('button[data-keep]'); if (k) { post({ type: 'keepChanges', sessionId: s.id, fsPath: k.dataset.keep }); k.disabled = true; return; }
+      if (e.target.closest('button[data-keepall]')) { post({ type: 'keepChanges', sessionId: s.id }); card.querySelectorAll('button[data-keep], button[data-keepall]').forEach((x) => { x.disabled = true; }); return; }
+      const d = e.target.closest('button[data-draft]');
+      if (d) { post({ type: 'resumeDraft', sessionId: s.id, action: d.dataset.draft }); if (d.dataset.draft === 'discard') { state.runInt.delete(s.id); card.remove(); } else { card.querySelectorAll('.rec-acts button').forEach((x) => { x.disabled = true; }); d.classList.add('busy'); } return; }
       const b = e.target.closest('button[data-run]'); if (!b) { return; }
       post({ type: 'runAction', sessionId: s.id, action: b.dataset.run });
       if (b.dataset.run === 'review') { return; }
-      if (b.dataset.run === 'continue') { card.querySelectorAll('button').forEach((x) => { x.disabled = true; }); b.classList.add('busy'); return; }
+      if (b.dataset.run === 'continue') { card.querySelectorAll('.rec-acts button').forEach((x) => { x.disabled = true; }); b.classList.add('busy'); return; }
       state.runInt.delete(s.id); card.remove();
     };
     els.messages.appendChild(card);
@@ -3186,7 +3324,7 @@
       return openMenu(anchor, [
         { label: `Close ${sel.length} selected tabs`, desc: nRun ? `${nRun} running will stay open` : 'Chats stay in All chats', icon: I.x, onPick: () => closeSelected() },
         ...(nRun ? [{ label: `Stop and close all ${sel.length}`, desc: `Stops ${nRun} running agent${nRun === 1 ? '' : 's'} first`, icon: I.stop, onPick: () => closeSelected({ stop: true }) }] : []),
-        { label: 'Delete selected chats…', desc: 'Cannot be undone', icon: I.trash, onPick: () => openMenu(anchor, [{ label: `Delete ${sel.length} chats`, icon: I.trash, onPick: () => { closeSelected({ stop: true }); post({ type: 'deleteSessions', ids: sel }); } }, { label: 'Cancel', icon: I.x }]) },
+        { label: trashOn() ? 'Move selected chats to Trash…' : 'Delete selected chats…', desc: trashOn() ? 'Restorable from Trash' : 'Cannot be undone', icon: I.trash, onPick: () => openMenu(anchor, [{ label: trashOn() ? `Move ${sel.length} chats to Trash` : `Delete ${sel.length} chats`, icon: I.trash, onPick: () => { closeSelected({ stop: true }); post({ type: 'deleteSessions', ids: sel }); } }, { label: 'Cancel', icon: I.x }]) },
         { hr: true },
         { label: 'Clear selection', icon: I.check, onPick: clearSelection },
       ]);
@@ -3205,7 +3343,7 @@
       ...(right.length ? [{ group: 'Close many', label: 'Close tabs to the right', desc: `${right.length} tab${right.length === 1 ? '' : 's'}`, icon: I.chev, onPick: () => closeTabs(right) }] : []),
       ...(finished.length ? [{ group: 'Close many', label: 'Close finished tabs', desc: `${finished.length} with unread results`, icon: I.check, onPick: () => closeTabs(finished) }] : []),
       ...(runningIds.length > 1 ? [{ group: 'Close many', label: `Stop all ${runningIds.length} agents`, desc: 'Tabs stay open', icon: I.stop, onPick: () => { for (const id of runningIds) { post({ type: 'stop', sessionId: id }); } } }] : []),
-      { label: 'Delete chat…', desc: running ? 'Stops the agent and deletes everything' : 'Cannot be undone', icon: I.trash, onPick: () => openMenu(anchor, [{ label: `Delete “${short(s.title || 'New chat', 32)}”`, desc: 'Permanently removes this chat', icon: I.trash, onPick: () => { if (state.openTabs) { state.openTabs.delete(s.id); } post({ type: 'deleteSession', id: s.id }); } }, { label: 'Cancel', icon: I.x }]) },
+      { label: trashOn() ? 'Move to Trash…' : 'Delete chat…', desc: running ? (trashOn() ? 'Stops the agent first' : 'Stops the agent and deletes everything') : trashOn() ? 'Restorable from Trash' : 'Cannot be undone', icon: I.trash, onPick: () => openMenu(anchor, [{ label: `${trashOn() ? 'Move' : 'Delete'} “${short(s.title || 'New chat', 32)}”${trashOn() ? ' to Trash' : ''}`, desc: trashOn() ? 'Undo from the toast or from Trash' : 'Permanently removes this chat', icon: I.trash, onPick: () => { if (state.openTabs) { state.openTabs.delete(s.id); } post({ type: 'deleteSession', id: s.id }); } }, { label: 'Cancel', icon: I.x }]) },
     ];
     openMenu(anchor, items);
   }
@@ -3260,7 +3398,7 @@
   // are managed here without opening them first. Untouched empty chats are hidden; they are noise, not history.
   // The extension sorts, filters and pages the list (`listSessions`); until its page arrives the rows come from the
   // summaries already here. A long history (over 200 chats) loads 50 more each time the list is scrolled to the end.
-  const hist = { open: false, q: '', pending: false, sel: 0, confirm: null, renaming: null, timer: 0, sig: '', sort: 'newest', userSort: 'newest', pinnedOnly: false, mode: '', folder: '', page: null, seq: 0, offset: 0, refreshTimer: 0, selecting: false, picked: new Set() };
+  const hist = { open: false, q: '', pending: false, sel: 0, confirm: null, renaming: null, timer: 0, sig: '', sort: 'newest', userSort: 'newest', pinnedOnly: false, mode: '', folder: '', page: null, seq: 0, offset: 0, refreshTimer: 0, selecting: false, picked: new Set(), view: 'all', project: 'this', tag: '', nav: null, navSeq: 0, navMore: false, navOffset: 0, navPending: false };
   const HIST_GROUPS = ['Running', 'Pinned', 'Today', 'Yesterday', 'Previous 7 days', 'Previous 30 days', 'Older'];
   const HIST_SORTS = [['newest', 'Newest'], ['oldest', 'Oldest'], ['tokens', 'Most tokens'], ['cost', 'Most expensive'], ['size', 'Largest'], ['relevance', 'Relevance']];
   const HIST_ALL_UP_TO = 200; const HIST_PAGE = 50;
@@ -3290,7 +3428,101 @@
     hist.page = { ...m.page, key, rows }; hist.pending = false; hist.more = false;
     renderHistory();
   }
-  function setHistSort(sort) { hist.sort = sort; if (!hist.q.trim()) { hist.userSort = sort; } hist.sel = 0; hist.sig = ''; renderHistory(); histRequest(false); }
+  // ---- navigator (continuity, 1.7): views with counts, projects, index search, Knowledge & continuity.
+  // The index answers `nav` once it is ready; until then (or with continuity off) the list above works from the
+  // store's own summaries as in 1.6. "All" in this project with no query keeps that list (running and unsaved chats).
+  const favs = new Map();
+  const NAV_VIEWS = [['all', 'All'], ['pinned', 'Pinned'], ['favorites', 'Favorites'], ['archived', 'Archived'], ['trash', 'Trash']];
+  function navReady() { return !!(hist.nav && hist.nav.indexState === 'ready'); }
+  /** Deleting goes to Trash (conversation storage is on and indexed): what the delete labels say. */
+  function trashOn() { return navReady() || !!state.trashOn; }
+  function navMode() { return navReady() && (hist.view !== 'all' || hist.project !== 'this' || !!hist.tag || !!hist.q.trim()); }
+  function navKey() { return `${hist.view}|${hist.project}|${hist.tag}|${hist.q.trim()}|${hist.sort}`; }
+  function navSig() { const n = hist.nav; return n ? `${n.indexState}|${n.key}|${n.page.total}|${n.page.rows.length}|${hist.navPending ? 1 : 0}|${JSON.stringify(n.counts || {})}|${n.projects.length}|${[...favs].join(',')}` : '-'; }
+  function favOf(s) { return favs.has(s.id) ? favs.get(s.id) : !!(s.__nav ? s.__nav.favorite : hist.nav && hist.nav.favIds && hist.nav.favIds.has(s.id)); }
+  function navRequest(more) {
+    const page = hist.nav && hist.nav.key === navKey() ? hist.nav.page : null;
+    if (more && (!page || page.rows.length >= page.total)) { return; }
+    hist.navSeq++; hist.navPending = true; hist.navMore = !!more; hist.navOffset = more ? page.rows.length : 0;
+    post({ type: 'nav', seq: hist.navSeq, view: hist.view, projectId: hist.project, query: hist.q.trim(), offset: hist.navOffset, limit: 50, sort: hist.sort === 'relevance' ? 'newest' : hist.sort, ...(hist.tag ? { tag: hist.tag } : {}) });
+  }
+  function navPage(m) {
+    if (m.indexState === 'ready') { state.trashOn = true; }
+    if (m.seq === 0 && !hist.open) { return; } // the start-up probe: only whether Trash is on
+    if (!hist.open || m.seq !== hist.navSeq) { return; }
+    const key = navKey();
+    const rows = hist.navMore && hist.nav && hist.nav.key === key ? hist.nav.page.rows.concat(m.page.rows.filter((r) => !hist.nav.page.rows.some((x) => x.id === r.id))) : m.page.rows;
+    hist.nav = { ...m, key, page: { ...m.page, rows }, favIds: new Set(rows.filter((r) => r.favorite).map((r) => r.id)) };
+    favs.clear();
+    hist.navPending = false; hist.navMore = false; hist.sig = '';
+    // Sorting by relevance is the index's order for a query; the store list keeps its own sorts.
+    renderHistory();
+  }
+  /** A navigator row shaped like a store summary, so the same row renderer, keys and menus apply. */
+  function navSession(r) {
+    const live = state.sessions.find((x) => x.id === r.id);
+    return { ...(live || {}), id: r.id, title: r.title, createdAt: r.createdAt, updatedAt: live ? Math.max(live.updatedAt, r.updatedAt) : r.updatedAt, messageCount: live ? live.messageCount : r.messageCount, pinned: live ? live.pinned : r.pinned, mode: (live && live.mode) || r.mode || 'agent', specialist: live ? live.specialist : r.specialist, origin: r.origin === 'cli' || r.origin === 'claude-code' || r.origin === 'codex' ? r.origin : live && live.origin, parentId: r.parentId, parentTitle: r.parentTitle, model: r.model, usage: live && live.usage, bytes: live && live.bytes, __nav: r };
+  }
+  function navRows() {
+    const now = new Date(); const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const grouped = !hist.q.trim() && hist.view !== 'trash' && hist.sort === 'newest';
+    if (hist.nav.key !== navKey()) { return []; }
+    const rows = hist.nav.page.rows.map((r) => ({ s: navSession(r), hit: r.snippet ? { snippet: r.snippet, role: r.role, field: r.field, marked: true } : undefined }));
+    return rows.map((x) => ({ ...x, g: grouped ? historyGroup(x.s, startOfToday) : '' }));
+  }
+  /** Matches arrive wrapped in \u0002…\u0003 (from the index): escaped, then marked. */
+  function markSnippet(t) { return esc(String(t)).replace(/\u0002/g, '<mark>').replace(/\u0003/g, '</mark>').replace(/\s+/g, ' '); }
+  function dropNavRow(id, quiet) {
+    if (hist.nav) { hist.nav.page.rows = hist.nav.page.rows.filter((r) => r.id !== id); hist.nav.page.total = Math.max(0, hist.nav.page.total - 1); }
+    if (!quiet) { hist.sig = ''; renderHistory(); }
+  }
+  function navEmptyText() {
+    const q = hist.q.trim(); const v = (NAV_VIEWS.find((x) => x[0] === hist.view) || ['', 'All'])[1];
+    if (q) { return `Nothing matches “${esc(q)}”${hist.project === 'this' ? ' in this project — try <b>All projects</b>' : ''}`; }
+    if (hist.view === 'trash') { return 'Trash is empty. Deleted chats stay here for 30 days (Settings → Continuity &amp; sync).'; }
+    if (hist.view === 'favorites') { return 'No favorites yet — ★ on a row adds one.'; }
+    if (hist.view === 'archived') { return 'Nothing archived. Archive hides a chat from All; it stays searchable.'; }
+    return `No ${esc(v.toLowerCase())} conversations here${hist.project === 'this' ? ' — try <b>All projects</b>' : ''}.`;
+  }
+  function setNav(patch) { Object.assign(hist, patch); hist.sel = 0; hist.confirm = null; hist.sig = ''; if (hist.selecting) { hist.selecting = false; hist.picked = new Set(); } renderHistory(); navRequest(false); }
+  /** Views (All · Pinned · Favorites · Archived · Trash, with counts) and Projects. Under 360 px one "Show" menu. */
+  function renderNavSide(box) {
+    if (!box) { return; }
+    const n = hist.nav; const ready = navReady(); const c = (ready && n.counts) || null;
+    const count = (k) => (c ? c[k === 'favorites' ? 'favorites' : k] : '');
+    const st = n ? n.indexState : 'loading';
+    const note = !ready ? `<span class="nav-note" role="status">${st === 'off' ? 'Conversation storage is off — showing this folder\'s chats' : st === 'failed' ? 'Search index unavailable — showing this folder\'s chats' : `<span class="spinner"></span>${st === 'rebuilding' ? 'Rebuilding the index…' : 'Indexing your history…'}`}</span>` : '';
+    const chips = NAV_VIEWS.map(([k, l]) => `<button class="vchip${hist.view === k ? ' on' : ''}" data-v="${k}" aria-pressed="${hist.view === k}" ${ready || k === 'all' ? '' : 'disabled'}>${k === 'trash' ? I.trash : k === 'favorites' ? I.star : k === 'pinned' ? I.pin : k === 'archived' ? I.archive : I.list}<span>${l}</span>${c ? `<i>${count(k)}</i>` : ''}</button>`).join('');
+    const show = `<select class="vsel" aria-label="Show">${NAV_VIEWS.map(([k, l]) => `<option value="${k}"${hist.view === k ? ' selected' : ''}${ready || k === 'all' ? '' : ' disabled'}>Show: ${l}${c ? ` (${count(k)})` : ''}</option>`).join('')}</select>`;
+    const projs = ready ? n.projects : [];
+    const cur = projs.find((p) => p.current);
+    const total = projs.reduce((t, p) => t + p.count, 0);
+    const psel = ready ? `<select class="psel" aria-label="Project" title="Which project's conversations"><option value="this"${hist.project === 'this' ? ' selected' : ''}>This project${cur ? ` (${cur.count})` : ''}</option><option value="all"${hist.project === 'all' ? ' selected' : ''}>All projects (${total})</option>${projs.filter((p) => !p.current).map((p) => `<option value="${esc(p.id)}"${hist.project === p.id ? ' selected' : ''}>${esc(short(p.name, 28))}${p.missing ? ' (moved?)' : ''} (${p.count})</option>`).join('')}</select>` : '';
+    const sel = projs.find((p) => p.id === hist.project);
+    const moved = sel && sel.missing ? `<div class="nav-moved" role="note">Chats from <b>${esc(sel.name)}</b>, whose folder is gone on this computer. <button class="lnk" data-repoint="${esc(sel.id)}">This is the same project</button></div>` : '';
+    const tags = ready && n.tags && n.tags.length ? `<div class="nav-tags" role="group" aria-label="Tags">${hist.tag ? `<button class="tchip on" data-tag="" aria-pressed="true">#${esc(hist.tag)} ×</button>` : n.tags.slice(0, 8).map((t) => `<button class="tchip" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : '';
+    box.innerHTML = `<div class="nav-views" role="group" aria-label="Views">${chips}</div>${show}${psel ? `<div class="nav-proj">${psel}</div>` : ''}${tags}${moved}${note}`;
+    box.onmousedown = (e) => { if (e.target.closest('button')) { e.preventDefault(); holdHistory(); } };
+    box.onclick = (e) => {
+      const v = e.target.closest('[data-v]'); if (v && !v.disabled) { setNav({ view: v.dataset.v }); return; }
+      const t = e.target.closest('[data-tag]'); if (t) { setNav({ tag: t.dataset.tag }); return; }
+      const r = e.target.closest('[data-repoint]'); if (r) { post({ type: 'convAction', ids: [], action: 'repoint', projectId: r.dataset.repoint }); setNav({ project: 'this' }); }
+    };
+    box.onchange = (e) => { if (e.target.classList.contains('vsel')) { setNav({ view: e.target.value }); } else if (e.target.classList.contains('psel')) { setNav({ project: e.target.value }); } };
+  }
+  /** Knowledge & continuity: the manager pages (and Settings). A disclosure; open by default when there is room. */
+  function renderNavKnow(box) {
+    if (!box || box.dataset.ready) { return; }
+    box.dataset.ready = '1';
+    box.innerHTML = `<summary>Knowledge &amp; continuity</summary><div class="know-list">${[['memory', I.memory, 'Memory manager'], ['context', I.layers, 'Context library'], ['checkpoints', I.restore, 'Checkpoints'], ['sync', I.sync, 'Sync manager'], ['trash', I.trash, 'Trash'], ['settings', I.gear, 'Settings']].map(([k, ico, l]) => `<button class="know" data-k="${k}">${ico}<span>${l}</span>${k === 'sync' ? '<i class="sdot off" title="Sync is off"></i>' : ''}</button>`).join('')}</div>`;
+    box.onclick = (e) => { const b = e.target.closest('[data-k]'); if (!b) { return; } if (b.dataset.k === 'settings') { closeMenu(); post({ type: 'openSettings', section: 'continuity' }); } else { openContinuityPage(b.dataset.k); } };
+  }
+  /** The manager pages live in media/continuity.js (Back returns to the navigator). */
+  function openContinuityPage(page, params) {
+    closeMenu();
+    if (window.LPContinuity) { window.LPContinuity.open(page, params || {}, { back: () => openHistory({ view: hist.view }) }); }
+  }
+  function setHistSort(sort) { hist.sort = sort; if (!hist.q.trim()) { hist.userSort = sort; } hist.sel = 0; hist.sig = ''; renderHistory(); histRequest(false); navRequest(false); }
   function chatTokens(s) { const u = s.usage; return u ? (u.promptTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheWriteTokens || 0) + (u.completionTokens || 0) : 0; }
   function chatBytes(id) { const s = state.sessions.find((x) => x.id === id); return (s && s.bytes) || 0; }
   function historyGroup(s, startOfToday) {
@@ -3304,6 +3536,7 @@
     return 'Older';
   }
   function historyRows() {
+    if (navMode()) { return navRows(); }
     const active = activeId(); const q = hist.q.trim().toLowerCase();
     const now = new Date(); const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const byId = new Map(state.sessions.map((s) => [s.id, s]));
@@ -3332,31 +3565,41 @@
     const i = text.toLowerCase().indexOf(q.toLowerCase());
     return i < 0 ? esc(text) : `${esc(text.slice(0, i))}<mark>${esc(text.slice(i, i + q.length))}</mark>${esc(text.slice(i + q.length))}`;
   }
-  function openHistory() {
+  function openHistory(opts) {
+    if (opts && opts.type) { opts = null; } // called as an event handler
     const p = els.popover; p.innerHTML = ''; p.classList.remove('hidden');
     menuState = { items: [], sel: 0 };
     // Sort and the pinned filter carry over between openings; the query and a selection do not.
-    Object.assign(hist, { open: true, hold: false, stale: false, q: '', pending: false, sel: 0, confirm: null, renaming: null, sig: '', sort: hist.userSort, page: null, selecting: false, picked: new Set() });
+    Object.assign(hist, { open: true, hold: false, stale: false, q: '', pending: false, sel: 0, confirm: null, renaming: null, sig: '', sort: hist.userSort, page: null, selecting: false, picked: new Set(), navPending: false, navMore: false, navOffset: 0 });
+    if (opts && opts.view) { hist.view = opts.view; }
     // A folder filter outlives a folder that left the workspace only as long as the folder is there.
     if (hist.folder && !(chatRoots() || []).some((r) => r.path === hist.folder)) { hist.folder = ''; }
     const box = el('div', 'hist');
-    const search = el('input', 'search'); search.placeholder = 'Search chats and messages…'; search.setAttribute('aria-label', 'Search chats');
+    const grid = el('div', 'navg');
+    const head = el('div', 'nav-head');
+    const newBtn = el('button', 'btn primary nav-new', `${I.plus}<span>New conversation</span>`); newBtn.type = 'button'; newBtn.title = 'Start a new conversation — the current one keeps running'; newBtn.setAttribute('aria-label', 'New conversation');
+    newBtn.onclick = () => { closeMenu(); post({ type: 'newSession', mode: newChatMode() }); };
+    const search = el('input', 'search nav-search'); search.placeholder = 'Search conversations, code, errors…'; search.setAttribute('aria-label', 'Search conversations (filters: in:code from:user project: tag: is:favorite before: after:)'); search.title = 'Filters: in:code in:errors from:user from:assistant project:<name> tag:<name> model:<id> is:pinned|favorite|archived|trashed before:YYYY-MM-DD after:YYYY-MM-DD';
+    head.append(search, newBtn);
+    const side = el('div', 'nav-side'); side.setAttribute('role', 'group'); side.setAttribute('aria-label', 'Views and projects');
     const bar = el('div', 'hist-bar');
     const filt = el('div', 'hist-filter'); filt.setAttribute('role', 'group'); filt.setAttribute('aria-label', 'Filter chats');
     const list = el('div', 'hist-list'); list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', 'Chats');
     const foot = el('div', 'hist-foot');
-    box.append(search, bar, filt, list, foot); p.appendChild(box);
+    const know = el('details', 'nav-know');
+    grid.append(head, side, bar, filt, list, foot, know); box.appendChild(grid); p.appendChild(box);
+    p.classList.add('nav-pop');
     search.oninput = () => {
       const was = hist.q.trim(); hist.q = search.value; hist.sel = 0; hist.confirm = null;
       const q = hist.q.trim();
       // Typing ranks by relevance; clearing the query goes back to the sort chosen before.
       if (q && !was && hist.sort !== 'relevance') { hist.userSort = hist.sort; hist.sort = 'relevance'; } else if (!q && was) { hist.sort = hist.userSort; }
       clearTimeout(hist.timer);
-      hist.pending = true; hist.timer = setTimeout(() => histRequest(false), q ? 150 : 0);
+      hist.pending = true; hist.timer = setTimeout(() => { histRequest(false); navRequest(false); }, q ? 150 : 0);
       renderHistory();
     };
-    list.onscroll = () => { if (!hist.pending && list.scrollTop + list.clientHeight >= list.scrollHeight - 60) { histRequest(true); } };
-    histRequest(false);
+    list.onscroll = () => { if (navMode()) { if (!hist.navPending && list.scrollTop + list.clientHeight >= list.scrollHeight - 60) { navRequest(true); } return; } if (!hist.pending && list.scrollTop + list.clientHeight >= list.scrollHeight - 60) { histRequest(true); } };
+    histRequest(false); navRequest(false);
     search.onkeydown = historyKeys;
     // A focused button or the sort select handles its own keys: Enter there presses the button, it does not open the selected chat.
     p.onkeydown = (e) => { if (e.target === search) { return; } if (e.target.classList.contains('rename') || e.target.tagName === 'SELECT' || (e.target.closest('button') && (e.key === 'Enter' || e.key === ' '))) { return; } historyKeys(e); };
@@ -3371,7 +3614,12 @@
     window.addEventListener('mouseup', () => { hist.hold = false; setTimeout(() => { if (hist.stale) { hist.stale = false; hist.sig = ''; renderHistory(); } }, 0); }, { once: true, capture: true });
   }
   /** Open a chat from the panel; picking the one already open just closes the panel. */
-  function historyOpen(id) { if (id === activeId()) { closeMenu(); els.input.focus(); } else { selectTab(id); } }
+  function historyOpen(id) {
+    if (id === activeId()) { closeMenu(); els.input.focus(); return; }
+    // A conversation of another project, archived away or not in this window's list: the host loads it from the log.
+    if (!state.sessions.some((x) => x.id === id)) { closeMenu(); post({ type: 'convAction', ids: [id], action: 'open' }); return; }
+    selectTab(id);
+  }
   function renderHistory() {
     const p = els.popover; const list = p.querySelector('.hist-list'); const foot = p.querySelector('.hist-foot'); const bar = p.querySelector('.hist-bar'); const filt = p.querySelector('.hist-filter');
     if (!hist.open || !list || hist.renaming) { return; }
@@ -3380,7 +3628,7 @@
     for (const id of [...hist.picked]) { if (!state.sessions.some((s) => s.id === id)) { hist.picked.delete(id); } }
     hist.sel = Math.max(0, Math.min(hist.sel, rows.length - 1));
     const page = hist.page && hist.page.key === histKey() ? hist.page : null;
-    const sig = [q, hist.pending ? 1 : 0, hist.sel, hist.confirm || '', active || '', state.running.size, hist.sort, hist.pinnedOnly ? 1 : 0, hist.mode, hist.folder, histFilterSig(), hist.selecting ? [...hist.picked].join(',') : '-', page ? page.total : '', ...rows.map(({ s, g, hit }) => `${s.id}:${g}:${s.title}:${s.pinned ? 1 : 0}:${s.messageCount}:${state.unread.has(s.id) ? 1 : 0}:${state.status.get(s.id) || ''}:${hit ? hit.snippet : ''}:${s.bytes || 0}:${chatTokens(s)}`)].join('|');
+    const sig = [navSig(), q, hist.pending ? 1 : 0, hist.sel, hist.confirm || '', active || '', state.running.size, hist.sort, hist.pinnedOnly ? 1 : 0, hist.mode, hist.folder, histFilterSig(), hist.selecting ? [...hist.picked].join(',') : '-', page ? page.total : '', ...rows.map(({ s, g, hit }) => `${s.id}:${g}:${s.title}:${s.pinned ? 1 : 0}:${s.messageCount}:${state.unread.has(s.id) ? 1 : 0}:${state.status.get(s.id) || ''}:${hit ? hit.snippet : ''}:${s.bytes || 0}:${chatTokens(s)}`)].join('|');
     if (sig === hist.sig) { return; }
     hist.sig = sig;
     // Re-rendering replaces the buttons: a keyboard user's focus goes back to the same action (or the search box).
@@ -3388,23 +3636,31 @@
     const refocus = fb ? { a: fb.dataset.a, row: (fb.closest('.hist-row') || { dataset: {} }).dataset.id, zone: fb.closest('.hist-foot') ? '.hist-foot' : fb.closest('.hist-bar') ? '.hist-bar' : '' } : null;
     renderHistoryBar(bar, rows, page);
     renderHistoryFilter(filt);
+    renderNavSide(p.querySelector('.nav-side'));
+    renderNavKnow(p.querySelector('.nav-know'));
     const y = list.scrollTop;
     list.innerHTML = '';
     let lastGroup = null;
     rows.forEach(({ s, g, hit }, i) => {
+      const nv = s.__nav;
       if (g && g !== lastGroup) { list.appendChild(el('div', 'grp', esc(g))); lastGroup = g; }
       const running = state.running.has(s.id); const isActive = s.id === active; const sel = i === hist.sel; const picked = hist.picked.has(s.id);
-      const row = el('div', `hist-row${isActive ? ' current' : ''}${sel ? ' sel' : ''}${hist.confirm === s.id ? ' confirm' : ''}${hist.selecting ? ' picking' : ''}${picked ? ' picked' : ''}`);
+      const row = el('div', `hist-row${nv ? ' nav' : ''}${isActive ? ' current' : ''}${sel ? ' sel' : ''}${hist.confirm === s.id ? ' confirm' : ''}${hist.selecting ? ' picking' : ''}${picked ? ' picked' : ''}`);
       row.dataset.id = s.id; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(hist.selecting ? picked : sel));
       const mode = modeView(s);
       const parent = s.parentId ? (state.sessions.find((x) => x.id === s.parentId) || {}).title || s.parentTitle || 'a deleted chat' : '';
-      const desc = running ? esc(state.status.get(s.id) || 'Working…') : hit && hit.snippet ? `${hit.role === 'user' ? '<b>You:</b> ' : ''}${highlightMatch(hit.snippet, q)}` : esc(`${mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${timeAgo(s.updatedAt)}${parent ? ` · forked from ${short(parent, 28)}` : ''}`);
-      const tag = (s.origin === 'cli' ? '<span class="tag" title="Started in the localpilot terminal CLI">CLI</span>' : s.origin === 'claude-code' ? '<span class="tag" title="Imported from Claude Code">Claude Code</span>' : s.origin === 'codex' ? '<span class="tag" title="Imported from Codex">Codex</span>' : '') + (state.unread.has(s.id) ? '<span class="tag">new</span>' : isActive ? '<span class="tag">open</span>' : '');
-      const acts = hist.confirm === s.id
-        ? `<span class="q">${running ? 'Stop and delete?' : 'Delete?'}</span><button data-a="confirm" class="danger">Delete</button><button data-a="cancel">Keep</button>`
-        : `<button data-a="pin" title="${s.pinned ? 'Unpin' : 'Pin — stays first in the tab bar and is never removed by retention'}" aria-pressed="${!!s.pinned}">${I.pin}</button><button data-a="rename" title="Rename (F2)">${I.rename}</button><button data-a="more" title="More…">${I.list}</button><button data-a="delete" title="${running ? 'Stop the agent and delete this chat' : 'Delete this chat'}">${I.trash}</button>`;
+      const trashView = !!nv && hist.view === 'trash'; const toTrash = navReady();
+      const where = nv && nv.projectName && hist.nav && nv.projectId !== hist.nav.currentProject ? ` · ${nv.projectName}` : '';
+      const desc = running ? esc(state.status.get(s.id) || 'Working…') : hit && hit.snippet ? `${hit.role === 'user' ? '<b>You:</b> ' : hit.field === 'code' ? '<b>Code:</b> ' : hit.field === 'errors' && !/^\W*error/i.test(hit.snippet) ? '<b>Error:</b> ' : ''}${hit.marked ? markSnippet(hit.snippet) : highlightMatch(hit.snippet, q)}` : esc(`${trashView && nv.trashedAt ? `In Trash since ${timeAgo(nv.trashedAt)}` : mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${timeAgo(s.updatedAt)}${where}${parent ? ` · forked from ${short(parent, 28)}` : ''}`);
+      const tag = (s.origin === 'cli' ? '<span class="tag" title="Started in the localpilot terminal CLI">CLI</span>' : s.origin === 'claude-code' ? '<span class="tag" title="Imported from Claude Code">Claude Code</span>' : s.origin === 'codex' ? '<span class="tag" title="Imported from Codex">Codex</span>' : '') + (nv && nv.branchCount > 1 ? `<span class="tag" title="${nv.branchCount} branches (edited or regenerated)">${I.branch}${nv.branchCount}</span>` : '') + (nv && nv.archived && hist.view !== 'archived' ? '<span class="tag">archived</span>' : '') + (nv ? nv.tags.slice(0, 2).map((t) => `<span class="tag ttag">#${esc(t)}</span>`).join('') : '') + (state.unread.has(s.id) ? '<span class="tag">new</span>' : isActive ? '<span class="tag">open</span>' : '');
+      const fav = favOf(s);
+      const acts = trashView
+        ? (hist.confirm === s.id ? `<span class="q">Delete forever?</span><button data-a="purge" class="danger">Delete</button><button data-a="cancel">Keep</button>` : `<button data-a="restore" title="Restore from Trash">${I.restore}<span>Restore</span></button><button data-a="askpurge" class="danger" title="Delete permanently…" aria-label="Delete permanently">${I.trash}</button>`)
+        : hist.confirm === s.id
+          ? `<span class="q">${running ? (toTrash ? 'Stop and move to Trash?' : 'Stop and delete?') : toTrash ? 'Move to Trash?' : 'Delete?'}</span><button data-a="confirm" class="danger">${toTrash ? 'Move' : 'Delete'}</button><button data-a="cancel">Keep</button>`
+          : `${toTrash ? `<button data-a="fav" title="${fav ? 'Remove from Favorites' : 'Add to Favorites'}" aria-pressed="${fav}" aria-label="Favorite">${I.star}</button>` : ''}<button data-a="pin" title="${s.pinned ? 'Unpin' : 'Pin — stays first in the tab bar and is never removed by retention'}" aria-pressed="${!!s.pinned}">${I.pin}</button><button data-a="rename" title="Rename (F2)">${I.rename}</button><button data-a="more" title="More…">${I.list}</button><button data-a="delete" title="${running ? `Stop the agent and ${toTrash ? 'move this chat to Trash' : 'delete this chat'}` : toTrash ? 'Move to Trash' : 'Delete this chat'}">${I.trash}</button>`;
       const meta = historyMeta(s);
-      const ico = hist.selecting ? `<input type="checkbox" class="pick-box" tabindex="-1" aria-label="Select" ${picked ? 'checked' : ''}>` : running ? LIVE_DOT : s.pinned ? I.pin : mode.icon;
+      const ico = hist.selecting ? `<input type="checkbox" class="pick-box" tabindex="-1" aria-label="Select" ${picked ? 'checked' : ''}>` : running ? LIVE_DOT : s.pinned ? I.pin : fav ? `<span class="favico">${I.star}</span>` : mode.icon;
       row.innerHTML = `<span class="ico">${ico}</span><span class="txt"><span class="lbl">${highlightMatch(s.title || 'New chat', q)}</span><span class="desc${hit && hit.snippet ? ' snippet' : ''}">${desc}</span>${meta ? `<span class="meta">${esc(meta)}</span>` : ''}</span>${tag}${hist.selecting ? '' : `<span class="acts">${acts}</span>`}`;
       row.title = `${s.title || 'New chat'}\n${mode.label} · ${s.messageCount} message${s.messageCount === 1 ? '' : 's'} · ${new Date(s.updatedAt).toLocaleString()}${meta ? `\n${meta}` : ''}${s.pinned ? '\nPinned' : ''}${s.origin === 'cli' ? '\nStarted in the terminal CLI' : s.origin === 'claude-code' ? '\nImported from Claude Code' : s.origin === 'codex' ? '\nImported from Codex' : ''}${parent ? `\nForked from ${parent}` : ''}`;
       // Actions run on click, so the row buttons also work from the keyboard; mousedown only keeps focus in the search box
@@ -3416,8 +3672,11 @@
       list.appendChild(row);
     });
     const filtered = histFilterLabel();
-    if (!rows.length) { list.appendChild(q && hist.pending ? el('div', 'empty-i searching', '<span class="spinner"></span>Searching messages…') : el('div', 'empty-i', q ? `No ${filtered ? `${esc(filtered)} ` : ''}chats match “${esc(q)}”` : filtered ? `No ${esc(filtered)} chats${hist.pinnedOnly ? ' are pinned' : ''}. Pick <b>All</b> above to see every chat.` : hist.pinnedOnly ? 'No pinned chats' : 'No chats yet — start one below')); }
-    if (page && page.rows.length < page.total) { list.appendChild(el('div', 'empty-i more', hist.pending ? '<span class="spinner"></span>Loading more…' : `${page.total - page.rows.length} more — scroll to load`)); }
+    if (!rows.length && navMode()) { list.appendChild(hist.navPending ? el('div', 'empty-i searching', '<span class="spinner"></span>Searching…') : el('div', 'empty-i', navEmptyText())); }
+    else if (!rows.length) { list.appendChild(q && hist.pending ? el('div', 'empty-i searching', '<span class="spinner"></span>Searching messages…') : el('div', 'empty-i', q ? `No ${filtered ? `${esc(filtered)} ` : ''}chats match “${esc(q)}”` : filtered ? `No ${esc(filtered)} chats${hist.pinnedOnly ? ' are pinned' : ''}. Pick <b>All</b> above to see every chat.` : hist.pinnedOnly ? 'No pinned chats' : 'No chats yet — start one below')); }
+    const npage = navMode() ? hist.nav.page : null;
+    if (npage && npage.rows.length < npage.total) { list.appendChild(el('div', 'empty-i more', hist.navPending ? '<span class="spinner"></span>Loading more…' : `${npage.total - npage.rows.length} more — scroll to load`)); }
+    if (!npage && page && page.rows.length < page.total) { list.appendChild(el('div', 'empty-i more', hist.pending ? '<span class="spinner"></span>Loading more…' : `${page.total - page.rows.length} more — scroll to load`)); }
     // Title matches can show while message hits are still on their way: a thin shimmer says more may arrive.
     list.classList.toggle('pending', !!(q && hist.pending && rows.length));
     // Only a keyboard move scrolls to the selection; a re-render (a page loaded, a chat saved) keeps the scroll position.
@@ -3425,7 +3684,7 @@
     const selRow = list.querySelector('.hist-row.sel'); if (selRow && hist.reveal) { selRow.scrollIntoView({ block: 'nearest' }); } hist.reveal = false;
     const idle = state.sessions.filter((s) => !state.running.has(s.id) && (s.messageCount > 0 || s.pinned || s.plan));
     // Wide enough (≥320 px), the tidy-up buttons carry a short label; narrower they are icons with the same aria-label.
-    foot.innerHTML = `<div class="hist-acts"><button data-a="new" title="Start another chat — the current one keeps running">${I.sparkle}<span>New chat</span></button><button data-a="multi" title="Several agents at once">${I.layers}<span>Multitask</span></button>${state.running.size > 1 ? `<button data-a="stopall" title="Stop every running agent; tabs stay open">${I.stop}<span>Stop all ${state.running.size}</span></button>` : ''}</div><div class="hist-acts tidy"><button data-a="closeothers" title="Close idle tabs — the chats stay here" aria-label="Close idle tabs">${I.closeOthers}<span class="lbl">Close idle tabs</span></button><button data-a="clear" class="danger" title="Clear chat history… (${idle.length} idle chat${idle.length === 1 ? '' : 's'} in this workspace, ${fmtBytes(idle.reduce((n, s) => n + (s.bytes || 0), 0))})" aria-label="Clear chat history" ${idle.length ? '' : 'disabled'}>${I.trash}<span class="lbl">Clear…</span></button><button data-a="settings" title="Memory & history settings" aria-label="Memory and history settings">${I.memory}</button></div>`;
+    foot.innerHTML = `<div class="hist-acts"><button data-a="multi" title="Several agents at once">${I.layers}<span>Multitask</span></button>${state.running.size > 1 ? `<button data-a="stopall" title="Stop every running agent; tabs stay open">${I.stop}<span>Stop all ${state.running.size}</span></button>` : ''}</div><div class="hist-acts tidy"><button data-a="closeothers" title="Close idle tabs — the chats stay here" aria-label="Close idle tabs">${I.closeOthers}<span class="lbl">Close idle tabs</span></button><button data-a="clear" class="danger" title="Clear chat history… (${idle.length} idle chat${idle.length === 1 ? '' : 's'} in this workspace, ${fmtBytes(idle.reduce((n, s) => n + (s.bytes || 0), 0))})" aria-label="Clear chat history" ${idle.length ? '' : 'disabled'}>${I.trash}<span class="lbl">Clear…</span></button><button data-a="settings" title="Memory & history settings" aria-label="Memory and history settings">${I.memory}</button></div>`;
     foot.onmousedown = (e) => { const b = e.target.closest('[data-a]'); if (b && !b.disabled) { e.preventDefault(); holdHistory(); } };
     foot.onclick = (e) => {
       const b = e.target.closest('[data-a]'); if (!b || b.disabled) { return; }
@@ -3444,7 +3703,7 @@
     const scope = f.row ? p.querySelector(`.hist-row[data-id="${CSS.escape(f.row)}"]`) : f.zone ? p.querySelector(f.zone) : null;
     const next = { delete: 'cancel', cancel: 'delete', confirm: 'delete' }[f.a];
     const t = scope && (scope.querySelector(`[data-a="${f.a}"]`) || (next && scope.querySelector(`[data-a="${next}"]`)));
-    (t && !t.disabled ? t : p.querySelector('.hist > .search') || els.input).focus();
+    (t && !t.disabled ? t : p.querySelector('.hist .nav-search') || els.input).focus();
   }
   /** Model, tokens, cost (priced cloud models only) and size on disk of a history row. */
   function historyMeta(s) {
@@ -3460,6 +3719,12 @@
   function togglePicked(id) { if (hist.picked.has(id)) { hist.picked.delete(id); } else { hist.picked.add(id); } if (hist.confirm === PICKED) { hist.confirm = null; } hist.sig = ''; renderHistory(); }
   function deletePicked() {
     const ids = [...hist.picked]; if (!ids.length) { return; }
+    if (navReady()) {
+      post({ type: 'convAction', ids, action: hist.view === 'trash' ? 'purge' : 'trash' });
+      for (const id of ids) { dropNavRow(id, true); }
+      hist.selecting = false; hist.picked = new Set(); hist.confirm = null; hist.sig = ''; renderHistory();
+      return;
+    }
     const gone = new Set(ids);
     // Optimistic, like a single delete: the rows and their tabs go now; the store's broadcast confirms it.
     state.sessions = state.sessions.filter((x) => !gone.has(x.id));
@@ -3499,7 +3764,7 @@
     box.innerHTML = `${folder}${chips}`;
     box.onmousedown = (e) => { if (e.target.closest('[data-mode]')) { e.preventDefault(); holdHistory(); } };
     box.onclick = (e) => { const b = e.target.closest('[data-mode]'); if (!b) { return; } hist.mode = hist.mode === b.dataset.mode ? '' : b.dataset.mode; hist.sel = 0; hist.sig = ''; renderHistory(); histRequest(false); };
-    box.onchange = (e) => { if (e.target.classList.contains('fsel')) { hist.folder = e.target.value; hist.sel = 0; hist.sig = ''; renderHistory(); histRequest(false); const search = els.popover.querySelector('.hist > .search'); if (search) { search.focus(); } } };
+    box.onchange = (e) => { if (e.target.classList.contains('fsel')) { hist.folder = e.target.value; hist.sel = 0; hist.sig = ''; renderHistory(); histRequest(false); const search = els.popover.querySelector('.hist .nav-search'); if (search) { search.focus(); } } };
   }
   /** Sort, Pinned only and Select above the list; in selection mode, Select all / none and Delete N selected (size). */
   function renderHistoryBar(bar, rows, page) {
@@ -3508,23 +3773,30 @@
       const n = hist.picked.size; const bytes = [...hist.picked].reduce((t, id) => t + chatBytes(id), 0);
       const running = [...hist.picked].filter((id) => state.running.has(id)).length;
       const all = page ? page.ids : rows.map((r) => r.s.id);
+      const nav = navReady(); const tv = nav && hist.view === 'trash';
       bar.innerHTML = hist.confirm === PICKED
-        ? `<span class="q">Delete ${n} chat${n === 1 ? '' : 's'}${running ? ` (stops ${running} running)` : ''}? Cannot be undone.</span><span class="spacer"></span><button data-a="dodelete" class="danger">Delete</button><button data-a="nodelete">Keep</button>`
-        : `<button data-a="all" title="Select every chat in this list (${all.length})">Select all</button><button data-a="none" ${n ? '' : 'disabled'}>Select none</button><span class="spacer"></span><button data-a="delpicked" class="danger" ${n ? '' : 'disabled'} title="Also removes their transcript archives, checkpoints and command logs">${I.trash}<span>Delete ${n} selected${n ? ` (${fmtBytes(bytes)})` : ''}</span></button><button data-a="done" title="Leave selection (Esc)">Done</button>`;
+        ? (nav && !tv ? `<span class="q">Move ${n} chat${n === 1 ? '' : 's'} to Trash${running ? ` (stops ${running} running)` : ''}?</span><span class="spacer"></span><button data-a="dodelete" class="danger">Move</button><button data-a="nodelete">Keep</button>`
+          : `<span class="q">Delete ${n} chat${n === 1 ? '' : 's'}${running ? ` (stops ${running} running)` : ''}? Cannot be undone.</span><span class="spacer"></span><button data-a="dodelete" class="danger">Delete</button><button data-a="nodelete">Keep</button>`)
+        : `<button data-a="all" title="Select every chat in this list (${all.length})">Select all</button><button data-a="none" ${n ? '' : 'disabled'}>Select none</button><span class="spacer"></span>${tv ? `<button data-a="selrestore" ${n ? '' : 'disabled'} title="Restore the selected conversations">${I.restore}<span>Restore</span></button>` : nav ? `<button data-a="selarchive" ${n ? '' : 'disabled'} title="Archive: hidden from All, still searchable" aria-label="Archive selected">${I.archive}<span class="lbl">Archive</span></button><button data-a="seltag" ${n ? '' : 'disabled'} title="Add or remove tags" aria-label="Tag selected">${I.tag}<span class="lbl">Tag</span></button><button data-a="selexport" ${n ? '' : 'disabled'} title="Export the selected conversations to a folder" aria-label="Export selected">${I.export}<span class="lbl">Export</span></button>` : ''}<button data-a="delpicked" class="danger" ${n ? '' : 'disabled'} title="${nav && !tv ? 'Move to Trash (restorable)' : 'Also removes their transcript archives, checkpoints and command logs'}">${I.trash}<span>${nav && !tv ? `Trash ${n}` : `Delete ${n} selected${n && !nav ? ` (${fmtBytes(bytes)})` : ''}`}</span></button><button data-a="done" title="Leave selection (Esc)">Done</button>`;
       bar.onmousedown = (e) => { const b = e.target.closest('[data-a]'); if (b && !b.disabled) { e.preventDefault(); holdHistory(); } };
       bar.onclick = (e) => {
         const b = e.target.closest('[data-a]'); if (!b || b.disabled) { return; }
         const a = b.dataset.a;
         if (a === 'all') { hist.picked = new Set(all); } else if (a === 'none') { hist.picked = new Set(); } else if (a === 'done') { setSelecting(false); return; }
         else if (a === 'delpicked') { hist.confirm = PICKED; } else if (a === 'nodelete') { hist.confirm = null; } else if (a === 'dodelete') { deletePicked(); return; }
+        else if (a === 'selarchive') { const ids = [...hist.picked]; post({ type: 'convAction', ids, action: 'archive' }); for (const id of ids) { dropNavRow(id, true); } setSelecting(false); return; }
+        else if (a === 'selrestore') { const ids = [...hist.picked]; post({ type: 'convAction', ids, action: 'restore' }); for (const id of ids) { dropNavRow(id, true); } setSelecting(false); return; }
+        else if (a === 'seltag') { post({ type: 'setTags', ids: [...hist.picked] }); return; }
+        else if (a === 'selexport') { const ids = [...hist.picked]; const r = b.getBoundingClientRect(); openMenu({ getBoundingClientRect: () => r }, ['json', 'markdown', 'html', 'pdf'].map((f) => ({ label: `Export ${ids.length} as ${f === 'pdf' ? 'PDF (print-ready pages)' : f === 'json' ? 'JSON' : f === 'html' ? 'HTML' : 'Markdown'}`, icon: I.export, onPick: () => post({ type: 'exportConversations', ids, format: f }) }))); return; }
         hist.sig = ''; renderHistory();
       };
       bar.onchange = null;
       return;
     }
-    const total = page ? page.total : rows.length;
-    bar.innerHTML = `<select class="sort" aria-label="Sort chats" title="Sort">${HIST_SORTS.map(([v, l]) => `<option value="${v}"${v === hist.sort ? ' selected' : ''}>${l}</option>`).join('')}</select><button data-a="pinned" aria-pressed="${hist.pinnedOnly}" title="Show pinned chats only">${I.pin}<span>Pinned</span></button><span class="spacer"></span><span class="n">${total} chat${total === 1 ? '' : 's'}</span><button data-a="select" title="Select several chats to delete them together">Select</button>`;
-    bar.onchange = (e) => { if (e.target.classList.contains('sort')) { setHistSort(e.target.value); const search = els.popover.querySelector('.hist > .search'); if (search) { search.focus(); } } };
+    const nm = navMode(); const total = nm ? hist.nav.page.total : page ? page.total : rows.length;
+    // With the navigator's views, "Pinned" is a view; the toggle stays for the store-only list (index not ready).
+    bar.innerHTML = `<select class="sort" aria-label="Sort chats" title="Sort">${HIST_SORTS.filter(([v]) => !nm || v !== 'tokens' && v !== 'cost').map(([v, l]) => `<option value="${v}"${v === hist.sort ? ' selected' : ''}>${l}</option>`).join('')}</select>${navReady() ? '' : `<button data-a="pinned" aria-pressed="${hist.pinnedOnly}" title="Show pinned chats only">${I.pin}<span>Pinned</span></button>`}<span class="spacer"></span><span class="n">${total} chat${total === 1 ? '' : 's'}</span><button data-a="select" title="Select several chats to delete them together">Select</button>`;
+    bar.onchange = (e) => { if (e.target.classList.contains('sort')) { setHistSort(e.target.value); const search = els.popover.querySelector('.hist .nav-search'); if (search) { search.focus(); } } };
     bar.onmousedown = (e) => { if (e.target.closest('[data-a]')) { e.preventDefault(); holdHistory(); } };
     bar.onclick = (e) => {
       const b = e.target.closest('[data-a]'); if (!b) { return; }
@@ -3533,6 +3805,11 @@
     };
   }
   function historyAction(a, s, row) {
+    if (a === 'fav') { const on = !favOf(s); if (s.__nav) { s.__nav.favorite = on; } favs.set(s.id, on); post({ type: 'convAction', ids: [s.id], action: on ? 'favorite' : 'unfavorite' }); hist.sig = ''; renderHistory(); return; }
+    if (a === 'restore') { post({ type: 'convAction', ids: [s.id], action: 'restore' }); dropNavRow(s.id); return; }
+    if (a === 'askpurge') { hist.confirm = s.id; hist.sig = ''; renderHistory(); return; }
+    if (a === 'purge') { hist.confirm = null; post({ type: 'convAction', ids: [s.id], action: 'purge' }); return; }
+    if (a === 'pin' && s.__nav && !state.sessions.some((x) => x.id === s.id)) { s.pinned = !s.pinned; s.__nav.pinned = s.pinned; post({ type: 'convAction', ids: [s.id], action: s.pinned ? 'pin' : 'unpin' }); hist.sig = ''; renderHistory(); return; }
     if (a === 'pin') { s.pinned = !s.pinned; post({ type: 'pinSession', id: s.id }); hist.sig = ''; renderHistory(); return; }
     if (a === 'delete') { hist.confirm = s.id; hist.sig = ''; renderHistory(); return; }
     if (a === 'cancel') { hist.confirm = null; hist.sig = ''; renderHistory(); return; }
@@ -3541,9 +3818,8 @@
       // Optimistic: the row goes now; the store's broadcast confirms it. Its tab closes with it.
       state.sessions = state.sessions.filter((x) => x.id !== s.id); state.unread.delete(s.id); state.selected.delete(s.id); state.drafts.delete(s.id); state.scroll.delete(s.id);
       if (state.openTabs) { state.openTabs.delete(s.id); }
-      post({ type: 'deleteSession', id: s.id });
+      if (navReady()) { post({ type: 'convAction', ids: [s.id], action: 'trash' }); dropNavRow(s.id); } else { post({ type: 'deleteSession', id: s.id }); toast(`Deleted “${short(s.title || 'New chat', 32)}”`); }
       tabSig = ''; renderTabs(); hist.sig = ''; renderHistory();
-      toast(`Deleted “${short(s.title || 'New chat', 32)}”`);
       return;
     }
     if (a === 'rename') { startHistoryRename(row, s); return; }
@@ -3551,17 +3827,48 @@
       const running = state.running.has(s.id);
       // openMenu empties the popover before placing itself, so the row is gone by then; keep its box.
       const rect = row ? row.getBoundingClientRect() : els.history.getBoundingClientRect();
+      const inStore = state.sessions.some((x) => x.id === s.id);
+      const nav = navReady();
+      const back = () => openHistory({ view: hist.view });
+      if (nav && hist.view === 'trash') {
+        openMenu({ getBoundingClientRect: () => rect }, [
+          { label: 'Restore', icon: I.restore, onPick: () => post({ type: 'convAction', ids: [s.id], action: 'restore' }) },
+          { label: 'Versions', desc: 'Titles, flags and branches over time', icon: I.history, onPick: () => openContinuityPage('versions', { id: s.id }) },
+          { hr: true },
+          { label: 'Delete permanently…', desc: 'Messages, archive, traces and checkpoints', icon: I.trash, onPick: () => post({ type: 'convAction', ids: [s.id], action: 'purge' }) },
+          { hr: true },
+          { label: 'Back to Trash', icon: I.reply, onPick: back },
+        ]);
+        return;
+      }
+      const fav = favOf(s); const archived = !!(s.__nav && s.__nav.archived);
       openMenu({ getBoundingClientRect: () => rect }, [
         { label: 'Open', icon: I.open, onPick: () => historyOpen(s.id) },
-        { label: s.pinned ? 'Unpin' : 'Pin', icon: I.pin, onPick: () => post({ type: 'pinSession', id: s.id }) },
-        { label: 'Fork', desc: 'Branch into a new chat from here', icon: I.fork, onPick: () => post({ type: 'forkSession', id: s.id }) },
-        { label: 'Export as Markdown', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id }) },
-        { label: 'Export as HTML', desc: 'A standalone page', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id, format: 'html' }) },
-        ...(running ? [{ label: 'Stop agent', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : [{ label: 'Clear messages', desc: 'Keeps the chat, empties it', icon: I.list, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }]),
+        { label: 'Rename', icon: I.rename, onPick: () => { back(); setTimeout(() => { const r2 = els.popover.querySelector(`.hist-row[data-id="${CSS.escape(s.id)}"]`); if (r2) { startHistoryRename(r2, s); } }, 30); } },
+        { label: s.pinned ? 'Unpin' : 'Pin', icon: I.pin, onPick: () => (inStore ? post({ type: 'pinSession', id: s.id }) : post({ type: 'convAction', ids: [s.id], action: s.pinned ? 'unpin' : 'pin' })) },
+        ...(nav ? [
+          { label: fav ? 'Remove from Favorites' : 'Favorite', icon: I.star, onPick: () => { favs.set(s.id, !fav); post({ type: 'convAction', ids: [s.id], action: fav ? 'unfavorite' : 'favorite' }); } },
+          { label: 'Tags…', icon: I.tag, onPick: () => post({ type: 'setTags', ids: [s.id] }) },
+          { label: archived ? 'Move out of Archived' : 'Archive', desc: archived ? '' : 'Hidden from All; still searchable', icon: I.archive, onPick: () => post({ type: 'convAction', ids: [s.id], action: archived ? 'unarchive' : 'archive' }) },
+          { label: 'Duplicate', desc: 'A copy to take somewhere else', icon: I.fork, onPick: () => post({ type: 'convAction', ids: [s.id], action: 'duplicate' }) },
+        ] : [{ label: 'Fork', desc: 'Branch into a new chat from here', icon: I.fork, onPick: () => post({ type: 'forkSession', id: s.id }) }]),
+        ...(nav ? [
+          { label: 'Export as JSON', desc: 'Complete, can be imported again', icon: I.export, group: 'Export', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'json' }) },
+          { label: 'Export as Markdown', icon: I.export, group: 'Export', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'markdown' }) },
+          { label: 'Export as HTML', desc: 'A standalone page', icon: I.export, group: 'Export', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'html' }) },
+          { label: 'Export as PDF', desc: 'Print-ready page: Print → Save as PDF', icon: I.export, group: 'Export', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'pdf' }) },
+          { label: 'Share securely…', desc: 'An encrypted file and a one-time code', icon: I.share, group: 'More', onPick: () => post({ type: 'shareConversation', id: s.id }) },
+          { label: 'Merge with…', desc: 'A new chat: this one plus a summary of another', icon: I.merge, group: 'More', onPick: () => post({ type: 'convAction', ids: [s.id], action: 'merge' }) },
+          { label: 'Versions', desc: 'Earlier titles, flags and branches', icon: I.history, group: 'More', onPick: () => openContinuityPage('versions', { id: s.id }) },
+        ] : [
+          { label: 'Export as Markdown', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id }) },
+          { label: 'Export as HTML', desc: 'A standalone page', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id, format: 'html' }) },
+        ]),
+        ...(running ? [{ label: 'Stop agent', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : inStore ? [{ label: 'Clear messages', desc: 'Keeps the chat, empties it', icon: I.list, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }] : []),
         { hr: true },
-        { label: 'Delete chat…', desc: running ? 'Stops the agent first' : 'Cannot be undone', icon: I.trash, onPick: () => { openHistory(); hist.confirm = s.id; hist.sel = historyRows().findIndex((r) => r.s.id === s.id); hist.reveal = true; hist.sig = ''; renderHistory(); } },
+        { label: nav ? 'Move to Trash' : 'Delete chat…', desc: running ? 'Stops the agent first' : nav ? 'Undo for 10 s; Trash keeps it' : 'Cannot be undone', icon: I.trash, onPick: () => { openHistory({ view: hist.view }); hist.confirm = s.id; hist.sel = historyRows().findIndex((r) => r.s.id === s.id); hist.reveal = true; hist.sig = ''; renderHistory(); } },
         { hr: true },
-        { label: 'Back to all chats', icon: I.reply, onPick: openHistory },
+        { label: 'Back to all chats', icon: I.reply, onPick: back },
       ]);
     }
   }
@@ -3574,9 +3881,9 @@
     const finish = (commit) => {
       if (done) { return; } done = true; hist.renaming = null;
       const v = input.value.trim();
-      if (commit && v && v !== s.title) { s.title = v; if (state.session && state.session.id === s.id) { state.session.title = v; } post({ type: 'renameSession', id: s.id, title: v }); tabSig = ''; renderTabs(); }
+      if (commit && v && v !== s.title) { s.title = v; if (s.__nav) { s.__nav.title = v; } if (state.session && state.session.id === s.id) { state.session.title = v; } post(state.sessions.some((x) => x.id === s.id) ? { type: 'renameSession', id: s.id, title: v } : { type: 'convAction', ids: [s.id], action: 'rename', title: v }); tabSig = ''; renderTabs(); }
       hist.sig = ''; renderHistory();
-      const search = els.popover.querySelector('.hist > .search'); if (search) { search.focus(); }
+      const search = els.popover.querySelector('.hist .nav-search'); if (search) { search.focus(); }
     };
     input.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); finish(false); } };
     input.onblur = () => finish(true);
@@ -3593,7 +3900,7 @@
     else if (hist.selecting && (e.key === 'Enter' || (e.key === ' ' && e.target.tagName !== 'INPUT'))) { e.preventDefault(); if (hist.confirm === PICKED) { deletePicked(); } else if (cur) { togglePicked(cur.s.id); } }
     else if (hist.selecting && (e.key === 'Delete' || (e.key === 'Backspace' && (e.metaKey || e.ctrlKey))) && !(e.key === 'Delete' && e.target.value)) { e.preventDefault(); if (hist.picked.size) { if (hist.confirm === PICKED) { deletePicked(); } else { hist.confirm = PICKED; hist.sig = ''; renderHistory(); } } }
     else if (e.key === 'Enter') { e.preventDefault(); if (!cur) { return; } if (hist.confirm === cur.s.id) { historyAction('confirm', cur.s); } else { historyOpen(cur.s.id); } }
-    else if (e.key === 'Escape') { e.preventDefault(); if (hist.confirm) { historyAction('cancel'); } else if (hist.selecting) { setSelecting(false); } else if (hist.q) { const search = els.popover.querySelector('.hist > .search'); search.value = ''; search.oninput(); } else { closeMenu(); els.input.focus(); } }
+    else if (e.key === 'Escape') { e.preventDefault(); if (hist.confirm) { historyAction('cancel'); } else if (hist.selecting) { setSelecting(false); } else if (hist.q) { const search = els.popover.querySelector('.hist .nav-search'); search.value = ''; search.oninput(); } else { closeMenu(); els.input.focus(); } }
     else if (e.key === 'F2' && cur) { e.preventDefault(); const row = els.popover.querySelector(`.hist-row[data-id="${cur.s.id}"]`); if (row) { startHistoryRename(row, cur.s); } }
     else if ((e.key === 'Delete' || (e.key === 'Backspace' && (e.metaKey || e.ctrlKey))) && cur && !(e.key === 'Delete' && e.target.value)) { e.preventDefault(); historyAction(hist.confirm === cur.s.id ? 'confirm' : 'delete', cur.s); }
   }
@@ -3610,7 +3917,7 @@
     if (!idle.length) { toast(state.running.size ? 'Only running chats are open — stop them first' : 'No chat history to clear'); return; }
     const size = (list) => fmtBytes(list.reduce((n, s) => n + (s.bytes || 0), 0));
     const items = [
-      { label: pinned ? `Delete ${idle.length - pinned} chat${idle.length - pinned === 1 ? '' : 's'} (${size(idle.filter((s) => !s.pinned))}), keep ${pinned} pinned` : `Delete ${idle.length} chat${idle.length === 1 ? '' : 's'} (${size(idle)})`, desc: 'Cannot be undone — file changes already accepted stay on disk', icon: I.trash, onPick: () => post({ type: 'clearHistory', keepPinned: true }) },
+      { label: pinned ? `Delete ${idle.length - pinned} chat${idle.length - pinned === 1 ? '' : 's'} (${size(idle.filter((s) => !s.pinned))}), keep ${pinned} pinned` : `Delete ${idle.length} chat${idle.length === 1 ? '' : 's'} (${size(idle)})`, desc: trashOn() ? 'They go to Trash — file changes already accepted stay on disk' : 'Cannot be undone — file changes already accepted stay on disk', icon: I.trash, onPick: () => post({ type: 'clearHistory', keepPinned: true }) },
       ...(pinned ? [{ label: `Delete everything (${idle.length} · ${size(idle)})`, desc: 'Including pinned chats', icon: I.trash, onPick: () => post({ type: 'clearHistory', keepPinned: false }) }] : []),
       { label: 'Cancel', icon: I.x, onPick: openHistory },
     ];
@@ -4006,7 +4313,7 @@
   function closeMenu() { menuA11yClose(); els.popover.classList.add('hidden'); els.popover.innerHTML = ''; els.popover.dataset.menu = ''; menuState = null; hist.open = false; hist.renaming = null; hist.confirm = null; }
   /** Above the anchor when there is room, else below; never past the right edge. */
   function placePopover(anchor) {
-    const p = els.popover; const r = anchor.getBoundingClientRect(); const pw = Math.min(360, window.innerWidth - 20);
+    const p = els.popover; const r = anchor.getBoundingClientRect(); const pw = Math.min(p.offsetWidth || 360, window.innerWidth - 20);
     p.style.left = `${Math.max(10, Math.min(r.left, window.innerWidth - pw - 10))}px`;
     const ph = p.offsetHeight; const above = r.top - 8;
     if (above >= Math.min(ph, 200)) { p.style.top = `${Math.max(8, r.top - 6 - ph)}px`; } else { p.style.top = `${r.bottom + 6}px`; }
@@ -4422,12 +4729,34 @@
   els.ctx.onclick = () => openCtxConfirm();
 
   // inline '/' and '@' autocomplete reuse the popover
-  function tokenAt() { const v = els.input.value.slice(0, els.input.selectionStart); const at = /(?:^|\s)@("[^"\n]*|[\w./-]*)$/.exec(v); if (at) { return { kind: '@', tok: at[1].replace(/^"/, ''), quoted: at[1].startsWith('"') }; } const hash = /(?:^|\s)#([\w-]*)$/.exec(v); if (hash) { return { kind: '#', tok: hash[1] }; } if (/^\/\S*$/.test(v) && !v.includes('\n')) { return { kind: '/', tok: v }; } return null; }
+  function tokenAt() { const v = els.input.value.slice(0, els.input.selectionStart); const at = /(?:^|\s)@("[^"\n]*|[\w./-]*)$/.exec(v); if (at) { return { kind: '@', tok: at[1].replace(/^"/, ''), quoted: at[1].startsWith('"') }; } const hash = /(?:^|\s)#([\w-]*(?::[\w.-]*)?)$/.exec(v); if (hash) { return { kind: '#', tok: hash[1] }; } if (/^\/\S*$/.test(v) && !v.includes('\n')) { return { kind: '/', tok: v }; } return null; }
   function showInlineMenu(t) {
     if (t.kind === '#') {
       // #codebase and the other context variables; typing after # narrows them. Nothing matches: the menu steps aside.
       const q = t.tok.toLowerCase();
+      // `#memory:<name>`: memory notes by name (the host answers with memorySuggest).
+      if (q.startsWith('memory:')) {
+        const mq = q.slice(7);
+        if (memHits.asked !== mq) { memHits.asked = mq; post({ type: 'memoryAction', action: 'suggest', query: mq }); }
+        const hits = memHits.query === mq ? memHits.items : memHits.items.filter((h) => h.name.toLowerCase().includes(mq));
+        const mitems = hits.map((h) => ({ label: `#memory:${h.name}`, desc: `${h.type}${h.summary ? ` · ${h.summary}` : ''}`, icon: I.memory, onPick: () => applyHash(`memory:${h.name}`) }));
+        if (!mitems.length) { mitems.push({ note: true, spin: memHits.query !== mq, label: memHits.query !== mq ? 'Looking up memory notes…' : mq ? `No memory note matches “${mq}”` : 'No memory notes yet' }); }
+        openMenu(els.box, mitems, { inline: true }); els.input.focus(); return;
+      }
+      // `#context:<set>` and `#chat:<conversation>`: the host answers with contextSuggest.
+      const ck = /^(context|chat):/.exec(q);
+      if (ck) {
+        const kind = ck[1]; const cq = q.slice(kind.length + 1); const h = ctxHits[kind];
+        if (h.asked !== cq) { h.asked = cq; post({ type: 'contextAction', action: 'suggest', kind, query: cq }); }
+        const hits = h.query === cq ? h.items : h.items.filter((x) => x.name.toLowerCase().includes(cq));
+        const citems = hits.map((x) => ({ label: `#${kind}:${x.name}`, desc: x.desc, icon: kind === 'chat' ? I.history : I.layers, onPick: () => applyHash(`${kind}:${x.name}`) }));
+        if (!citems.length) { citems.push({ note: true, spin: h.query !== cq, label: h.query !== cq ? (kind === 'chat' ? 'Looking up conversations…' : 'Looking up context sets…') : kind === 'chat' ? (cq ? `No conversation matches “${cq}”` : 'No earlier conversations') : (cq ? `No context set matches “${cq}”` : 'No context sets yet: Knowledge & continuity → Context library') }); }
+        openMenu(els.box, citems, { inline: true }); els.input.focus(); return;
+      }
       const items = MENTIONS.filter(([n]) => n.startsWith(q)).map(([n, d, ic]) => ({ label: `#${n}`, desc: d, icon: ic, onPick: () => applyHash(n) }));
+      if ('context'.startsWith(q) && q) { items.push({ label: '#context:…', desc: 'A context set from the Context library', icon: I.layers, onPick: () => { applyHash('context:', true); const t2 = tokenAt(); if (t2) { showInlineMenu(t2); } } }); }
+      if ('chat'.startsWith(q) && q) { items.push({ label: '#chat:…', desc: 'An earlier conversation: its summary, or first request and last answer', icon: I.history, onPick: () => { applyHash('chat:', true); const t2 = tokenAt(); if (t2) { showInlineMenu(t2); } } }); }
+      if ('memory'.startsWith(q)) { items.push({ label: '#memory:…', desc: 'A memory note by name: knowledge, project or developer notes', icon: I.memory, onPick: () => { applyHash('memory:', true); const t2 = tokenAt(); if (t2) { showInlineMenu(t2); } } }); }
       if (!items.length) { return closeMenu(); }
       const note = indexNote(); if (note && q === '' ) { items.push({ note: true, label: note.text }); }
       openMenu(els.box, items, { inline: true }); els.input.focus(); return;
@@ -4510,23 +4839,39 @@
   /** Removes the half-typed `@token` before the caret (its file is being picked another way). */
   function dropMentionToken() { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/@(?:"[^"\n]*|[\w./-]*)$/, ''); els.input.value = before + els.input.value.slice(pos); els.input.selectionStart = els.input.selectionEnd = before.length; updateSendEnabled(); }
   /** Replaces the half-typed `#token` before the caret with `#name `. */
-  function applyHash(name) { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/#[\w-]*$/, ''); els.input.value = `${before}#${name} ${els.input.value.slice(pos)}`; els.input.selectionStart = els.input.selectionEnd = before.length + name.length + 2; closeMenu(); els.input.focus(); updateSendEnabled(); }
+  function applyHash(name, open) { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/#[\w-]*(?::[\w.-]*)?$/, ''); const sp = open ? '' : ' '; els.input.value = `${before}#${name}${sp}${els.input.value.slice(pos)}`; els.input.selectionStart = els.input.selectionEnd = before.length + name.length + 1 + sp.length; closeMenu(); els.input.focus(); updateSendEnabled(); }
+  /** `#memory:` suggestions from the host (memoryAction suggest → memorySuggest). */
+  const memHits = { asked: null, query: null, items: [] };
+  /** `#context:` / `#chat:` suggestions from the host (contextAction suggest → contextSuggest). */
+  const ctxHits = { context: { asked: null, query: null, items: [] }, chat: { asked: null, query: null, items: [] } };
+  function contextSuggest(m) { const h = ctxHits[m.kind]; if (!h || m.query !== h.asked) { return; } h.query = m.query; h.items = m.items || []; const t = tokenAt(); if (t && t.kind === '#' && t.tok.toLowerCase() === `${m.kind}:${m.query}` && document.activeElement === els.input) { showInlineMenu(t); } }
+  function memorySuggest(m) { if (m.query !== memHits.asked) { return; } memHits.query = m.query; memHits.items = m.items || []; const t = tokenAt(); if (t && t.kind === '#' && t.tok.toLowerCase() === `memory:${m.query}` && document.activeElement === els.input) { showInlineMenu(t); } }
   /** Paths outside the plain `@path` alphabet (spaces, brackets …) are quoted: `@"docs/my file.md"`. */
   function applyMention(name) { const pos = els.input.selectionStart; const before = els.input.value.slice(0, pos).replace(/@(?:"[^"\n]*|[\w./-]*)$/, ''); const token = /^[\w./-]+$/.test(name) ? name : `"${name}"`; els.input.value = `${before}@${token} ${els.input.value.slice(pos)}`; els.input.selectionStart = els.input.selectionEnd = before.length + token.length + 2; closeMenu(); els.input.focus(); updateSendEnabled(); }
   /** `@path`, `@path#L3-L9`, `@"path with spaces"`, `@https://…` and `@<commit>` in a draft; also what the composer highlights. */
   const MENTION_RE = /(^|\s)(@(?:"([^"\n]+)"|(https?:\/\/[^\s"<>]*[^\s"<>.,;:!?)\]]|[\w./-]+(?:#L\d+(?:-L?\d+)?|#page=\d+(?:-\d+)?)?)))/g;
   /** `#codebase`, `#git` …: context variables in a draft (the MENTIONS names after #). */
   const HASH_RE = new RegExp(`(^|\\s)(#(${MENTIONS.map(([n]) => n).join('|')}))(?![\\w./-])`, 'g');
-  function mentionRefs(text) { return [...text.matchAll(MENTION_RE)].map((m) => m[3] || m[4]).concat([...text.matchAll(HASH_RE)].map((m) => m[3])); }
+  /** `#memory:<name>`: a memory note (1.7), sent as the attachment `memory:<name>`. */
+  const MEMHASH_RE = /(^|\s)(#memory:([\w-]+(?:\.[\w-]+)*))(?![\w/-])/g;
+  /** `#context:<set>` and `#chat:<title or id>` (1.7 context library, earlier conversations). */
+  const CTXHASH_RE = /(^|\s)(#(context|chat):([\w-]+(?:\.[\w-]+)*))(?![\w/-])/g;
+  function mentionRefs(text) { return [...text.matchAll(MENTION_RE)].map((m) => m[3] || m[4]).concat([...text.matchAll(HASH_RE)].map((m) => m[3]), [...text.matchAll(MEMHASH_RE)].map((m) => `memory:${m[3]}`), [...text.matchAll(CTXHASH_RE)].map((m) => `${m[3]}:${m[4]}`)); }
   /** Opens what a sent message's context chip names: a file, the Problems panel, the terminal, a URL. */
   function openMentionRef(ref, line) {
     if (/^https?:\/\//i.test(ref)) { post({ type: 'openExternal', url: ref }); return; }
+    if (/^memory:/.test(ref)) { if (window.LPContinuity) { window.LPContinuity.open('memory', {}, {}); } return; }
+    if (/^context:/.test(ref)) { if (window.LPContinuity) { window.LPContinuity.open('context', {}, {}); } return; }
+    if (/^chat:/.test(ref)) { post({ type: 'convAction', ids: [ref.slice(5)], action: 'open' }); return; }
     if (ref.startsWith('@')) { post({ type: 'openMention', ref }); return; }
     post({ type: 'openFile', path: ref, line: line ? Number(line) : undefined, sessionId: state.session ? state.session.id : undefined });
   }
   /** A sent message's context chip; `a` is a path (`file#L3-L9`), a special mention (`problems`, `@git`) or a URL. */
   function attChip(a) {
     const n = String(a).replace(/^@/, '');
+    if (/^memory:/.test(n)) { return `<span class="chip link" data-ref="${esc(n)}" title="Memory note ${esc(n.slice(7))}: open the Memory manager">${I.memory}<span>#${esc(n)}</span></span>`; }
+    if (/^context:/.test(n)) { return `<span class="chip link" data-ref="${esc(n)}" title="Context set ${esc(n.slice(8))}: open the Context library">${I.layers}<span>#${esc(n)}</span></span>`; }
+    if (/^chat:/.test(n)) { const [id, t] = n.slice(5).split('\u0001'); return `<span class="chip link" data-ref="chat:${esc(id)}" title="Earlier conversation “${esc(t || id)}”: open it">${I.history}<span>#chat:${esc(t || id)}</span></span>`; }
     // A commit chip opens Source Control; its text stays the hash.
     if (/^[0-9a-f]{7,40}$/i.test(n)) { return `<span class="chip link" data-ref="@git" title="Commit ${esc(n)}">${I.git}<span>${esc(n)}</span></span>`; }
     const special = MENTIONS.some(([k]) => k === n) || n === 'directory';
@@ -4545,7 +4890,7 @@
   const inwrap = el('div', 'inwrap'); els.input.parentNode.insertBefore(inwrap, els.input); inwrap.append(mirror, els.input);
   function syncMirror() {
     const v = els.input.value; let html = ''; let at = 0;
-    const marks = [...v.matchAll(MENTION_RE), ...v.matchAll(HASH_RE)].sort((a, b) => a.index - b.index);
+    const marks = [...v.matchAll(MENTION_RE), ...v.matchAll(HASH_RE), ...v.matchAll(MEMHASH_RE), ...v.matchAll(CTXHASH_RE)].sort((a, b) => a.index - b.index);
     for (const m of marks) { const s = m.index + m[1].length; if (s < at) { continue; } html += `${esc(v.slice(at, s))}<mark>${esc(m[2])}</mark>`; at = s + m[2].length; }
     mirror.innerHTML = `${html}${esc(v.slice(at))}\n`;
     mirror.style.right = `${els.input.offsetWidth - els.input.clientWidth}px`;
@@ -4757,7 +5102,34 @@
     els.input.value = ''; state.attachments = []; state.starterRefs = []; state.images = []; renderChips(); autoGrow(); closeMenu(); updateSendEnabled(); clearQuote(); scrollToBottom(true);
     if (!fromSuggestion) { els.input.focus(); }
   }
-  els.input.addEventListener('input', () => { const cr = document.querySelector('.confirm-row'); if (cr) { cr.remove(); } autoGrow(); updateSendEnabled(); warmModel(); const t = tokenAt(); if (t) { showInlineMenu(t); } else if (menuState && !els.popover.querySelector('.search')) { closeMenu(); } });
+  els.input.addEventListener('input', () => { const cr = document.querySelector('.confirm-row'); if (cr) { cr.remove(); } autoGrow(); updateSendEnabled(); warmModel(); const t = tokenAt(); if (t) { showInlineMenu(t); } else if (menuState && !els.popover.querySelector('.search')) { closeMenu(); } relatedSoon(); });
+  // ---- Related earlier conversations (continuity, 1.7): while the first message of a new chat is written, up to three
+  // earlier chats of this project that look related are offered; nothing is added until "Add" puts #chat:<id> in the box.
+  const relRow = el('div', 'relrow hidden'); relRow.id = 'related'; relRow.setAttribute('role', 'group'); relRow.setAttribute('aria-label', 'Related earlier conversations');
+  { const cr = els.box.querySelector('.ctx-row'); if (cr) { cr.after(relRow); } else { els.box.prepend(relRow); } }
+  const rel = { timer: 0, asked: '', dismissed: new Set(), items: [], sid: '' };
+  function relatedSoon() {
+    clearTimeout(rel.timer);
+    const s = state.session; const text = els.input.value.trim();
+    const fresh = s && !s.messages.some((x) => x.role === 'user');
+    if (!fresh || text.length < 12) { if (!rel.items.length || !fresh) { renderRelated([]); } return; }
+    rel.timer = setTimeout(() => { if (text === rel.asked) { return; } rel.asked = text; rel.sid = s.id; post({ type: 'contextAction', action: 'related', sessionId: s.id, text }); }, 700);
+  }
+  function relatedResults(m) {
+    if (!state.session || m.sessionId !== state.session.id || m.query !== rel.asked) { return; }
+    renderRelated((m.items || []).filter((x) => !rel.dismissed.has(x.id) && !els.input.value.includes(x.mention)));
+  }
+  function renderRelated(items) {
+    rel.items = items;
+    relRow.classList.toggle('hidden', !items.length);
+    relRow.innerHTML = items.length ? `<span class="rl">${I.history}<span class="long">Related:</span></span>${items.map((x) => `<span class="rel" data-id="${esc(x.id)}" title="${esc(x.snippet || x.title)}"><span class="t">${esc(x.title)}</span><button class="link" data-r="add" aria-label="Add “${esc(x.title)}” to this message">Add</button><button class="x" data-r="x" aria-label="Not related: hide “${esc(x.title)}”" title="Hide">×</button></span>`).join('')}` : '';
+  }
+  relRow.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-r]'); const it = b && b.closest('.rel'); if (!b || !it || !state.session) { return; }
+    const id = it.dataset.id;
+    if (b.dataset.r === 'add') { post({ type: 'contextAction', action: 'addRelated', sessionId: state.session.id, id }); }
+    rel.dismissed.add(id); renderRelated(rel.items.filter((x) => x.id !== id)); els.input.focus();
+  });
   // Typing is the strongest signal that a request is coming: ask the host to load the model now (throttled; the
   // host throttles per model too) so the first token is not preceded by a 5–30 s weight load.
   let warmedAt = 0;
@@ -4965,9 +5337,24 @@
   }
   function dispatch(m) {
     switch (m.type) {
-      case 'init': post({ type: 'requestOpenFiles' }); state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; if (m.workspace) { state.workspace = m.workspace; } syncShortcutTitles(); state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
+      case 'init': post({ type: 'requestOpenFiles' }); setTimeout(() => post({ type: 'nav', seq: 0, view: 'all', projectId: 'this', limit: 1 }), 2500); state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; if (m.workspace) { state.workspace = m.workspace; } syncShortcutTitles(); state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); if (state.session) { updateCtx(); } if (hist.open) { histRefresh(); } break;
       case 'sessionPage': histPage(m); break;
+      case 'navPage': navPage(m); break;
+      case 'navChanged': if (hist.open) { navRequest(false); histRequest(false); } if (window.LPContinuity) { window.LPContinuity.refresh(); } break;
+      case 'openNavigator': openHistory({ view: m.view || 'all' }); break;
+      case 'openContinuityPage': openContinuityPage(m.page, m.params); break;
+      case 'continuityPage': case 'versionsList': case 'memoryVersions': case 'memoryDone': if (window.LPContinuity) { window.LPContinuity.receive(m); } break;
+      case 'memorySuggest': memorySuggest(m); break;
+      case 'contextSuggest': contextSuggest(m); break;
+      case 'contextItems': state.ctxItems.set(m.sessionId, m); refreshCtxCard(); break;
+      case 'contextNotice': contextNote(m.sessionId, { kind: m.kind, text: m.text }); break;
+      case 'contextRestored': { const parts = [m.workingSet ? `${m.workingSet} working file${m.workingSet === 1 ? '' : 's'}` : '', m.todos ? `${m.todos} todo${m.todos === 1 ? '' : 's'}` : '', m.attachments ? `${m.attachments} attachment${m.attachments === 1 ? '' : 's'}` : ''].filter(Boolean).join(', '); if (parts || (m.changed || []).length) { contextNote(m.sessionId, { kind: 'restored', parts, changed: m.changed || [] }); } break; }
+      case 'related': relatedResults(m); break;
+      case 'contextDone': if (window.LPContinuity) { window.LPContinuity.receive(m); } if (m.note && m.action === 'attach') { toast(m.note, 'info'); } break;
+      case 'compare': if (window.LPContinuity) { window.LPContinuity.compare(m); } break;
+      case 'branches': state.branches.set(m.sessionId, m); if (state.session && state.session.id === m.sessionId) { applyBranches(); } break;
+      case 'remoteUpdate': remoteBanner(m); break;
       case 'session': {
         const prev = state.session && state.session.id; const switching = prev !== m.session.id;
         if (switching && prev) { saveDraft(prev); }
@@ -5424,11 +5811,33 @@
   els.ctx.setAttribute('aria-describedby', 'ctxCard');
   /** '' hidden · 'hover' the breakdown · 'confirm' the "Compact this chat?" question. */
   let ctxMode = '';
+  /** The card's tab: the usage and breakdown, the items of the last request, what the policy or budget left out. */
+  let ctxTab = 'usage';
+  const KIND_LABEL = { file: 'File', selection: 'Context', memory: 'Memory', rule: 'Rule', summary: 'Summary', library: 'Context set', history: 'Earlier chat', tool: 'Tool output' };
+  const REASON = { localOnly: 'local only', budget: 'over budget', ignored: 'ignored' };
+  function ctxTabs() {
+    const ci = state.session && state.ctxItems.get(state.session.id);
+    const n = ci ? ci.items.length : 0; const x = ci ? ci.excluded.length : 0;
+    const tab = (k, l, c) => `<button class="ctab${ctxTab === k ? ' on' : ''}" role="tab" aria-selected="${ctxTab === k}" data-c="tab" data-tab="${k}">${l}${c !== undefined ? ` <i>${c}</i>` : ''}</button>`;
+    return `<div class="ctabs" role="tablist" aria-label="Context details">${tab('usage', 'Usage')}${tab('items', 'Items', n)}${tab('excluded', 'Excluded', x)}</div>`;
+  }
+  function ctxItemsHtml(which) {
+    const ci = state.session && state.ctxItems.get(state.session.id);
+    if (!ci) { return `<div class="bd-empty">${which === 'items' ? 'What the model saw is listed after the next answer.' : 'Nothing left out yet.'}</div>`; }
+    const when = `<div class="r sub"><span>${esc(ci.model.split('/').pop())}${ci.remote ? ' · cloud' : ''}</span><b>${esc(timeAgo(ci.at) === 'now' ? 'just now' : `${timeAgo(ci.at)} ago`)}</b></div>`;
+    if (which === 'excluded') {
+      const xs = ci.excluded || [];
+      return `${when}${xs.length ? xs.slice(0, 10).map((e) => `<div class="r it" title="${esc(e.ref)}"><span class="k">${esc(e.ref.replace(/^memory:/, ''))}</span><b>${esc(REASON[e.reason] || e.reason)}</b></div>`).join('') + (xs.length > 10 ? `<div class="bd-empty">and ${xs.length - 10} more</div>` : '') : '<div class="bd-empty">Nothing was left out of the last request.</div>'}<div class="note">Local-only notes and context sets never go to a cloud model; notes over the memory budget are listed by name only.</div>`;
+    }
+    const items = ci.items || [];
+    return `${when}${items.slice(0, 10).map((i) => `<div class="r it" title="${esc(i.ref)}${i.hash ? ` · sha256 ${esc(i.hash.slice(0, 12))}` : ''}"><span class="k"><em>${esc(KIND_LABEL[i.kind] || i.kind)}</em> ${esc(i.ref)}</span><b>${i.tokens ? fmtTok(i.tokens) : '—'}</b></div>`).join('') || '<div class="bd-empty">Only the conversation itself.</div>'}${items.length > 10 ? `<div class="bd-empty">and ${items.length - 10} more</div>` : ''}`;
+  }
   function ctxRows() {
     const c = state.ctxInfo; if (!c) { return ''; }
+    if (ctxTab !== 'usage') { return `${ctxTabs()}${ctxItemsHtml(ctxTab)}<div class="note"><button class="link" data-c="inspect" title="Open the full snapshot: every item, the breakdown, earlier requests">Context of this chat…</button></div>`; }
     const u = chatUsage(); const n = (v) => Number(v || 0).toLocaleString();
     const row = (k, v, cls) => `<div class="r${cls ? ` ${cls}` : ''}"><span>${k}</span><b>${v}</b></div>`;
-    let h = `<div class="h">Context</div>${row('Used', `${n(c.used)} · ${c.pct}%`)}${row('Window', n(c.win))}${row('Remaining', n(Math.max(0, c.win - c.used)))}${ctxBreakdownHtml(c)}`;
+    let h = `${ctxTabs()}<div class="h">Context</div>${row('Used', `${n(c.used)} · ${c.pct}%`)}${row('Window', n(c.win))}${row('Remaining', n(Math.max(0, c.win - c.used)))}${ctxBreakdownHtml(c)}`;
     if (u && u.requests) {
       h += `<div class="h">This chat</div>${row('Prompt tokens', n(u.promptTokens))}${row('Output tokens', n(u.completionTokens))}`;
       if (u.cacheReadTokens || u.cacheWriteTokens) { h += row('Cache read', n(u.cacheReadTokens)) + row('Cache write', n(u.cacheWriteTokens)); }
@@ -5490,6 +5899,8 @@
   els.ctx.addEventListener('mouseleave', ctxLeave); els.ctx.addEventListener('blur', ctxLeave);
   ctxCard.addEventListener('click', (e) => {
     const b = e.target.closest('[data-c]'); if (!b) { return; }
+    if (b.dataset.c === 'tab') { ctxTab = b.dataset.tab; showCtxCard('hover'); const f = ctxCard.querySelector(`[data-tab="${ctxTab}"]`); if (f) { f.focus(); } return; }
+    if (b.dataset.c === 'inspect') { hideCtxCard(); if (state.session) { post({ type: 'contextAction', action: 'inspect', sessionId: state.session.id }); } return; }
     if (b.dataset.c === 'compact' && state.session && !state.running.has(state.session.id)) { post({ type: 'compactNow', sessionId: state.session.id }); }
     if (b.dataset.c === 'raise') { hideCtxCard(); post({ type: 'openSettings', section: 'models' }); return; }
     if (b.dataset.c === 'fix') { hideCtxCard(); if (b.dataset.fix === 'compact') { if (state.session && !state.running.has(state.session.id)) { post({ type: 'compactNow', sessionId: state.session.id }); } } else { post({ type: 'openSettings', section: b.dataset.fix }); } return; }
@@ -6015,5 +6426,7 @@
   });
 
   updateSendEnabled();
+  // media/continuity.js (Trash, Versions, Compare, Knowledge pages) runs on these helpers; it loads right after.
+  window.LPChat = { post, esc, el, I, timeAgo, md: renderMarkdown, toast };
   requestInit();
 })();

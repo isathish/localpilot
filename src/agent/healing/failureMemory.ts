@@ -285,6 +285,12 @@ function coerce(raw: unknown): MemoryEntry | undefined {
   };
 }
 
+/**
+ * Listeners told about every recorded fix outcome (1.7: continuity keeps the fixes that worked as `agent` memory
+ * items, "what fixed which failure category"). Module-level because each workspace root has its own FailureMemory.
+ */
+export const failureMemoryListeners = new Set<(entry: MemoryEntry) => void>();
+
 export class FailureMemory {
   private readonly now: () => number;
   private readonly log: (msg: string) => void;
@@ -308,6 +314,20 @@ export class FailureMemory {
 
   /** Stores the outcome of a fix attempt; merges into an entry with the same generic signature, ecosystem, outcome and strategy. */
   async record(failure: Failure, input: MemoryRecordInput): Promise<MemoryEntry | undefined> {
+    const entry = await this.recordEntry(failure, input);
+    if (entry) {
+      for (const l of failureMemoryListeners) {
+        try {
+          l(entry);
+        } catch {
+          // a listener's failure is its own
+        }
+      }
+    }
+    return entry;
+  }
+
+  private async recordEntry(failure: Failure, input: MemoryRecordInput): Promise<MemoryEntry | undefined> {
     if (!this.file) {
       return undefined;
     }

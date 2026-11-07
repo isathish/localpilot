@@ -77,6 +77,8 @@ nav:
     url: /docs/claude-code-compatibility/
   - title: Memory & planning
     url: /docs/memory-and-planning/
+  - title: Conversations, memory & sync
+    url: /docs/continuity/
   - title: Terminal & CLI
     url: /docs/terminal-and-cli/
   - title: Zed, JetBrains & Neovim (ACP)

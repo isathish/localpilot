@@ -43,8 +43,16 @@ export class TraceStore {
     return list;
   }
 
+  /** Continuity (SESSION): a finished trace was stored (its agent session gets `traceId`). */
+  onAdd?: (trace: RunTrace) => void;
+
   /** Adds (or replaces, by id) a finished trace and writes the chat's file. */
   async add(trace: RunTrace): Promise<void> {
+    try {
+      this.onAdd?.(trace);
+    } catch {
+      // continuity never breaks the trace store
+    }
     const list = await this.read(trace.sessionId);
     const i = list.findIndex((t) => t.id === trace.id);
     if (i >= 0) {

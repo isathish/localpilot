@@ -28,6 +28,12 @@ export interface ChatMessage {
   thinking?: string;
   /** Internal metadata: not sent to the model. */
   meta?: {
+    /** Stable message id (`m_…`, continuity §3): assigned when the message is first logged, kept by every copy. */
+    id?: string;
+    /** Continuity: the message this one was copied from (duplicate, fork, merge). */
+    copiedFrom?: string;
+    /** Continuity: the generation was cut off (crash, laptop off); the chat offers Continue / Regenerate. */
+    partial?: boolean;
     /** Auto mode's pick for this message: the mode and specialist it ran in, and why (shown on the message). */
     autoRoute?: { mode: string; specialist?: string; kind: string; reason: string };
     timestamp?: number;
@@ -574,6 +580,8 @@ export interface Session extends SessionSummary {
    * shown as "Run interrupted" with Resume / Restore checkpoint / Dismiss. Cleared when the run ends or is dismissed.
    */
   runningSince?: number;
+  /** Continuity (1.7): bookkeeping of the conversation log. `lastHlc`: the log clock when this file was last written. */
+  meta?: { lastHlc?: string };
 }
 
 export interface TodoItem {

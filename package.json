@@ -638,6 +638,65 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "localpilot.continuity.openNavigator",
+        "title": "Open Conversations",
+        "category": "LocalPilot",
+        "icon": "$(history)"
+      },
+      {
+        "command": "localpilot.continuity.openTrash",
+        "title": "Open Conversation Trash",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.continuity.openMemoryManager",
+        "title": "Open Memory Manager",
+        "category": "LocalPilot",
+        "icon": "$(book)"
+      },
+      {
+        "command": "localpilot.continuity.openContextLibrary",
+        "title": "Open Context Library",
+        "category": "LocalPilot",
+        "icon": "$(library)"
+      },
+      {
+        "command": "localpilot.continuity.openCheckpoints",
+        "title": "Open Checkpoints",
+        "category": "LocalPilot",
+        "icon": "$(history)"
+      },
+      {
+        "command": "localpilot.continuity.exportConversations",
+        "title": "Export Conversations…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.continuity.importConversations",
+        "title": "Import Conversations…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.continuity.rebuildIndex",
+        "title": "Rebuild Conversation Index",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.continuity.backupNow",
+        "title": "Back Up Conversations and Memory Now",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.continuity.restoreBackup",
+        "title": "Restore Conversations from Backup…",
+        "category": "LocalPilot"
+      },
+      {
+        "command": "localpilot.continuity.openDataFolder",
+        "title": "Open Conversation Data Folder",
+        "category": "LocalPilot"
+      },
+      {
         "command": "localpilot.clearHistory",
         "title": "Clear Chat History…",
         "category": "LocalPilot",
@@ -1967,11 +2026,79 @@
           "minimum": 5,
           "markdownDescription": "Most memory notes kept per scope (project / global). Past it, the least recently updated notes are deleted (`README` is kept)."
         },
+        "localpilot.memory.taskExpiryDays": {
+          "type": "number",
+          "default": 14,
+          "minimum": 1,
+          "maximum": 3650,
+          "markdownDescription": "Task memory (the checklist and notes of a running plan or todo list) moves to Trash this many days after every todo of the task is done. Reopening a todo keeps it. See the Memory manager (`LocalPilot: Open Memory Manager`)."
+        },
         "localpilot.sessions.retention": {
           "type": "number",
           "default": 50,
           "minimum": 0,
-          "description": "Maximum number of chats kept in this workspace's history. The oldest idle chats are removed automatically when a new one is created; pinned and running chats are never removed. 0 keeps everything."
+          "description": "Maximum number of chats kept in this workspace's chat list. When a new chat is created, the oldest idle chats beyond the limit move to Archived (still searchable and openable from the conversation navigator); pinned and running chats are never moved. Without conversation storage they are removed, as before. 0 keeps everything."
+        },
+        "localpilot.continuity.dataDir": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Folder where LocalPilot keeps conversations, memory, the search index, attachments and backups, shared by VS Code and the `localpilot` CLI. Empty uses `~/.localpilot/continuity` (or `$LOCALPILOT_DATA_DIR/continuity`). Takes effect after a window reload."
+        },
+        "localpilot.continuity.trashRetentionDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "markdownDescription": "Days deleted conversations, memory notes, context sets and prompt templates stay in Trash before they are removed for good. `0` keeps them until you empty Trash."
+        },
+        "localpilot.continuity.historyDays": {
+          "type": "number",
+          "default": 90,
+          "minimum": 7,
+          "markdownDescription": "Days of version history kept (earlier titles, states and note versions). Older changes are folded into the current state."
+        },
+        "localpilot.continuity.indexMaxMB": {
+          "type": "number",
+          "default": 256,
+          "minimum": 32,
+          "markdownDescription": "Largest size of the search index in MB. Past it, archived and deleted conversations older than 180 days are searchable by title only."
+        },
+        "localpilot.continuity.backup.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Back up conversations, memory and attachments automatically to the `backups` folder of the data folder."
+        },
+        "localpilot.continuity.backup.intervalDays": {
+          "type": "number",
+          "default": 7,
+          "minimum": 1,
+          "markdownDescription": "Days between automatic backups."
+        },
+        "localpilot.continuity.backup.keep": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "markdownDescription": "Automatic backups kept; older ones are deleted."
+        },
+        "localpilot.continuity.relatedConversations": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "While you write the first message of a new chat, offer up to three earlier conversations of the same project that look related (**Related: … · Add**). Nothing is added to the chat until you click **Add**."
+        },
+        "localpilot.continuity.captureToolOutput": {
+          "type": "string",
+          "enum": [
+            "errors",
+            "summary",
+            "full"
+          ],
+          "enumDescriptions": [
+            "Keep only the error text of steps that failed.",
+            "Keep the first 2 KB of every step's output (and of errors).",
+            "Keep every step's full output (as an attachment beyond 2 KB)."
+          ],
+          "default": "summary",
+          "markdownDescription": "What a run's history keeps of each step's output (**What ran** on the Run interrupted card, `localpilot history show --runs`). Streaming text is never kept here; the chat keeps the answers."
         },
         "localpilot.history.includeCli": {
           "type": "boolean",
@@ -3856,6 +3983,7 @@
     "serialize-javascript": "^7.0.6"
   },
   "dependencies": {
-    "mammoth": "1.13.0"
+    "mammoth": "1.13.0",
+    "sql.js": "1.15.2"
   }
 }

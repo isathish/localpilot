@@ -97,6 +97,15 @@ import { atRefs, EXIT_CODES_HELP, exitCodeFor, parseDuration, readSystemArg, REQ
 import { CliHealing, attemptBudget, createCliHealing } from './healing';
 import { RecoveryNotes, RESUME_PROMPT, outcomeBlock, stateDetail } from './recoveryRender';
 import { recoverySlash, RECOVERY_USAGE } from './slash/recovery';
+import { cmdData, openCliContinuity } from './continuityCmd';
+import { attachMemory } from '../ui/memoryHost';
+import { attachContext } from '../ui/contextHost';
+import { attachSessions } from '../ui/sessionHost';
+import { cmdRecoveryRuns } from './sessionsCmd';
+import { cmdMemory, memorySlash, wantsMemoryCommand } from './memoryCmd';
+import { nodeWatch } from '../continuity/memory/memoryBridge';
+import { cmdConversations, conversationSlash, wantsConversationLog } from './conversationsCmd';
+import type { Continuity } from '../continuity/continuity';
 import { cmdRecovery, resumableRecovery } from './recoveryCmd';
 import { escalationReport, isTerminalPhase, type CompletionContract, type NextAction, type RecoveryEventPayload, type RecoverySummary } from '../agent/healing';
 import { cmdConfig, ConfigSources, doctorReport } from './configCmd';
@@ -165,8 +174,16 @@ ${bold('Usage')}
   localpilot -c | -r [id]                continue the last session / pick one to resume (with a task: run it there)
   localpilot recovery list|show <id>|resume <id>|clear [id]   self-healing state of this folder's sessions: interrupted,
                                           incomplete and blocked tasks; resume one (checks re-run first) or forget finished ones
+  localpilot recovery runs [id] [--json]  agent runs a crash or a closed terminal cut off, with what ran and the files changed
   localpilot history                      saved sessions in this folder [--json] [--limit 50]; history delete <id>;
                                           history export <id> [-o file.md|file.html]; history import [claude|codex] [N|all]
+                                          every conversation: history --view trash|favorites|archived --all-projects; history
+                                          search|show|export --format|import|trash|restore|purge|favorite|tag|versions|branches|
+                                          duplicate|merge|share|open-share (localpilot history help)
+  localpilot data stats|backup|restore <file>|rebuild-index|migrate|gc   conversation storage shared with VS Code
+                                          (~/.localpilot/continuity): sizes, backups [-o file] [--encrypt], the 1.6 import
+  localpilot memory list|show|add|edit|rm|restore|search|move|pin|local-only|versions   every memory type: project and
+                                          developer notes, conversation, task, knowledge and agent memory (localpilot memory help)
   localpilot schedule create <name> --cron "0 3 * * *" --prompt "…"   scheduled unattended runs via cron/launchd/Task
                                           Scheduler [--cwd] [--mode] [--model] [--timeout]; schedule list|run|pause|resume|delete|history <name>
   localpilot --acp                        Agent Client Protocol server on stdio (Zed, JetBrains, Neovim)
@@ -211,6 +228,7 @@ ${bold('In a session')}
   /mode ask|agent|plan|debug|multitask (or review, test, …)   /model <name>   /models   /providers   /undo   /keep   /changes   /clear   /help   /exit
   /thinking auto|off|low|medium|high|max   how hard the model thinks in this session (remembered)
   /history   saved sessions   /resume [N|id]   switch to one   /fork [name]   branch this session and continue in the copy
+  /history search <words>   every conversation   /trash [restore <id>]   /branch [switch <n>|from <messageId>]
   ${RECOVERY_USAGE}   self-healing state of this session: re-run the checks and continue, undo fix attempts, past attempts
   /isolate   work in a git worktree from now on   /apply   bring its changes into your checkout   /discard   throw them away
   /undo [N [f|c|b]]   go back to an earlier turn: restore its files, the chat or both (Esc Esc at an empty prompt)   /undo all   revert every pending change
@@ -218,7 +236,7 @@ ${bold('In a session')}
   /mcp:<server>:<prompt> args…   run an MCP server's prompt (arguments by position or key=value)
   /skill <name> <task>   run a task with a skill preloaded   /agent <name> <task>   hand a task to a subagent (also as -p "/skill …")
   /<skill-name> <task>   same as /skill   /deep-planning <task>   plan in Plan mode, saved to implementation_plan.md   /newrule   write a project rule
-  /compact   summarise older messages   /context   context use   /memory   instruction files and memory notes
+  /compact   summarise older messages   /context   context use   /memory   instruction files and memory notes (/memory list|search|add|rm …)
   /skills   /agents   /plugins   lists   /mcp [enable|disable|restart <name> [--save]]   MCP servers, their tools and errors
   /yes on|off   auto-approve (the prompt shows [auto])   /settings [filter]   effective settings   /settings set <key> <value>   save one
   Tab completes /commands and @paths (@path attaches a file or image)   Shift+Tab cycles the mode
@@ -785,6 +803,8 @@ function toolLabel(name: string, a: Record<string, unknown>): string {
 
 // ------------------------------------------------------------------ core
 interface Core {
+  /** Conversation storage shared with VS Code (opened in the background for chat runs). */
+  continuity?: Continuity;
   providers: ProviderRegistry;
   tools: ToolRegistry;
   skills: SkillManager;
@@ -964,6 +984,28 @@ function cliHealing(args: Args, d: { log: vscode.LogOutputChannel; telemetry?: T
     writers: d.tracker && (() => d.tracker!.all()),
     audit: (event) => auditPolicy(getManagedPolicy(), event, args.cwd, d.log),
   });
+}
+
+/** The chat's last state reaches the conversation log before the process ends (bounded: never holds the exit long). */
+let continuityOpening: Promise<unknown> | undefined;
+async function settleContinuity(core: Core, store: SessionStore, session: Session): Promise<void> {
+  if (!core.continuity && continuityOpening) {
+    await Promise.race([continuityOpening.catch(() => undefined), new Promise((r) => setTimeout(r, 3000).unref())]);
+  }
+  const c = core.continuity;
+  if (!c || c.degraded || !c.bridge) {
+    return;
+  }
+  await Promise.race([
+    (async () => {
+      if (store.has(session.id)) {
+        await store.flush(session).catch(() => undefined);
+      }
+      await c.bridge?.settle();
+      await c.log.flush();
+    })(),
+    new Promise((r) => setTimeout(r, 4000).unref()),
+  ]);
 }
 
 /** Stops the run in progress with the `shutdown` reason, waits (bounded) for it to persist its state, then exits. */
@@ -2108,6 +2150,31 @@ async function main(): Promise<void> {
     process.exitCode = await cmdSchedule(process.argv.slice(3), STYLE, cliLauncher());
     return;
   }
+  // `data …` manages the continuity data root (event log, index, backups) and needs no model or agent.
+  if (process.argv[2] === 'data') {
+    process.exitCode = await cmdData(process.argv.slice(3), STYLE, { cwd: process.cwd(), version: VERSION });
+    process.exit(process.exitCode);
+  }
+  // `memory list|show|add|edit|rm|search|…` (1.7) manages every memory type; other `memory …` words stay a prompt.
+  if (process.argv[2] === 'memory' && wantsMemoryCommand(process.argv.slice(3))) {
+    const argv = process.argv.slice(3);
+    const dd = argv.indexOf('--data-dir');
+    process.exitCode = await cmdMemory(argv, STYLE, { cwd: process.cwd(), dataDir: dd >= 0 ? path.resolve(argv[dd + 1] ?? '') : undefined, version: VERSION, log: vscode.window.createOutputChannel('LocalPilot CLI', { log: true }) }).catch((e) => {
+      console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    });
+    process.exit(process.exitCode);
+  }
+  // `history` with a 1.7 action or flag (search, trash, --view, --all-projects…) works on the conversation log.
+  if (process.argv[2] === 'history' && wantsConversationLog(process.argv.slice(3))) {
+    const argv = process.argv.slice(3);
+    const dd = argv.indexOf('--data-dir');
+    process.exitCode = await cmdConversations(argv, STYLE, { cwd: process.cwd(), dataDir: dd >= 0 ? path.resolve(argv[dd + 1] ?? '') : undefined, version: VERSION, log: vscode.window.createOutputChannel('LocalPilot CLI', { log: true }), ask: process.stdin.isTTY ? (q) => ask(q) : undefined }).catch((e) => {
+      console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    });
+    process.exit(process.exitCode);
+  }
   const args = parseArgs(process.argv.slice(2));
   if (!args.cmd && args.json) {
     ndjson = new NdjsonWriter();
@@ -2120,6 +2187,11 @@ async function main(): Promise<void> {
   if (args.cmd === 'recovery') {
     setWorkspaceRoot(args.cwd);
     const log = vscode.window.createOutputChannel('LocalPilot CLI', { log: true });
+    // `recovery runs`: agent runs a crash or a closed terminal cut off (continuity), with what ran.
+    const recWords = args.prompt.split(/\s+/).filter(Boolean);
+    if (recWords[0] === 'runs') {
+      process.exit(await cmdRecoveryRuns([...recWords.slice(1), ...(args.json ? ['--json'] : [])], STYLE, { cwd: args.cwd, dataDir: args.dataDir, version: VERSION, log }));
+    }
     const sessions = await openCliStore(args.cwd, args.dataDir, log);
     const { store } = cliHealing(args, { log });
     const r = await cmdRecovery(args.prompt.split(/\s+/).filter(Boolean), { store, sessions: sessions.list(), budget: (st) => attemptBudget(getConfig().healing, st), style: STYLE, json: !!args.json }).catch((e) => {
@@ -2247,11 +2319,24 @@ async function main(): Promise<void> {
     };
     const words = args.prompt.split(/\s+/).filter(Boolean);
     const run = words[0] === 'import' ? cmdHistoryImport(store, words.slice(1), { json: args.historyOpts.json }, STYLE, args.cwd, process.stdin.isTTY ? (q) => ask(q) : undefined) : cmdHistory(store, words, { ...args.historyOpts, deleteCheckpoints }, STYLE, args.cwd);
+    const before = new Set(store.list().map((x) => x.id));
     process.exitCode = await run.catch((e) => {
       console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
       return 1;
     });
+    // A chat deleted here is deleted from the conversation log too (otherwise other projects' views would still list it).
+    const removed = [...before].filter((id) => !store.has(id));
     store.dispose();
+    if (removed.length && (words[0] === 'delete' || words[0] === 'rm')) {
+      const c = await openCliContinuity({ cwd: args.cwd, dataDir: args.dataDir, log: vscode.window.createOutputChannel('LocalPilot CLI', { log: true }), schedules: false, autoMigrate: false, version: VERSION }).catch(() => undefined);
+      if (c && !c.degraded) {
+        await c.ready;
+        if (!c.indexFailed) {
+          await c.retention.purge(removed.map((id) => ({ ent: 'conversation' as const, id })), 'user').catch(() => 0);
+        }
+      }
+      await c?.dispose();
+    }
     return;
   }
   if (args.cmd === 'acp') {
@@ -2336,6 +2421,24 @@ async function main(): Promise<void> {
   }
   const store = await openCliStore(args.cwd, args.dataDir, core.log);
   core.store = store;
+  // Continuity (1.7): the same event log and index as VS Code; opened after the chats, never awaited for its index.
+  // A data root it cannot use leaves everything working as before.
+  continuityOpening = openCliContinuity({ cwd: args.cwd, dataDir: args.dataDir, log: core.log, version: VERSION })
+    .then((c) => {
+      // Its log writes pending events synchronously on exit; the index catches up next time.
+      core.continuity = c;
+      // Chats saved here become conversation events (search, Trash, branches, other projects in VS Code).
+      if (!c.degraded) {
+        c.attachSessionStore(store, { defaultFolder: () => args.cwd, warn: (m) => core.log.warn(m) });
+        // Memory (1.7): note files become events, the six memory types reach the tools and the prompt.
+        attachMemory(c, { memory: core.memory, runner: core.runner, workspace: core.workspace, log: core.log, watch: nodeWatch, projectFolders: () => [args.cwd] });
+        // Context (1.7): snapshots, #context: / #chat:, history tools, the local-only policy (notices go to stderr).
+        attachContext(c, { runner: core.runner, workspace: core.workspace, memory: core.memory, tools: core.tools, defaultFolder: () => args.cwd, log: core.log, sink: { post: (m) => (m.type === 'contextNotice' ? process.stderr.write(`\n${STYLE.dim(`note: ${m.text}`)}\n`) : undefined) } });
+        // Sessions (1.7): runs, what they did, checkpoints and model sessions; drafts of partial answers; crash recovery.
+        attachSessions(c, { runner: core.runner, checkpoints: core.runner.checkpoints, recovery: core.healing.store, sessionOf: (id) => (store.has(id) ? store.get(id) : undefined), models: () => core.providers.cachedModels(), log: core.log });
+      }
+    })
+    .catch((e) => core.log.warn(`continuity: ${e instanceof Error ? e.message : String(e)}`));
   core.runner.archive = store;
   const out = quiet ? process.stderr : process.stdout;
   let resumed: Session | undefined;
@@ -2369,6 +2472,17 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   if (resumed) {
+    // Continuity (SESSION): an answer cut off last time (closed terminal, crash) comes back from its draft as a partial
+    // answer; "continue" picks it up. The data root opens in the background, so this waits for it briefly.
+    await Promise.race([continuityOpening?.catch(() => undefined), new Promise((r) => setTimeout(r, 1500).unref())]);
+    const partial = core.continuity?.sessions?.takePartial(resumed);
+    if (partial) {
+      resumed.messages.push(partial);
+      store.save(resumed);
+      if (!quiet) {
+        out.write(dim(`Interrupted — the last answer was cut off; ${partial.content.length.toLocaleString('en-US')} characters of it were kept. Type "continue" to pick it up.\n`));
+      }
+    }
     // -m and a mode flag apply to the resumed chat; otherwise it keeps its own model (when it is still reachable).
     if (args.model) {
       resumed.model = modelInfo.id;
@@ -2597,6 +2711,7 @@ async function main(): Promise<void> {
     await core.runner.hooks?.sessionEnd(session.id, 'other', args.cwd, { signal: ctl.signal });
     await core.telemetry.flush();
     core.telemetryRemote?.dispose();
+    await settleContinuity(core, store, session);
     process.exit(shutdownCode ?? code);
   }
 
@@ -2644,7 +2759,7 @@ async function main(): Promise<void> {
   const promptText = (): string => `${isAutoApprove() ? `${yellow('[auto]')} ` : ''}${amber('◆')} `;
   /** Shift+Tab sends a Tab that readline would complete on: the completer skips that one. */
   let shiftTab = false;
-  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/team', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/recovery', '/skill', '/agent', '/commands', '/prompts', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
+  const BUILTIN_SLASH = ['/help', '/exit', '/quit', '/mode', '/team', '/model', '/models', '/providers', '/changes', '/undo', '/keep', '/isolate', '/apply', '/discard', '/clear', '/file', '/attach', '/doctor', '/history', '/resume', '/fork', '/trash', '/branch', '/recovery', '/skill', '/agent', '/commands', '/prompts', '/permissions', '/hooks', '/queue', '/deep-planning', '/compact', '/smol', '/skills', '/agents', '/mcp', '/memory', '/context', '/yes', '/thinking', '/settings', '/plugins'];
   const completer = createCompleter({
     commands: () => [...BUILTIN_SLASH, ...core.commands.map((c) => c.invoke), ...core.skills.enabledSkills.map((s) => `/${s.name}`), ...(core.mcp?.promptCommands ?? []).map((p) => p.invoke)],
     root: () => runRoot(),
@@ -2767,6 +2882,7 @@ async function main(): Promise<void> {
     process.stdout.write(`${exitSummary(session, STYLE)}\n`);
     void (session.messages.length ? core.runner.hooks?.sessionEnd(session.id, 'prompt_input_exit', runRoot()) : Promise.resolve())
       ?.then(() => core.telemetry.flush())
+      .then(() => settleContinuity(core, store, session))
       .finally(() => {
         core.telemetryRemote?.dispose();
         process.exit(wasRunning ? 130 : 0);
@@ -2889,10 +3005,19 @@ async function main(): Promise<void> {
       case 'file': case 'attach': if (arg) { pendingFiles.push(arg); console.log(dim(`will attach ${arg}`)); } return true;
       case 'doctor': await cmdDoctor(core); return true;
       case 'history': case 'resume': case 'fork':
+        if (cmd === 'history' && /^search\b/.test(arg)) {
+          return conversationSlash('history-search', arg.replace(/^search\s*/, ''), { c: core.continuity, sessionId: () => session.id, style: STYLE });
+        }
         return sessionSlash(cmd, arg, { store, current: () => session, switchTo, ask: (q) => ask(q), style: STYLE });
+      case 'trash': case 'branch':
+        return conversationSlash(cmd, arg, { c: core.continuity, sessionId: () => session.id, style: STYLE, reload: (id) => { const s = store.get(id); if (s && id === session.id) { session = s; console.log(resumeBanner(session, STYLE, 'Resumed')); } } });
       case 'recovery':
         return recoverySlash(cmd, arg, { service: core.healing.service, store: core.healing.store, sessionId: () => session.id, root: runRoot, budget: (st) => attemptBudget(getConfig().healing, st), resume: resumeRecovery, style: STYLE });
       case 'compact': case 'smol': case 'skills': case 'agents': case 'mcp': case 'memory': case 'context': case 'yes': case 'auto': case 'settings': case 'plugins':
+        // `/memory list|search|add|…` work on every memory type (1.7); a bare `/memory` keeps the report.
+        if (cmd === 'memory' && (await memorySlash(arg, { c: core.continuity, style: STYLE }))) {
+          return true;
+        }
         return infoSlash(cmd, arg, { session: () => session, store, providers: core.providers, skills: core.skills, memory: core.memory, workspace: core.workspace, plugins: core.plugins, mcp: core.mcp, style: STYLE, md, status: (t) => (t ? renderer.status(t) : renderer.clearStatus()), onAutoApprove: () => rl!.setPrompt(promptText()) });
       case 'skill': case 'agent': {
         const task = taskCommand(core, cmd, arg);

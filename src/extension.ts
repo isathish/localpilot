@@ -78,6 +78,12 @@ import { createShowMarkdownTool, MarkdownViewer } from './ui/markdownViewer';
 import { MarkdownCustomEditor } from './ui/markdown/customEditor';
 import { registerMarkdownCommands } from './ui/markdown/commands';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
+import { continuityView, openContinuity, registerContinuityCommands, runContinuityAction } from './ui/continuityData';
+import { ContinuityHost, registerConversationCommands } from './ui/continuityHost';
+import { attachMemory } from './ui/memoryHost';
+import { attachContext } from './ui/contextHost';
+import { attachSessions, chatSessionRuns } from './ui/sessionHost';
+import type { Continuity } from './continuity/continuity';
 import { mirrorLog } from './telemetry/logMirror';
 import { defaultTelemetryDir, LogEntry, LogLevel, Telemetry, TelemetrySummary } from './telemetry/telemetry';
 import { RedisTelemetry } from './storage/redisTelemetry';
@@ -391,12 +397,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     await projectSettings.reload();
     await Promise.all([store.load(), skills.refresh(), commands.refresh()]);
   })();
+  // Continuity (event log + index, 1.7): opened once the chats are loaded, never awaited here (activation budget).
+  const continuity = openContinuity(context, log, controller.loaded);
+  registerContinuityCommands(context, continuity, log);
+  // Conversations (1.7): the store's saves become conversation events; deletes go to Trash, retention archives.
+  const continuityHost = new ContinuityHost(controller, store, continuity, log);
+  continuityHost.memory = memory;
+  void continuity.opened.then((c) => {
+    if (c && !c.degraded) {
+      c.attachSessionStore(store, { defaultFolder: () => workspace.root, warn: (m) => log.warn(m) });
+      // Memory (1.7): note files become events, six memory types, conversation and task memory, #memory: mentions.
+      context.subscriptions.push(attachMemory(c, { memory, runner, workspace, log, projectFolders: () => (vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === 'file').map((f) => f.uri.fsPath), onFoldersChanged: (cb) => vscode.workspace.onDidChangeWorkspaceFolders(cb) }));
+      // Context (1.7): snapshots of what the model saw, the context library, related chats, the local-only policy.
+      context.subscriptions.push(attachContext(c, { runner, workspace, memory, tools, sink: { post: (m) => controller.publish(m) }, defaultFolder: () => workspace.root, log }));
+      // Sessions (1.7): agent runs, what they did, checkpoints and model sessions; drafts of partial answers; crash recovery.
+      const sessions = attachSessions(c, { runner, checkpoints, recovery: healing.store, traces: controller.traces, sessionOf: (id) => (store.has(id) ? store.get(id) : undefined), models: () => providers.cachedModels(), log });
+      context.subscriptions.push(sessions);
+      if (sessions.manager) {
+        controller.sessionRuns = chatSessionRuns(
+          () => (c.sessions === sessions.manager ? sessions.manager : undefined),
+          async () => !c.indexFailed
+        );
+        // The chat on screen may have opened before continuity: its card and partial answer now get their details.
+        const s = controller.activeSession;
+        if (s) {
+          void sessions.manager.recoverInterrupted().then(() => controller.redrawInterrupted(s.id));
+        }
+      }
+      let refresh: NodeJS.Timeout | undefined;
+      const sub = c.memory?.onDidChange(() => {
+        clearTimeout(refresh);
+        refresh = setTimeout(() => controller.publish({ type: 'navChanged' }), 400);
+      });
+      if (sub) {
+        context.subscriptions.push({ dispose: () => (clearTimeout(refresh), sub.dispose()) });
+      }
+    }
+  });
+  controller.continuityHost = continuityHost;
+  context.subscriptions.push(continuityHost);
+  const shutdownBeforeContinuity = shutdown;
+  shutdown = async () => {
+    await continuity.current?.dispose().catch(() => undefined);
+    await shutdownBeforeContinuity?.();
+  };
 
   // Register the chat hosts before anything is awaited: VS Code shows a bare progress bar in the view until the
   // provider exists, so this must not queue behind session/skill loading or model discovery.
   const view = new ChatViewProvider(context, controller);
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(CHAT_VIEW_ID, view, { webviewOptions: { retainContextWhenHidden: true } }));
   context.subscriptions.push(vscode.window.registerWebviewPanelSerializer(ChatViewProvider.panelViewType, { deserializeWebviewPanel: async (panel) => view.adoptPanel(panel) }));
+  registerConversationCommands(context, controller, continuity, () => view.reveal());
 
   // --- Terminal integration ------------------------------------------------------------------
   const terminals = new TerminalManager(context, log);
@@ -562,6 +613,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       return { enabled: !offBecause, offBecause, endpoint: c.endpoint, fromEnv: c.fromEnv };
     });
   settingsPanel.learner = learner;
+  settingsPanel.continuity = { view: () => continuityView(continuity), action: (a) => runContinuityAction(continuity.current, a, log) };
   // Learns from local telemetry which installed models work best per role; feeds Auto routing and tunes the settings.
   const tuner = new ModelTuner(telemetry, providers, context.globalState, log);
   context.subscriptions.push(tuner);
@@ -1321,7 +1373,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     const size = stats.bytes > 1048576 ? `${(stats.bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(stats.bytes / 1024))} KB`;
     const choice = await vscode.window.showWarningMessage(
       `Clear chat history for this workspace?`,
-      { modal: true, detail: `${idle} chat${idle === 1 ? '' : 's'} (${stats.messages} messages, ${size}) will be deleted permanently.${pinned ? ` ${pinned} pinned chat${pinned === 1 ? '' : 's'} can be kept.` : ''}${running.size ? ` ${running.size} running agent${running.size === 1 ? '' : 's'} will keep going.` : ''}` },
+      { modal: true, detail: `${idle} chat${idle === 1 ? '' : 's'} (${stats.messages} messages, ${size}) ${controller.store.bridge ? 'will move to Trash (restorable from the conversation navigator)' : 'will be deleted permanently'}.${pinned ? ` ${pinned} pinned chat${pinned === 1 ? '' : 's'} can be kept.` : ''}${running.size ? ` ${running.size} running agent${running.size === 1 ? '' : 's'} will keep going.` : ''}` },
       pinned ? 'Clear, keep pinned' : 'Clear',
       ...(pinned ? ['Clear everything'] : [])
     );
@@ -2378,6 +2430,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     get chatHost() {
       return view.host;
     },
+    continuity: continuity.opened,
     observeChat: (post) => controller.attach({ post, visible: () => false }),
     telemetry: { summary: (days) => telemetry.summary(days), logs: (filter) => telemetry.logs(filter), dir: telemetry.dir },
     lastOutcome: (sessionId) => controller.lastOutcome(sessionId),
@@ -2445,6 +2498,8 @@ export interface LocalPilotApi {
     /** Restores the files of the fix attempts (from `attempt` on, default all); files changed since by others are kept. Rejects while the chat runs. */
     rollback(sessionId: string, attempt?: number): Promise<RollbackResult>;
   };
+  /** Conversation storage (1.7): settles once it is open; `degraded` tells why it is off. */
+  readonly continuity: Promise<Continuity | undefined>;
 }
 
 export function deactivate(): Promise<void> | undefined {

@@ -10,6 +10,7 @@ import type { OtlpSettings } from './telemetry/otlp';
 import { parseHealingConfig } from './healingSettings';
 import { getManagedPolicy, mergeManagedProviders, policyRedis, policyTelemetry } from './agent/managedPolicy';
 import { workspaceGrant } from './agent/workspaceApprovals';
+import { normalizeCategories } from './continuity/sync/merge';
 
 export interface WebSearchConfig {
   provider: 'duckduckgo' | 'searxng' | 'brave' | 'tavily';
@@ -188,8 +189,14 @@ export interface LocalPilotConfig {
   memoryAutoSave: boolean;
   /** Caps that keep memory from growing without bound: characters per note and notes per scope. */
   memoryLimits: { maxNoteChars: number; maxNotes: number };
+  /** Days a task's memory is kept after every todo of the task is done (`localpilot.memory.taskExpiryDays`). */
+  memoryTaskExpiryDays: number;
   /** Max idle (unpinned) chats kept on disk; 0 = unlimited. */
   sessionRetention: number;
+  /** Continuity data layer (event log, index, Trash, backups): `localpilot.continuity.*`. */
+  continuity: import('./continuity/continuity').ContinuitySettings;
+  /** Sync of conversations, memory and agent state between devices, end-to-end encrypted: `localpilot.sync.*`. */
+  sync: import('./continuity/sync/syncEngine').SyncSettings;
   /** List the CLI's chats for the same folder in VS Code's history (`localpilot.history.includeCli`). */
   historyIncludeCli: boolean;
   keepAlive: string;
@@ -225,6 +232,12 @@ export interface LocalPilotConfig {
 }
 
 const SECTION = 'localpilot';
+
+/** A whole number within [min, max]; `fallback` for anything that is not a finite number. */
+function intIn(v: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
+}
 
 export { DEFAULT_PROVIDERS };
 
@@ -350,7 +363,40 @@ export function getConfig(): LocalPilotConfig {
       maxNoteChars: Math.max(500, Math.floor(c.get<number>('memory.maxNoteChars', 8000))),
       maxNotes: Math.max(5, Math.floor(c.get<number>('memory.maxNotes', 200))),
     },
+    memoryTaskExpiryDays: intIn(c.get<number>('memory.taskExpiryDays', 14), 1, 3650, 14),
     sessionRetention: Math.max(0, Math.floor(c.get<number>('sessions.retention', 50))),
+    continuity: {
+      dataDir: (c.get<string>('continuity.dataDir', '') ?? '').trim(),
+      trashRetentionDays: intIn(c.get<number>('continuity.trashRetentionDays', 30), 0, 3650, 30),
+      historyDays: intIn(c.get<number>('continuity.historyDays', 90), 7, 3650, 90),
+      indexMaxMB: intIn(c.get<number>('continuity.indexMaxMB', 256), 32, 16384, 256),
+      backup: {
+        enabled: c.get<boolean>('continuity.backup.enabled', true) !== false,
+        intervalDays: intIn(c.get<number>('continuity.backup.intervalDays', 7), 1, 365, 7),
+        keep: intIn(c.get<number>('continuity.backup.keep', 4), 1, 100, 4),
+      },
+      relatedConversations: c.get<boolean>('continuity.relatedConversations', true) !== false,
+      captureToolOutput: ((v) => (v === 'errors' || v === 'full' ? v : 'summary'))(c.get<string>('continuity.captureToolOutput', 'summary')) as 'errors' | 'summary' | 'full',
+    },
+    sync: {
+      enabled: c.get<boolean>('sync.enabled', false) === true,
+      backend: ((v) => (v === 'git' || v === 's3' || v === 'webdav' ? v : 'folder'))(c.get<string>('sync.backend', 'folder')),
+      folder: { path: (c.get<string>('sync.folder.path', '') ?? '').trim() },
+      git: { url: (c.get<string>('sync.git.url', '') ?? '').trim(), branch: (c.get<string>('sync.git.branch', 'localpilot-sync') ?? '').trim() || 'localpilot-sync' },
+      s3: {
+        endpoint: (c.get<string>('sync.s3.endpoint', '') ?? '').trim(),
+        region: (c.get<string>('sync.s3.region', 'us-east-1') ?? '').trim() || 'us-east-1',
+        bucket: (c.get<string>('sync.s3.bucket', '') ?? '').trim(),
+        prefix: (c.get<string>('sync.s3.prefix', '') ?? '').trim(),
+        accessKeyId: (c.get<string>('sync.s3.accessKeyId', '') ?? '').trim(),
+        ...((v) => (typeof v === 'boolean' ? { pathStyle: v } : {}))(c.get<boolean | null>('sync.s3.pathStyle', null)),
+      },
+      webdav: { url: (c.get<string>('sync.webdav.url', '') ?? '').trim(), username: (c.get<string>('sync.webdav.username', '') ?? '').trim() },
+      intervalMinutes: intIn(c.get<number>('sync.intervalMinutes', 5), 1, 1440, 5),
+      categories: normalizeCategories(c.get<unknown>('sync.categories', {})),
+      maxAttachmentMB: intIn(c.get<number>('sync.maxAttachmentMB', 20), 0, 2048, 20),
+      deviceName: (c.get<string>('sync.deviceName', '') ?? '').trim().slice(0, 80),
+    },
     historyIncludeCli: c.get<boolean>('history.includeCli', true),
     keepAlive: c.get<string>('keepAlive', '30m'),
     prewarm: c.get<boolean>('prewarm', true),

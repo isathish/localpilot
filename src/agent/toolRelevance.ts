@@ -14,6 +14,8 @@ const TOPICS: { tools: string[]; words: RegExp; workspace?: (root: string, repos
   { tools: ['repos'], words: /\b(repos|repositories|repository|multi[- ]?repo|monorepo|across (the )?projects)\b/i, workspace: (_root, repos) => repos > 1 },
   { tools: ['read_pdf'], words: /\.pdf\b|\bpdfs?\b|read_pdf/i, workspace: (root) => !!root && hasPdf(root) },
   { tools: ['notebook_edit'], words: /\.ipynb\b|\bnotebooks?\b|\bjupyter\b|notebook_edit/i },
+  // Continuity (1.7): earlier conversations, when the request refers to earlier work.
+  { tools: ['history_search', 'history_read'], words: /\b(earlier|previous(ly)?|last (time|week|session|chat|conversation)|before|yesterday|we (discussed|talked|did|decided|fixed|tried|agreed)|(another|other|old|past) (chats?|conversations?|sessions?)|history|remember|again|history_search|history_read)\b|#chat:/i },
   { tools: ['security_scan'], words: /\b(security|secure|vulnerab\w*|cves?|ghsa|advisor(y|ies)|secrets?|leak\w*|credentials?|audit|scan|sast|owasp|injection|dependenc(y|ies) (check|update|upgrade))\b/i },
 ];
 

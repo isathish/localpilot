@@ -2,11 +2,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ChatMessage, Session, SessionSummary } from '../types';
+import { messageHash, SavedShape, SaveHint, SessionStoreBridge } from './sessionShape';
+import { sessionHtml, sessionMarkdown } from './sessionExport';
 import { userText } from '../agent/clarify';
 import { ArchiveRecord, parseArchive, rebuildBefore } from './transcriptArchive';
 import { HistoryPage, HistoryQuery, queryHistory } from './historyQuery';
 
 const ARCHIVE_SUFFIX = '.archive.jsonl';
+
+export { messageHash } from './sessionShape';
+export type { SaveHint, SavedShape, SessionStoreBridge } from './sessionShape';
+
+function shapeOf(s: Session): SavedShape {
+  return { ids: s.messages.map((m) => m.meta?.id), hashes: s.messages.map(messageHash), title: s.title, pinned: !!s.pinned, model: s.model };
+}
 
 /** A chat with nothing in it yet: no messages, no plan, not pinned — nothing would be lost by removing it. */
 export function isEmptySession(s: Pick<Session, 'messages' | 'pinned' | 'plan'>): boolean {
@@ -20,20 +29,7 @@ function summaryOf(s: Session, bytes?: number): SessionSummary {
   return { id, title, createdAt, updatedAt, model, mode, ...(specialist ? { specialist } : {}), plan, messageCount: s.messages.length, pinned, worktree, isolated, group, skills, usage, bytes, origin, parentId, parentTitle, ...(folder ? { folder } : {}) };
 }
 
-const escHtml = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-/** Wraps a chat's Markdown export in a standalone page: the text as written, readable in light and dark themes. */
-export function sessionHtml(title: string, markdown: string): string {
-  const css = [
-    ':root{color-scheme:light dark;--fg:#1f2328;--bg:#ffffff;--muted:#59636e;--border:#d1d9e0;--code:#f6f8fa}',
-    '@media (prefers-color-scheme:dark){:root{--fg:#e6edf3;--bg:#0d1117;--muted:#9198a1;--border:#3d444d;--code:#151b23}}',
-    'body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}',
-    'main{max-width:860px;margin:0 auto;padding:32px 24px}',
-    'header{color:var(--muted);font-size:13px;border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:16px}',
-    'pre{white-space:pre-wrap;word-wrap:break-word;background:var(--code);border:1px solid var(--border);border-radius:6px;padding:16px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}',
-  ].join('\n');
-  return `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">\n<title>${escHtml(title)}</title>\n<style>\n${css}\n</style>\n</head>\n<body>\n<main>\n<header>Exported from LocalPilot · ${escHtml(new Date().toLocaleString())}</header>\n<pre>${escHtml(markdown)}</pre>\n</main>\n</body>\n</html>\n`;
-}
+export { sessionHtml, sessionMarkdown } from './sessionExport';
 
 export interface SessionSearchHit {
   id: string;
@@ -68,6 +64,22 @@ export class SessionStore implements vscode.Disposable {
   private readonly _onDidDelete = new vscode.EventEmitter<string>();
   /** Fires with the id of every deleted session (explicit delete, clear history, retention pruning). */
   readonly onDidDelete = this._onDidDelete.event;
+  private readonly _onDidSave = new vscode.EventEmitter<{ session: Session; previous?: SavedShape }>();
+  /** Fires in `flush`, just before a chat's JSON is written (continuity logs the change first). */
+  readonly onDidSave = this._onDidSave.event;
+  private readonly _onDidTrash = new vscode.EventEmitter<string>();
+  /**
+   * Fires when a chat leaves this store but stays in the conversation log (moved to Trash, or archived by retention):
+   * unlike onDidDelete, its checkpoints, traces and transcript archive are kept so it can come back.
+   */
+  readonly onDidTrash = this._onDidTrash.event;
+  /** Continuity's hooks (1.7); undefined = the 1.6 behaviour. */
+  bridge?: SessionStoreBridge;
+  private readonly shapes = new Map<string, SavedShape>();
+  private readonly hints = new Map<string, SaveHint>();
+  private pruning = false;
+  /** Chats written before a bridge was attached (continuity opens after the store): logged when it attaches. */
+  private unbridged = new Set<string>();
   /** How many full transcripts to keep in memory; read on every eviction so the setting applies live. */
   maxInMemory: () => number = () => 16;
   /** Sessions that must stay in memory (running, active). */
@@ -503,7 +515,50 @@ export class SessionStore implements vscode.Disposable {
   }
 
   async delete(id: string, notify = true): Promise<void> {
+    if (this.bridge && this.index.has(id)) {
+      let how: 'trash' | 'archive' | 'delete' = 'delete';
+      try {
+        how = await this.bridge.removing(id, this.pruning ? 'prune' : 'delete');
+      } catch (e) {
+        this.log.warn(`continuity: ${String(e)}`);
+      }
+      if (how !== 'delete') {
+        await this.drop(id, notify);
+        return;
+      }
+    }
+    await this.remove(id, notify);
+  }
+
+  /**
+   * A chat that left this store but stays in the conversation log (Trash, or Archived by retention): the cached
+   * file goes, the transcript archive and everything onDidDelete would clean up stay until it is purged.
+   */
+  private async drop(id: string, notify: boolean): Promise<void> {
     this.deleted.add(id);
+    this.sessions.delete(id);
+    this.index.delete(id);
+    this.searchCache.delete(id);
+    this.shapes.delete(id);
+    clearTimeout(this.saveTimers.get(id));
+    this.saveTimers.delete(id);
+    await this.chains.get(id)?.catch(() => undefined);
+    const ext = this.external.get(id);
+    this.external.delete(id);
+    for (const dir of [this.dir, ...this.extraDirs]) {
+      if (dir === ext || dir === this.dir || (this.dir.scheme === 'file' && fs.existsSync(path.join(dir.fsPath, `${id}.json`)))) {
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(dir, `${id}.json`)).then(undefined, () => undefined);
+      }
+    }
+    this._onDidTrash.fire(id);
+    if (notify) {
+      this._onDidChange.fire();
+    }
+  }
+
+  private async remove(id: string, notify: boolean): Promise<void> {
+    this.deleted.add(id);
+    this.shapes.delete(id);
     this.sessions.delete(id);
     this.index.delete(id);
     this.searchCache.delete(id);
@@ -571,8 +626,14 @@ export class SessionStore implements vscode.Disposable {
     // Chats read from another tool's folder (the CLI's) are its to keep or prune.
     const candidates = [...this.index.values()].filter((s) => !s.pinned && !safe.has(s.id) && !this.external.has(s.id)).sort((a, b) => b.updatedAt - a.updatedAt);
     const extra = candidates.slice(max);
-    for (const s of extra) {
-      await this.delete(s.id);
+    // With continuity, retention archives (the chats stay searchable under Archived) instead of deleting.
+    this.pruning = true;
+    try {
+      for (const s of extra) {
+        await this.delete(s.id);
+      }
+    } finally {
+      this.pruning = false;
     }
     return extra.length;
   }
@@ -625,6 +686,16 @@ export class SessionStore implements vscode.Disposable {
   archive(id: string, messages: ChatMessage[], opts: { compactionIndex: number }): void {
     if (this.dir.scheme !== 'file' || !this.index.has(id) || this.deleted.has(id) || !messages.length) {
       return;
+    }
+    // Archived messages keep their stable ids, so a rewind past the compaction brings back the same messages.
+    const live = this.sessions.get(id);
+    if (live && this.bridge) {
+      this.prepare(live);
+      for (const m of messages) {
+        if (!m.meta?.id) {
+          this.bridge.prepare({ ...live, messages: [m] });
+        }
+      }
     }
     let next = this.archiveNext.get(id);
     if (next === undefined) {
@@ -707,6 +778,7 @@ export class SessionStore implements vscode.Disposable {
     if (this.deleted.has(s.id)) {
       return;
     }
+    this.prepare(s);
     s.updatedAt = Date.now();
     s.messageCount = s.messages.length;
     if (s.title === 'New chat') {
@@ -763,6 +835,7 @@ export class SessionStore implements vscode.Disposable {
       if (this.deleted.has(s.id)) {
         return;
       }
+      this.beforeWrite(s);
       // Written beside and renamed over: a crash or a concurrent reader never sees half a transcript.
       const target = vscode.Uri.joinPath(this.dir, `${s.id}.json`);
       const tmp = vscode.Uri.joinPath(this.dir, `${s.id}.json.tmp`);
@@ -793,33 +866,7 @@ export class SessionStore implements vscode.Disposable {
 
   async exportMarkdown(id: string): Promise<string> {
     const s = this.get(id);
-    if (!s) {
-      return '';
-    }
-    const lines = [`# ${s.title}`, `_Model: ${s.model} · ${new Date(s.createdAt).toLocaleString()}_`, ''];
-    for (const m of s.messages) {
-      if (m.role === 'tool') {
-        lines.push(`<details><summary>Tool result: ${m.toolName}</summary>\n\n\`\`\`\n${m.content.slice(0, 4000)}\n\`\`\`\n</details>\n`);
-      } else if (m.role === 'user' && (m.meta?.hidden || m.meta?.toolImages || m.meta?.toolResults)) {
-        continue;
-      } else if (m.meta?.summary) {
-        lines.push('_Conversation compacted_\n');
-      } else if (m.role === 'user') {
-        const attached = [...m.content.matchAll(/<(attachment|directory|workspace_tree|problems|git|open_editors|terminal_output|selection)\b([^>]*)>[\s\S]*?<\/\1>/g)].map(
-          (b) => /\bpath="([^"]*)"/.exec(b[2])?.[1] ?? `@${b[1]}`
-        );
-        lines.push(`### You\n\n${m.meta?.display ?? userText(m.content)}\n`);
-        if (attached.length) {
-          lines.push(`Attached: ${[...new Set(attached)].join(', ')}\n`);
-        }
-      } else {
-        lines.push(`### LocalPilot\n\n${m.content}\n`);
-        for (const tc of m.toolCalls ?? []) {
-          lines.push(`> **tool** \`${tc.name}(${tc.arguments.slice(0, 200)})\`\n`);
-        }
-      }
-    }
-    return lines.join('\n');
+    return s ? sessionMarkdown(s) : '';
   }
 
   /** A self-contained HTML page of the Markdown export (no scripts, no external resources). */
@@ -839,6 +886,7 @@ export class SessionStore implements vscode.Disposable {
       const s = this.sessions.get(id);
       if (s && !this.deleted.has(id)) {
         try {
+          this.beforeWrite(s);
           const file = path.join(this.dir.fsPath, `${id}.json`);
           fs.mkdirSync(this.dir.fsPath, { recursive: true });
           fs.writeFileSync(`${file}.tmp`, JSON.stringify(s), 'utf8');
@@ -852,5 +900,101 @@ export class SessionStore implements vscode.Disposable {
     clearTimeout(this.changeTimer);
     this._onDidChange.dispose();
     this._onDidDelete.dispose();
+    this._onDidSave.dispose();
+    this._onDidTrash.dispose();
+  }
+
+  // ------------------------------------------------------------------------------------------- continuity (1.7)
+
+  /** Stable message ids (and whatever else the bridge needs) before a save is recorded. */
+  private prepare(s: Session): void {
+    if (!this.bridge) {
+      return;
+    }
+    try {
+      this.bridge.prepare(s);
+    } catch (e) {
+      this.log.warn(`continuity: ${String(e)}`);
+    }
+  }
+
+  /** Continuity logs the change before the JSON goes to disk; a failure there never blocks the save. */
+  private beforeWrite(s: Session): void {
+    const previous = this.shapes.get(s.id);
+    if (!this.bridge) {
+      this.unbridged.add(s.id);
+    }
+    try {
+      this.bridge?.saved(s, previous);
+      this._onDidSave.fire({ session: s, previous });
+    } catch (e) {
+      this.log.warn(`continuity: could not log chat ${s.id}: ${String(e)}`);
+    }
+    this.shapes.set(s.id, shapeOf(s));
+  }
+
+  /** Chats saved before the bridge attached, cleared: the bridge logs them now. */
+  takeUnbridged(): Session[] {
+    const out = [...this.unbridged].map((id) => (this.index.has(id) ? this.get(id) : undefined)).filter((x): x is Session => !!x);
+    this.unbridged.clear();
+    return out;
+  }
+
+  /** What the chat looked like when it was last written (message ids, fingerprints, summary fields). */
+  lastSavedShape(id: string): SavedShape | undefined {
+    return this.shapes.get(id);
+  }
+
+  /** Why the next save rewrites history (edit, regenerate…): the reason recorded on the new branch. */
+  hint(id: string, reason: SaveHint): void {
+    this.hints.set(id, reason);
+  }
+
+  /** The pending hint for a chat, cleared. */
+  takeHint(id: string): SaveHint | undefined {
+    const h = this.hints.get(id);
+    this.hints.delete(id);
+    return h;
+  }
+
+  /**
+   * Puts a chat rebuilt from the log into this store (restored from Trash, opened from another project, updated on
+   * another device): replaces the cached copy and its file unless the chat is in use or has a write pending. The
+   * bridge is not told (the change came from the log). False when refused.
+   */
+  importRemote(s: Session): boolean {
+    if (this.inUse(s.id) || this.saveTimers.has(s.id) || this.writing.has(s.id) || this.chains.has(s.id)) {
+      return false;
+    }
+    this.deleted.delete(s.id);
+    this.external.delete(s.id);
+    this.searchCache.delete(s.id);
+    s.messageCount = s.messages.length;
+    let bytes: number | undefined;
+    if (this.dir.scheme === 'file') {
+      try {
+        const file = path.join(this.dir.fsPath, `${s.id}.json`);
+        const data = JSON.stringify(s);
+        fs.mkdirSync(this.dir.fsPath, { recursive: true });
+        fs.writeFileSync(`${file}.tmp`, data, 'utf8');
+        fs.renameSync(`${file}.tmp`, file);
+        bytes = Buffer.byteLength(data);
+      } catch (e) {
+        this.log.error(`Failed to save session ${s.id}: ${String(e)}`);
+        return false;
+      }
+    }
+    this.sessions.delete(s.id);
+    this.sessions.set(s.id, s);
+    this.index.set(s.id, summaryOf(s, bytes));
+    this.shapes.set(s.id, shapeOf(s));
+    this.evict(s.id);
+    this._onDidChange.fire();
+    return true;
+  }
+
+  /** Removes a chat for good: its file, transcript archive, and (through onDidDelete) checkpoints, traces, logs. */
+  async purge(id: string): Promise<void> {
+    await this.remove(id, true);
   }
 }

@@ -64,7 +64,7 @@ const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWi
   'webSearch.provider': 'duckduckgo', 'webSearch.searxngUrl': 'http://localhost:8888', 'webSearch.apiKey': '', 'webSearch.maxResults': 6,
   'inlineCompletion.enabled': true, 'inlineCompletion.model': '', 'inlineCompletion.debounceMs': 350, 'inlineCompletion.maxTokens': 128,
   mcpServers: { filesystem: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] }, github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: '***' }, enabled: false } },
-  skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, 'memory.maxNoteChars': 8000, 'memory.maxNotes': 200, 'autoMode.enabled': false, 'autoMode.model': '', 'queue.concurrency': 1, 'supervisor.enabled': true, 'supervisor.intervalSeconds': 60, 'supervisor.autoInstall': false, 'gateways.litellmConfig': '', 'sessions.retention': 50, systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
+  skillsPaths: ['~/.localpilot/skills'], 'memory.enabled': true, 'memory.maxNoteChars': 8000, 'memory.maxNotes': 200, 'memory.taskExpiryDays': 14, 'autoMode.enabled': false, 'autoMode.model': '', 'queue.concurrency': 1, 'supervisor.enabled': true, 'supervisor.intervalSeconds': 60, 'supervisor.autoInstall': false, 'gateways.litellmConfig': '', 'sessions.retention': 50, 'continuity.dataDir': '', 'continuity.trashRetentionDays': 30, 'continuity.historyDays': 90, 'continuity.indexMaxMB': 256, 'continuity.backup.enabled': true, 'continuity.backup.intervalDays': 7, 'continuity.backup.keep': 4, 'continuity.relatedConversations': true, 'continuity.captureToolOutput': 'summary', systemPromptAppend: '', showWelcomeOnStartup: true, 'terminal.runInIntegratedTerminal': false, 'terminal.reveal': 'onError',
   'models.disabled': [], 'skills.disabled': ['deploy'], 'skills.autoInstall': 'auto', 'skills.autoInstallScope': 'user', 'skills.builtin': true, 'skills.repositories': ['anthropics/skills/skills', 'obra/superpowers/skills', 'github/awesome-copilot/skills'], 'models.autoSetup': true, 'routing.enabled': true, 'routing.vision': '', 'routing.reasoning': '',
   pluginPaths: [], 'hooks.enabled': true, 'browser.chromePath': '', 'colibri.path': '', 'colibri.model': '', 'colibri.port': 8000, 'colibri.kvSlots': 2,
   'storage.sessionsInMemory': 16, 'storage.redis.enabled': false, 'storage.redis.url': 'redis://127.0.0.1:6379', 'telemetry.enabled': !q.get('recoff'), 'telemetry.retentionDays': 30,
@@ -184,6 +184,27 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
     } });
   };
   if (m.type === 'loadModels') setTimeout(sendModels, 200);
+  // Settings → Continuity & sync. ?cont=opening|degraded|migrating|failed (default: ready, 1.6 import done).
+  const contView = () => {
+    const cont = q.get('cont') || 'ready';
+    if (cont === 'opening') return { state: 'opening' };
+    if (cont === 'degraded') return { state: 'degraded', reason: "EACCES: permission denied, mkdir '/Volumes/Shared/localpilot/continuity'" };
+    const failed = cont === 'failed' ? [{ path: '/Users/me/Library/Application Support/Code/User/workspaceStorage/9f2c/localpilot.localpilot-agent/sessions/s_01HQ7B.json', kind: 'vscode-session', error: 'Unexpected end of JSON input' }, { path: '/Users/me/.localpilot/workspaces/4e1a/sessions/cli-01HR2.json', kind: 'cli-session', error: 'not a LocalPilot chat file' }] : [];
+    return {
+      state: 'ready', indexState: cont === 'migrating' ? 'catching-up' : 'ready',
+      migrationProgress: cont === 'migrating' ? { state: 'running', done: 214, total: 806, failed: 0 } : { state: 'done', done: 806, total: 806, failed: failed.length },
+      stats: {
+        dataDir: '/Users/me/.localpilot/continuity', deviceId: 'dev_01JC8ZQ4M2X7T9R3K5N6P8W0YB', deviceName: 'Sam’s MacBook Pro', stream: 'dev_01JC8ZQ4M2X7T9R3K5N6P8W0YB.1', streams: 3,
+        bytes: { logs: 48.2 * 1048576, index: 17.9 * 1048576, blobs: 212 * 1048576, backups: 96 * 1048576, migrationBackup: 61 * 1048576, drafts: 0, total: 435 * 1048576 },
+        index: { state: cont === 'migrating' ? 'catching-up' : 'ready', events: 412880, bytes: 17.9 * 1048576, fts: 'fts4', holder: true, skipped: 0 },
+        conversations: 1284, messages: 58211, memory: 46, trash: cont === 'failed' ? 0 : 7,
+        lastBackup: { file: '/Users/me/.localpilot/continuity/backups/20261101-091500.lpbackup', at: Date.now() - 86400e3 * 3, bytes: 32 * 1048576 }, backups: 3,
+        migration: { state: cont === 'migrating' ? 'running' : failed.length ? 'partial' : 'done', version: 1, completedAt: cont === 'migrating' ? undefined : Date.now() - 86400e3 * 5, sources: 806, events: 391204, failed, backupDir: '/Users/me/.localpilot/continuity/migration/legacy-backup/20261102', backupBytes: cont === 'migrating' ? 12 * 1048576 : 61 * 1048576 },
+      },
+    };
+  };
+  if (m.type === 'continuityLoad') setTimeout(() => send({ type: 'continuity', view: contView() }), 150);
+  if (m.type === 'continuityAction') setTimeout(() => send({ type: 'continuity', view: contView(), message: { rebuildIndex: 'Conversation index rebuilt: 412,880 events, 17.9 MB.', backupNow: 'Backup written: 20261107-101500.lpbackup (32.4 MB, 412,880 events).', emptyTrash: 'Deleted 7 item(s) permanently.', retryMigration: 'Every file was imported.' }[m.action] }), 900);
   if (m.type === 'removeModel') {
     // Host side of a delete: a running job (spinner on the row), then the model disappears from the list and the
     // models view is pushed again. The confirmation dialog and the native notification live in VS Code.

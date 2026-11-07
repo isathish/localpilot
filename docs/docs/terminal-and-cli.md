@@ -107,9 +107,25 @@ An installed Ollama that is not running is started by the CLI when a run or `loc
 | `localpilot history delete <id>` | Deletes a saved session (by id, unique id prefix or list number) |
 | `localpilot history export <id> [-o file]` | Exports a session as Markdown (printed, or written to `-o file.md`) or as a standalone HTML page (`-o file.html`) |
 | `localpilot history import [claude\|codex] [N\|all]` | Imports this folder's Claude Code chats (`~/.claude/projects/…`) and Codex chats (`~/.codex/sessions/…`) into the saved sessions; see [Importing chats](#importing-claude-code-and-codex-chats) |
+| `localpilot history [list] --view all\|pinned\|favorites\|archived\|trash [--tag t] [--all-projects] [--json]` | Every conversation in the conversation log (this folder's project by default), with counts per view |
+| `localpilot history search <query> [--in code,errors] [--all-projects] [--json]` | Full-text search over titles, messages, code and errors, with the inline filters `in:` `from:` `project:` `tag:` `model:` `is:` `before:` `after:` |
+| `localpilot history show <id> [--branch b]` | Prints a conversation (any project, archived or in Trash) |
+| `localpilot history show --runs <id> [--json]` | Its agent runs, newest first: outcome, model, tokens, what ran and the files changed |
+| `localpilot history export <id…> --format json\|md\|html\|pdf [-o file\|folder]` | Exports conversations; JSON is complete and can be imported again, pdf writes a print-ready page |
+| `localpilot history import <file.json\|file.lpshare> [--code CODE]` | Imports a JSON export or a secure share (the code from `--code`, `LOCALPILOT_SHARE_CODE` or a prompt) as a new chat of this folder |
+| `localpilot history pin\|unpin\|favorite\|unfavorite\|archive\|unarchive\|trash\|restore\|purge <id…>` | Flags, Trash (restorable) and permanent deletion; `empty-trash` empties it |
+| `localpilot history tag <id> +a -b`, `rename <id> <title>` | Tags and titles |
+| `localpilot history versions <id>`, `branches <id>` | Version history and branches of a conversation |
+| `localpilot history duplicate <id> [--from <messageId>]`, `merge <id> <id>` | A copy (up to a message), or a new chat that continues one with a summary of another |
+| `localpilot history share <id> [-o file] [--redact\|--keep]`, `open-share <file> [--code CODE]` | An encrypted `.lpshare` file and its one-time share code; secrets found are redacted or kept as you choose |
+| `localpilot memory list [--type t] [--all-projects] [--trash] [--json]` | Every kind of memory (project, developer, conversation, task, knowledge, agent); `global` is accepted for developer |
+| `localpilot memory show\|edit\|rm\|restore\|purge <id\|name>`, `add --type t <name> [text\|-]` | Print, change (text, `-` for stdin, or `$EDITOR`), move to Trash and back, delete for good, or create a note; project and developer notes are written to their files |
+| `localpilot memory search <words> [--all-projects] [--json]`, `move <id> <type>`, `pin\|unpin <id>`, `local-only <id> on\|off`, `versions <id>` | Search all memory, change a note's type or flags, list its versions. `/memory list\|search\|add\|rm …` does the same in the interactive CLI |
 | `localpilot schedule create <name> --cron "…" --prompt "…"` | Runs a task on a schedule, unattended; see [Scheduled agents](#scheduled-agents) |
 | `localpilot --acp` | Serves the Agent Client Protocol on stdio for Zed, JetBrains IDEs and Neovim; see [Editors over ACP](acp.md) |
 | `localpilot recovery list\|show <id>\|resume <id>\|clear` | Self-healing state of saved sessions: list the interrupted, incomplete and blocked ones, show one (phase, attempt N/M, failures, root cause, next actions), continue one, or clear finished states; see [Self-healing in the CLI](#self-healing-in-the-cli) |
+| `localpilot recovery runs [<id>] [--json]` | Agent runs a crash or a closed terminal cut off (from the shared continuity log, VS Code's too), with what ran and the files they changed; see [Agent runs and crash recovery]({{ '/docs/continuity/' | relative_url }}#agent-runs-and-crash-recovery) |
+| `localpilot data stats\|backup\|restore <file>\|rebuild-index\|migrate\|gc` | The conversation storage VS Code and the CLI share (`~/.localpilot/continuity`): sizes and import state (`--json`), a backup (`-o file`, `--encrypt` with a passphrase prompt or `LOCALPILOT_BACKUP_PASSPHRASE`), a restore that merges, an index rebuild, the import of 1.6 data (`--status`, `--retry`, `--remove-backup`) and clean-up of unused attachments; see [Conversations, memory & sync]({{ '/docs/continuity/' | relative_url }}) |
 | `localpilot work [--once] [--max N]` | Takes tasks from the [shared board](parallel-agents.md#the-shared-board) (`.localpilot/board`) one after another until none is left; run several for parallel workers |
 
 ### Benchmarking models
@@ -270,7 +286,9 @@ Run `localpilot` with no task to start a session. These commands are available:
 | `/isolate`, `/apply`, `/discard` | Move to a git worktree; bring its changes into your checkout; throw them away |
 | `/commands`, `/permissions`, `/hooks` | Custom commands, permission rules, hooks (see [Claude Code compatibility]({{ '/docs/claude-code-compatibility/' | relative_url }})) |
 | `/clear` | Clear the conversation |
-| `/history` | List the saved sessions in this folder |
+| `/history` | List the saved sessions in this folder; `/history search <words>` searches every conversation |
+| `/trash` | Conversations in Trash; `/trash restore <id>` brings one back |
+| `/branch` | This chat's branches; `/branch switch <n>`, `/branch from <messageId>` (continue from a message on a new branch) |
 | `/resume [N\|id]` | Switch to a saved session (without an argument, pick from the list) |
 | `/fork [name]` | Copy this session and continue in the copy; the original stays as it was. History shows "forked from …" |
 | `/doctor` | Run the checks from `localpilot doctor` |

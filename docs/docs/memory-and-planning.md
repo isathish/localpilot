@@ -13,15 +13,22 @@ The agent can save notes and reads them back at the start of every session. Note
 | project | `<workspace>/.localpilot/memory/<name>.md` | Build and test commands, conventions, architecture facts. Commit it to share with your team |
 | global | VS Code global storage, `memory/<name>.md` | Your personal preferences across all workspaces |
 
+Since 1.7 these are two of **six memory types**: project, developer (the "global" notes; `global` still works
+everywhere), conversation (one chat's summary and notes), task (a running plan's checklist; expires
+`localpilot.memory.taskExpiryDays` after it is done), knowledge (reference you look up with `#memory:<name>`) and agent
+(pitfalls and fixes the agent learned). The memory tools take an optional `type`, `memory_search` searches every type, and
+**Memory manager** edits, moves, pins, versions and trashes them. See
+[Conversations, memory & sync]({{ '/docs/continuity/' | relative_url }}#memory).
+
 How it works:
 
 - The agent uses `memory_save` (replace or append), `memory_read`, `memory_list` and `memory_delete`. Its instructions tell it to record verified facts and never secrets.
 - Every system prompt includes an index of notes (name and first line), newest first, and the full text of notes of 1,200 characters or less, within about 5% of the context window (1,500 to 12,000 characters). Notes that do not fit are counted and stay reachable with `memory_list` and `memory_read`.
 - You can ask directly: *"remember that we deploy with `make release` and tests need `DATABASE_URL`"*.
-- **Saved automatically.** Small local models rarely save notes on their own. After a run with at least three tool calls in which the agent saved nothing, LocalPilot asks the same model, in the background once the answer is out, whether the run revealed durable facts: a build or test command that worked, a convention, a pitfall and its fix, a stated preference. It appends at most three short notes to project memory and shows **Saved to memory: …**; most runs save nothing. Anything that looks like a credential is dropped, and benchmark and other unattended runs never save. Set `localpilot.memory.autoSave` to `false` to turn this off.
+- **Saved automatically.** Small local models rarely save notes on their own. After a run with at least three tool calls in which the agent saved nothing, LocalPilot asks the same model, in the background once the answer is out, whether the run revealed durable facts: a build or test command that worked, a convention, a pitfall and its fix, a stated preference. It appends at most three short notes to project memory (since 1.7 a pitfall and its fix is kept as an agent lesson instead) and shows **Saved to memory: …**; most runs save nothing. Anything that looks like a credential is dropped, and benchmark and other unattended runs never save. Set `localpilot.memory.autoSave` to `false` to turn this off.
 - `/memory` in the chat lists the saved notes along with the instruction files in force: `CLAUDE.md`, `AGENTS.md`, and rules from `.localpilot/rules/`, `.claude/rules/`, `.cursor/rules/`, `.clinerules` and `.cline/rules/` (see [instruction files]({{ '/docs/claude-code-compatibility/' | relative_url }}#claudemd-and-instruction-files)). Rules switched off with `disabled: true` are not listed; conditional rules (`paths:` / `globs:`) are marked as such, with whether they applied last turn.
 
-To manage notes, open **Settings → Memory & history**. It lists every note with scope, size and age, and lets you open or delete notes or clear a whole scope. *LocalPilot: Open Memory Notes* opens the folder. Set `localpilot.memory.enabled` to `false` to turn memory off.
+To manage every type, open **Memory manager** (*LocalPilot: Open Memory Manager*). For the note files, open **Settings → Memory & history**. It lists every note with scope, size and age, and lets you open or delete notes or clear a whole scope. *LocalPilot: Open Memory Notes* opens the folder. Set `localpilot.memory.enabled` to `false` to turn memory off.
 
 ## Planning with a checklist
 
@@ -35,7 +42,11 @@ The checklist is saved with the session and included in every request, so the ag
 
 ## Chat history
 
-Chats are stored per workspace in VS Code's workspace storage on your machine. See [Privacy]({{ '/privacy/' | relative_url }}) for what leaves your machine.
+Chats are stored per workspace in VS Code's workspace storage on your machine, and (since 1.7) in the conversation log
+shared by every project and the CLI. The navigator adds Favorites, Archived and Trash with counts, every project, search
+in code and errors, tags, branches and versions, export, import and secure share: see
+[Conversations, memory & sync]({{ '/docs/continuity/' | relative_url }}). See [Privacy]({{ '/privacy/' | relative_url }})
+for what leaves your machine.
 
 Open the history with **All chats** in the tab bar (or **+N** when there are more chats than tabs):
 
@@ -50,7 +61,8 @@ Open the history with **All chats** in the tab bar (or **+N** when there are mor
 - **Select** deletes several chats at once: tick rows (or use **Select all** / **Select none**), then **Delete N selected**, which shows their total size.
 - Keys: <kbd>↑</kbd> / <kbd>↓</kbd>, <kbd>Enter</kbd>, <kbd>F2</kbd> and <kbd>Delete</kbd> act on the selected row. In selection mode <kbd>Enter</kbd> ticks the selected row, <kbd>Delete</kbd> deletes the ticked ones (after a confirmation) and <kbd>Esc</kbd> leaves selection mode.
 
-Deleting a chat also removes its transcript archive, its checkpoints and the logs of its detached commands.
+Deleting a chat moves it to Trash (with Undo); deleting it permanently from Trash also removes its transcript archive,
+its checkpoints and the logs of its detached commands. Without conversation storage a delete is immediate, as in 1.6.
 
 Each chat also records its token usage: uncached input, output, prompt-cache reads and writes, the number of model requests, and the cost when the provider reports one (OpenRouter). Subagent requests count towards the chat that started them and are also kept as a separate breakdown. The totals are saved in the chat's session file. Anthropic and OpenAI-compatible servers report cache tokens. Ollama does not.
 
@@ -58,9 +70,9 @@ A chat's title is your first message until you rename it. Empty chats you never 
 
 **Settings → Memory & history** shows how many chats exist and how much disk they use. You can:
 
-- set **Keep at most** (`localpilot.sessions.retention`, default 50). The oldest idle chats are removed when a new chat starts. Pinned and running chats do not count.
+- set **Keep at most** (`localpilot.sessions.retention`, default 50). The oldest idle chats move to **Archived** when a new chat starts (still searchable and openable from the navigator; removed only without conversation storage). Pinned and running chats do not count.
 - set **Transcripts in memory** (`localpilot.storage.sessionsInMemory`, default 16). Every chat stays in the list, but only the most recently used transcripts are held in RAM; the others load from disk when you open or search them. The page shows how many are loaded.
-- run **Clear chat history…** (also in the All chats menu and the Command Palette). It deletes idle chats, shows how much disk they take, and can keep pinned ones. Running agents keep going.
+- run **Clear chat history…** (also in the All chats menu and the Command Palette). It moves idle chats to Trash, shows how much disk they take, and can keep pinned ones. Running agents keep going.
 
 ## Compaction
 

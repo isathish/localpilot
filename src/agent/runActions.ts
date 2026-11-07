@@ -79,4 +79,6 @@ export function toolFailurePrompt(r: ToolFailureRequest): string | undefined {
 }
 
 /** The turn that picks a stopped or interrupted run back up. */
+/** Continue on an answer a crash or a closed laptop cut off (the partial answer stays in the chat, above this). */
+export const CONTINUE_PARTIAL_PROMPT = 'Your previous answer was cut off (LocalPilot closed while it was being written). Continue it from exactly where it stopped. Do not repeat what you already wrote, and do not redo finished steps.';
 export const CONTINUE_PROMPT = 'Continue the task where you left off. Check what was already done (changed files, finished checklist items) before doing anything else, and do not repeat finished steps.';

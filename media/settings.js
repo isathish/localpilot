@@ -56,7 +56,7 @@
   };
   const SECTIONS = [
     ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['marketplace', 'Marketplace', I.download], ['customize', 'Customize', I.scale], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
-    ['web', 'Web search', I.globe], ['documents', 'Markdown & PDF', I.file], ['memory', 'Memory & history', I.brain], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['telemetry', 'Telemetry', I.pulse], ['shortcuts', 'Keyboard shortcuts', I.keyboard], ['advanced', 'Advanced', I.wrench],
+    ['web', 'Web search', I.globe], ['documents', 'Markdown & PDF', I.file], ['memory', 'Memory & history', I.brain], ['continuity', 'Continuity & sync', I.cloud], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['telemetry', 'Telemetry', I.pulse], ['shortcuts', 'Keyboard shortcuts', I.keyboard], ['advanced', 'Advanced', I.wrench],
   ];
   /** Sidebar order: the Dashboard overview on top (never folds), then where models come from, how the agent behaves, what it can reach, and what it keeps. */
   const NAV_HOME = ['dashboard'];
@@ -64,7 +64,7 @@
     { id: 'models', label: 'Models', items: ['providers', 'models', 'gallery'] },
     { id: 'agent', label: 'Agent', items: ['agent', 'skills', 'marketplace', 'customize', 'completions'] },
     { id: 'tools', label: 'Tools & integrations', items: ['mcp', 'web', 'documents'] },
-    { id: 'data', label: 'Data & system', items: ['memory', 'telemetry', 'shortcuts', 'advanced'] },
+    { id: 'data', label: 'Data & system', items: ['memory', 'continuity', 'telemetry', 'shortcuts', 'advanced'] },
   ];
   /** Settings search. Sections match on their name plus these words; fields match on label and key and jump to the row
    *  (`field()` tags it with data-deps). Keep FIELD_INDEX in step with the field() calls of each section. */
@@ -80,6 +80,7 @@
     web: 'searxng brave tavily duckduckgo browser screenshot fetch internet offline online',
     documents: 'markdown reader preview mermaid outline toc front matter export pdf viewer zoom thumbnails page colours dark sepia scroll sync',
     memory: 'history chats notes retention transcripts',
+    continuity: 'continuity sync backup restore trash undelete version history index rebuild search data folder storage migration import 1.6 legacy event log',
     mcp: 'model context protocol server tools reconnect',
     dashboard: 'telemetry metrics usage logs redis stats throughput self-healing recovery failures root cause patches regression intervention',
     telemetry: 'telemetry metrics usage record retention redis otlp opentelemetry otel collector traces grafana langfuse export delete',
@@ -98,7 +99,9 @@
     ['models', 'ollama.flashAttention', 'Ollama flash attention'], ['models', 'ollama.kvCacheType', 'Ollama KV cache'],
     ['providers', 'providers', 'Providers'], ['mcp', 'mcpServers', 'MCP servers'], ['mcp', 'mcp.watchServerFiles', 'Restart MCP servers on file change'], ['providers', 'gateways.litellmConfig', 'LiteLLM config file'], ['models', 'models.disabled', 'Hidden models'],
     ['agent', 'autoMode.enabled', 'Review approvals with a local model (auto mode)'], ['agent', 'autoMode.model', 'Auto mode reviewer model'], ['agent', 'queue.concurrency', 'Queued tasks at once'],
-    ['memory', 'memory.maxNoteChars', 'Largest memory note'], ['memory', 'memory.maxNotes', 'Memory notes per scope'],
+    ['memory', 'memory.maxNoteChars', 'Largest memory note'], ['memory', 'memory.maxNotes', 'Memory notes per scope'], ['memory', 'memory.taskExpiryDays', 'Keep task memory after the task is done'],
+    ['continuity', 'continuity.dataDir', 'Data folder'], ['continuity', 'continuity.indexMaxMB', 'Largest search index'], ['continuity', 'continuity.trashRetentionDays', 'Keep deleted items in Trash'], ['continuity', 'continuity.historyDays', 'Keep version history'],
+    ['continuity', 'continuity.backup.enabled', 'Back up automatically'], ['continuity', 'continuity.backup.intervalDays', 'Days between backups'], ['continuity', 'continuity.backup.keep', 'Backups kept'], ['continuity', 'continuity.relatedConversations', 'Offer related earlier conversations'], ['continuity', 'continuity.captureToolOutput', 'Run history keeps of tool output'],
     ['advanced', 'supervisor.enabled', 'Keep local services running'], ['advanced', 'supervisor.intervalSeconds', 'Service check interval'], ['advanced', 'supervisor.autoInstall', 'Install Ollama without asking'],
     ['skills', 'skillsPaths', 'Skill folders'], ['skills', 'skills.repositories', 'Skill repositories'], ['skills', 'skills.disabled', 'Disabled skills'], ['skills', 'pluginPaths', 'Plugin folders'],
     ['agent', 'approvals.terminal', 'Terminal commands approval'], ['agent', 'approvals.write', 'File edits approval'], ['agent', 'approvals.delete', 'Deleting files approval'],
@@ -1028,7 +1031,7 @@
   function renderSection() {
     if (state.section !== 'dashboard' && state.dash.timer) { stopDashboardTimer(); }
     const sec = el('section', 'sec');
-    ({ providers: secProviders, models: secModels, gallery: secGallery, marketplace: secMarketplace, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, shortcuts: secShortcuts, advanced: secAdvanced }[state.section] || secProviders)(sec);
+    ({ providers: secProviders, models: secModels, gallery: secGallery, marketplace: secMarketplace, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, continuity: secContinuity, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, shortcuts: secShortcuts, advanced: secAdvanced }[state.section] || secProviders)(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
@@ -2569,12 +2572,12 @@
     const kv = el('div', 'field wide');
     kv.innerHTML = `<dl class="kv store"><dt>Chats</dt><dd><b>${ss.count}</b>${ss.pinned ? ` · ${ss.pinned} pinned` : ''}${ss.running ? ` · <span class="badge on">${ss.running} running</span>` : ''}</dd><dt>Messages</dt><dd>${(ss.messages || 0).toLocaleString()}</dd><dt>On disk</dt><dd>${fmtBytes(ss.bytes + (ss.checkpointBytes || 0))}${ss.checkpointBytes ? ` <span class="muted" title="File snapshots and git objects only checkpoint refs keep (freed by git gc once the chats are deleted)">(checkpoints ${fmtBytes(ss.checkpointBytes)})</span>` : ''}${ss.oldest ? ` · oldest ${fmtAgo(ss.oldest)}` : ''}</dd>${ss.inMemory !== undefined ? `<dt>In memory</dt><dd>${ss.inMemory} of ${ss.count} transcript${ss.count === 1 ? '' : 's'} — the rest are read from disk when opened</dd>` : ''}<dt>Where</dt><dd>VS Code workspace storage for this folder — never leaves this machine.</dd></dl>`;
     hist.appendChild(kv);
-    const retention = field('sessions.retention', 'Keep at most', 'Oldest idle chats are removed automatically when a new chat starts. Pinned and running chats never count. <code>0</code> keeps everything.', 'number', { min: 0, max: 1000, step: 5 });
+    const retention = field('sessions.retention', 'Keep at most', 'When a new chat starts, the oldest idle chats beyond this move to <b>Archived</b> in the conversation navigator (still searchable). Pinned and running chats never count. <code>0</code> keeps everything.', 'number', { min: 0, max: 1000, step: 5 });
     hist.appendChild(retention);
     hist.appendChild(field('storage.sessionsInMemory', 'Transcripts in memory', 'Full chat transcripts kept in RAM (running chats and the one on screen always are). Older chats stay in the list and load from disk when you open or search them — lower this to save memory with long histories.', 'number', { min: 2, max: 500, step: 1 }));
     hist.appendChild(field('history.includeCli', 'Include chats from the terminal CLI', 'Chats started with the <code>localpilot</code> CLI in this folder appear in history marked <b>CLI</b> (read from <code>~/.localpilot/workspaces/</code>). Takes effect after a window reload.', 'toggle'));
     const acts = el('div', 'btnrow');
-    acts.innerHTML = `<span class="muted small">Clearing removes idle chats only; running agents keep going and pinned chats can be kept.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.showSessions">${I.chat}Browse chats</button><button class="btn sm danger" data-cmd="localpilot.clearHistory" ${ss.count ? '' : 'disabled'}>${I.trash}Clear chat history…</button>`;
+    acts.innerHTML = `<span class="muted small">Clearing moves idle chats to Trash (restorable for 30 days); running agents keep going and pinned chats can be kept.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.showSessions">${I.chat}Browse chats</button><button class="btn sm danger" data-cmd="localpilot.clearHistory" ${ss.count ? '' : 'disabled'}>${I.trash}Clear chat history…</button>`;
     hist.appendChild(acts);
     sec.appendChild(hist);
     // ---- memory notes
@@ -2585,8 +2588,12 @@
       field('memory.enabled', 'Enable memory', 'The agent can <code>memory_save</code> / <code>memory_read</code> notes in <code>.localpilot/memory/</code> (project, commit-able) and in global storage. A compact index is added to every prompt.', 'toggle', { after: mem }),
       memAutoSave(),
       field('memory.maxNoteChars', 'Largest note', 'Characters per note. When a note grows past it, its oldest paragraphs are dropped (a leading heading is kept).', 'number', { min: 500, max: 100000, step: 500 }),
-      field('memory.maxNotes', 'Notes per scope', 'Project and global each. Past it, the least recently updated notes are deleted (<code>README</code> is kept).', 'number', { min: 5, max: 2000, step: 5 })
+      field('memory.maxNotes', 'Notes per scope', 'Project and global each. Past it, the least recently updated notes are deleted (<code>README</code> is kept).', 'number', { min: 5, max: 2000, step: 5 }),
+      field('memory.taskExpiryDays', 'Keep task memory after the task is done', 'Days. The checklist and notes of a plan or todo list move to Trash this long after every todo is done.', 'number', { min: 1, max: 3650, step: 1 })
     ));
+    const mm = el('div', 'btnrow mmgr');
+    mm.innerHTML = `<span class="muted small">Six kinds of memory — project, developer, conversation, task, knowledge and agent — in one place: edit, move between types, keep on this machine, pin, versions, Trash.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.continuity.openMemoryManager">${I.book}Open Memory manager</button>`;
+    sec.appendChild(mm);
     const notes = Array.isArray(d.memory.notes) ? d.memory.notes : [];
     if (notes.length) {
       const t = el('table', 'tbl notes', `<thead><tr><th>Note</th><th>Summary</th><th>Scope</th><th>Updated</th><th></th></tr></thead><tbody>${notes.map((n) => `<tr data-name="${esc(n.name)}" data-scope="${esc(n.scope)}"><td class="mono"><a data-open title="Open ${esc(n.name)}.md">${esc(n.name)}</a></td><td class="muted">${esc(n.summary || '')}<span class="muted small"> · ${(n.chars / 1024).toFixed(1)} KB</span></td><td><span class="badge">${esc(n.scope)}</span></td><td class="muted small">${fmtAgo(n.updatedAt)}</td><td><button class="btn ghost sm danger" data-del title="Delete note">${I.trash}</button></td></tr>`).join('')}</tbody>`);
@@ -2601,6 +2608,131 @@
     }
     sec.appendChild(el('p', 'muted small', `Skills and subagents moved to their own page: <a data-sec="skills">Skills &amp; subagents</a>.`));
     sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
+  }
+
+  // ------------------------------------------------------------------ continuity & sync
+  /** Settings → Continuity & sync: the data folder, the 1.6 import, Trash and version history, backups. Data comes from
+   *  the host on request (`continuityLoad`) and after every action; it refreshes itself while something is in progress. */
+  function contLoad() { state.cont = state.cont || {}; state.cont.requested = Date.now(); post({ type: 'continuityLoad' }); }
+  function contAct(action) { state.cont = state.cont || {}; state.cont.busy = action; renderContinuityBody(); post({ type: 'continuityAction', action }); }
+  function contBtn(action, label, icon, opts = {}) {
+    const busy = state.cont && state.cont.busy === action;
+    return `<button class="btn sm${opts.danger ? ' danger' : ''}" data-cact="${action}"${opts.disabled || (state.cont && state.cont.busy) ? ' disabled' : ''}${opts.title ? ` title="${esc(opts.title)}"` : ''}>${busy ? '<span class="spinner"></span>' : icon}${esc(label)}</button>`;
+  }
+  function secContinuity(sec) {
+    head(sec, 'Continuity & sync', 'Where LocalPilot keeps your conversations, memory, attachments and backups on this machine, and for how long. VS Code and the <code>localpilot</code> CLI share it.');
+    const body = el('div', 'cont-body'); body.id = 'contBody';
+    sec.appendChild(body);
+    if (!state.cont || !state.cont.view || Date.now() - (state.cont.requested || 0) > 4000) { contLoad(); }
+    renderContinuityBody();
+  }
+  function renderContinuityBody() {
+    const body = document.getElementById('contBody');
+    if (!body) { return; }
+    const v = state.cont && state.cont.view;
+    body.replaceChildren();
+    if (!v || v.state === 'opening') {
+      body.appendChild(skeleton('Opening conversation storage…', 4));
+      clearTimeout(state.contTimer); state.contTimer = setTimeout(() => state.section === 'continuity' && contLoad(), 1500);
+      return;
+    }
+    if (v.state === 'degraded') {
+      const w = el('div', 'policy cont-off'); w.setAttribute('role', 'alert');
+      w.innerHTML = `${I.warn}<div><b>Conversation storage is off in this window.</b> Chats keep working and are saved as before. <span class="muted">${esc(v.reason || '')}</span></div>`;
+      body.appendChild(w);
+      body.appendChild(card(field('continuity.dataDir', 'Data folder', 'A folder LocalPilot can write to. Empty uses <code>~/.localpilot/continuity</code>. Takes effect after a window reload.', 'text', { placeholder: '~/.localpilot/continuity' })));
+      return;
+    }
+    const st = v.stats || { bytes: {}, migration: { failed: [] } };
+    const b = st.bytes || {};
+    const idx = st.index || {};
+    const idxBadge = v.indexState === 'ready' ? '<span class="badge ok">ready</span>' : v.indexState && v.indexState.startsWith('failed') ? `<span class="badge warn" title="${esc(v.indexState)}">unavailable</span>` : `<span class="badge">${esc((v.indexState || 'starting').replace(/-/g, ' '))}</span>`;
+    // ---- storage
+    body.appendChild(el('h2', 'sub', 'Storage'));
+    const store = el('div', 'card');
+    const kv = el('div', 'field wide');
+    kv.innerHTML = `<dl class="kv store cont-kv"><dt>Data folder</dt><dd><code class="cont-path" title="${esc(st.dataDir || '')}">${esc(st.dataDir || '')}</code></dd>`
+      + `<dt>Conversations</dt><dd><b>${(st.conversations || 0).toLocaleString()}</b> · ${(st.messages || 0).toLocaleString()} messages${st.trash ? ` · ${st.trash} in Trash` : ''}</dd>`
+      + `<dt>Change log</dt><dd>${fmtBytes(b.logs || 0)} <span class="muted">· ${plural(st.streams || 0, 'log')} (one per window or CLI)</span></dd>`
+      + `<dt>Search index</dt><dd>${fmtBytes(b.index || idx.bytes || 0)} ${idxBadge}${idx.fts ? ` <span class="muted small">${esc(idx.fts.toUpperCase())}</span>` : ''}</dd>`
+      + `<dt>Attachments</dt><dd>${fmtBytes(b.blobs || 0)}</dd>`
+      + `<dt>Backups</dt><dd>${fmtBytes(b.backups || 0)} <span class="muted">· ${plural(st.backups || 0, 'backup')}</span></dd>`
+      + `<dt>This device</dt><dd>${esc(st.deviceName || '')} <span class="muted small mono">${esc(st.deviceId || '')}</span></dd></dl>`;
+    store.appendChild(kv);
+    store.appendChild(field('continuity.dataDir', 'Data folder', 'Empty uses <code>~/.localpilot/continuity</code> (or <code>$LOCALPILOT_DATA_DIR/continuity</code>). Takes effect after a window reload; nothing is moved for you.', 'text', { placeholder: '~/.localpilot/continuity' }));
+    store.appendChild(field('continuity.indexMaxMB', 'Largest search index', 'Past it, archived and deleted conversations older than 180 days are searchable by title only.', 'number', { min: 32, max: 16384, step: 32, unit: 'MB' }));
+    const sa = el('div', 'btnrow');
+    sa.innerHTML = `<span class="muted small">The index is built from the change log and can always be rebuilt.</span><span class="spacer"></span>${contBtn('openFolder', 'Open folder', I.folder)}${contBtn('rebuildIndex', 'Rebuild index', I.refresh)}`;
+    store.appendChild(sa);
+    body.appendChild(store);
+    // ---- migration from 1.6
+    const mig = st.migration || { failed: [] };
+    const prog = v.migrationProgress || {};
+    body.appendChild(el('h2', 'sub', 'Import from LocalPilot 1.6'));
+    const mc = el('div', 'card');
+    let line;
+    if (prog.state === 'running') { line = `<span class="spinner"></span>Importing your history… ${prog.done} of ${prog.total}`; }
+    else if (mig.state === 'not-started') { line = 'Not started yet. It runs on its own in the background.'; }
+    else { line = `${I.check}Imported ${plural(mig.sources || 0, 'file')} (${(mig.events || 0).toLocaleString()} changes)${mig.completedAt ? ` · ${new Date(mig.completedAt).toLocaleDateString()}` : ''}`; }
+    const ml = el('div', 'btnrow cont-mig'); ml.setAttribute('aria-live', 'polite');
+    ml.innerHTML = `<span class="small">${line}</span>`;
+    mc.appendChild(ml);
+    const failed = Array.isArray(mig.failed) ? mig.failed : [];
+    const mb = el('div', 'btnrow');
+    mb.innerHTML = `<span class="muted small">${mig.backupBytes ? `Copies of the original files are kept (${fmtBytes(mig.backupBytes)}) until you remove them.` : 'No copies of 1.6 files are kept.'}</span><span class="spacer"></span>${failed.length ? contBtn('retryMigration', 'Retry', I.refresh) : ''}${contBtn('removeMigrationBackup', mig.backupBytes ? `Remove migration backup (${fmtBytes(mig.backupBytes)})` : 'Remove migration backup', I.trash, { danger: true, disabled: !mig.backupBytes || prog.state === 'running', title: prog.state === 'running' ? 'Available when the import has finished' : undefined })}`;
+    mc.appendChild(mb);
+    body.appendChild(mc);
+    if (failed.length) {
+      const t = el('div', 'card tblwrap');
+      t.innerHTML = `<h3>Could not be read <span class="count">${failed.length}</span></h3><table class="tbl cont-failed"><thead><tr><th>File</th><th>Why</th></tr></thead><tbody>${failed.slice(0, 20).map((f) => `<tr><td class="mono" title="${esc(f.path)}">${esc(f.path.split(/[\\/]/).slice(-2).join('/'))}</td><td class="muted small">${esc(f.error)}</td></tr>`).join('')}</tbody></table>`;
+      body.appendChild(t);
+    }
+    // ---- context (CONTEXT)
+    body.appendChild(el('h2', 'sub', 'Context'));
+    const cc = card(
+      field('continuity.relatedConversations', 'Offer related earlier conversations', 'While you write the first message of a new chat, up to three earlier chats of this project that look related are offered (<b>Related: … · Add</b>). Nothing is added until you click <b>Add</b>.', 'toggle')
+    );
+    const cca = el('div', 'btnrow');
+    cca.innerHTML = `<span class="muted small">Named sets of files, snippets, notes and earlier chats, attached with <code>#context:name</code>; and what the model saw on each request.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.continuity.openContextLibrary">${I.book}Open Context library</button>`;
+    cc.appendChild(cca);
+    body.appendChild(cc);
+    // ---- runs and checkpoints (SESSION)
+    body.appendChild(el('h2', 'sub', 'Runs and checkpoints'));
+    const rc = card(
+      field('continuity.captureToolOutput', 'Run history keeps of tool output', 'Each agent run keeps what it did, so a run a crash or a closed window cut off shows <b>What ran</b> and the files it changed. This sets how much of each step\'s output is kept with it.', 'select', { options: [['errors', 'Errors only', ''], ['summary', 'First 2 KB of each step (default)', ''], ['full', 'Everything', '']] })
+    );
+    const rca = el('div', 'btnrow');
+    rca.innerHTML = `<span class="muted small">The checkpoint taken before each agent turn, per project: view the changes since, restore files, the chat or both.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.continuity.openCheckpoints">${I.refresh}Open Checkpoints</button>`;
+    rc.appendChild(rca);
+    body.appendChild(rc);
+    // ---- trash & history
+    body.appendChild(el('h2', 'sub', 'Trash and version history'));
+    const tc = card(
+      field('continuity.trashRetentionDays', 'Keep deleted items in Trash', 'Deleted conversations, memory notes, context sets and prompt templates can be restored until then. <code>0</code> keeps them until you empty Trash.', 'number', { min: 0, max: 3650, step: 1, unit: 'days' }),
+      field('continuity.historyDays', 'Keep version history', 'Earlier titles, states and note versions. Older changes are folded into the current state.', 'number', { min: 7, max: 3650, step: 1, unit: 'days' })
+    );
+    const ta = el('div', 'btnrow');
+    ta.innerHTML = `<span class="muted small">${st.trash ? `${plural(st.trash, 'conversation')} in Trash.` : 'Trash is empty.'}</span><span class="spacer"></span>${contBtn('emptyTrash', 'Empty Trash…', I.trash, { danger: true, disabled: !st.trash })}`;
+    tc.appendChild(ta);
+    body.appendChild(tc);
+    // ---- backups
+    body.appendChild(el('h2', 'sub', 'Backups'));
+    const bc = card(
+      field('continuity.backup.enabled', 'Back up automatically', 'Conversations, memory and attachments, to the <code>backups</code> folder of the data folder. Restoring merges: it never removes newer data.', 'toggle'),
+      field('continuity.backup.intervalDays', 'Days between backups', '', 'number', { min: 1, max: 365, step: 1, unit: 'days' }),
+      field('continuity.backup.keep', 'Backups kept', 'Older automatic backups are deleted.', 'number', { min: 1, max: 100, step: 1 })
+    );
+    const ba = el('div', 'btnrow');
+    ba.innerHTML = `<span class="muted small">${st.lastBackup ? `Last backup ${fmtAgo(st.lastBackup.at)} · ${fmtBytes(st.lastBackup.bytes)}` : 'No backup yet.'}</span><span class="spacer"></span>${contBtn('restoreBackup', 'Restore from file…', I.undo)}${contBtn('backupNow', 'Back up now', I.download)}`;
+    bc.appendChild(ba);
+    body.appendChild(bc);
+    body.appendChild(el('p', 'muted small', 'Data on this computer is not encrypted by LocalPilot (like your source code); use your operating system’s disk encryption. Backups can be encrypted with a passphrase.'));
+    body.querySelectorAll('[data-cact]').forEach((x) => (x.onclick = () => contAct(x.dataset.cact)));
+    wireGlobal(body);
+    fitTables(body);
+    if (prog.state === 'running' || v.indexState === 'catching-up' || v.indexState === 'rebuilding' || v.indexState === 'loading') {
+      clearTimeout(state.contTimer); state.contTimer = setTimeout(() => state.section === 'continuity' && contLoad(), 2000);
+    }
   }
 
   // ------------------------------------------------------------------ skills & subagents
@@ -4926,6 +5058,11 @@
         if (f && f._rebuild) { const fresh = f._rebuild(); old.replaceWith(fresh.querySelector('#otlpResult')); const tb = f.querySelector('.ctl .row .btn'); const nb = fresh.querySelector('.ctl .row .btn'); if (tb && nb) { tb.replaceWith(nb); } }
         break;
       }
+      case 'continuity':
+        state.cont = { ...(state.cont || {}), view: m.view, busy: null };
+        if (m.message) { toast(m.message, 'info'); }
+        if (state.section === 'continuity') { renderContinuityBody(); }
+        break;
       case 'redisTest':
         state.redisTest = { ok: !!m.ok, info: m.info, error: m.ok ? '' : m.error || 'No answer from Redis' };
         refreshRedisStatus();

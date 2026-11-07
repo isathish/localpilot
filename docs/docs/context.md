@@ -43,6 +43,20 @@ The picker fuzzy-matches what you type after `@` against every file and folder i
 
 Mentions in the input are highlighted. <kbd>Backspace</kbd> right after a mention removes the whole mention. In a sent message, click a context chip to open it: a file opens in the editor, `@problems` opens the Problems panel, `@terminal` the terminal and `@git` Source Control. While an input method editor (Japanese, Chinese, Korean) is composing, <kbd>Enter</kbd> confirms the text and never sends the message. <kbd>⌘I</kbd> / <kbd>Ctrl+I</kbd> opens the **Add context** menu when focus is elsewhere in the chat; in the input it runs **Improve prompt**.
 
+### Earlier conversations, context sets and memory notes
+
+Three more mentions start with `#` (type the prefix for suggestions):
+
+| Mention | Adds |
+|---|---|
+| `#context:<name>` | A set from the **Context library**: its files, folders (globs such as `docs/**`), snippets, memory notes and earlier chats. Links in a set are listed, not fetched |
+| `#chat:<title or id>` | An earlier conversation: its summary, or its first request and last answer, about 1,500 tokens at most |
+| `#memory:<name>` | One memory note (see [Memory & planning]({{ '/docs/memory-and-planning/' | relative_url }})) |
+
+While you write the first message of a new chat, up to three earlier conversations of the same project that look related appear above the message box as **Related: <title> · Add**; **Add** puts `#chat:<id>` into the message, **×** hides the suggestion. Nothing is added without a click. Conversations in Trash are never suggested. Turn this off with `localpilot.continuity.relatedConversations`.
+
+The agent can look through earlier conversations itself with two read-only tools, offered when your request refers to earlier work ("last time", "the bug we fixed yesterday"): `history_search` (words, `"phrases"` and the filters `in:code`, `in:errors`, `from:user`, `before:`, `after:`; this project unless it asks for all projects) and `history_read` (up to 20 messages and 12,000 characters of one conversation per call). See [Conversations, memory & sync]({{ '/docs/continuity/' | relative_url }}#context-library-and-earlier-conversations).
+
 ## The context meter
 
 The ring at the bottom right of the composer shows how much of the model's context window is in use. It turns amber above 65% and red above 85%. Hover it (or focus it with the keyboard) for a breakdown: tokens used, the window, what remains, this chat's prompt and output tokens, cache reads and writes, and where auto-compaction starts (`localpilot.compactionThreshold`, or *off*). Click it and confirm **Compact** to compact the conversation now; `/compact` does the same. While the agent is running the ring is dimmed and compacting waits until it finishes. `/context` prints the token count, window size, message count, number of compactions and the list below.
@@ -61,6 +75,8 @@ The ring at the bottom right of the composer shows how much of the model's conte
 | Compaction summary | Summaries standing in for older messages | |
 
 The counts are estimates scaled to the model's tokenizer; after a request the model reports its real prompt size and the parts are scaled to match. The list appears after the chat's first request.
+
+**Items and Excluded.** Two more tabs on the card list what the last answer's request held, item by item (each attached file, context set, earlier chat, memory note, rule file, compaction summary and tool output, with its tokens), and what was left out: notes marked **Local only** when the model is a cloud model, and memory notes past the memory budget (listed by name only). **Context of this chat…** opens the full record: every request of the chat (one per answer, and one on each side of every compaction), with the breakdown, items, exclusions, working files and todos. The same opens from **⋯ → What did the model see?** on any answer.
 
 Next to the ring, `↑12.3k ↓1.1k` shows the tokens this chat has sent (cached input included) and received, and `$0.0123` its cost on a cloud model with a known price. Hover the ring or the pill for the breakdown: cache reads and writes, requests, subagents' share, or *local · free* for models on your machine. The CLI prints the same after each turn, for example `(13.4k tok · $0.0100)`.
 
@@ -114,6 +130,8 @@ When usage crosses `localpilot.compactionThreshold` (default `0.75`), LocalPilot
 2. **Compact.** The model summarises the older part of the conversation into a structured note: task, decisions, files touched, findings, next steps. The split always lands on a user turn, so tool calls stay paired with their results.
 3. **Tighten and compact again.** If the recent messages alone still overflow, the number kept word for word shrinks from 8 to 4 to 2, with their tool outputs pruned, and the rest goes into the summary. Each pass shows a *Context compacted* note. Expand it to see what was kept as it was (the latest messages, and the request in progress when the split fell inside a turn), what went into the summary (requests, replies, tool calls and outputs, and the files they involved), whether the model or a plain digest wrote it, and the summary itself.
 4. **Truncate.** If summarising fails, the oldest turns are dropped.
+
+**Switching to a model with a smaller window.** Every request is measured against the model that answers it, so after you pick a model whose window is smaller than the conversation, the older part is compacted before the next request (the full transcript stays searchable). The chat says so when you switch.
 
 Each tool output is also clamped to `localpilot.maxToolOutputChars` (default 24,000 characters; the start and end are kept). The model is told to read files by line range.
 

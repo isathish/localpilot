@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { Telemetry } from '../telemetry/telemetry';
 import { AgentRunner, errorKind } from '../agent/agentLoop';
 import { classifyModelError } from '../agent/resilience';
-import { CONTINUE_PROMPT, toolFailurePrompt, type ToolFailureAction } from '../agent/runActions';
+import { CONTINUE_PARTIAL_PROMPT, CONTINUE_PROMPT, toolFailurePrompt, type ToolFailureAction } from '../agent/runActions';
 import { SkillLearner } from '../agent/skillRecommender';
 import { SkillCatalog } from '../agent/skillCatalog';
 import { skillsDestination } from '../agent/skillInstaller';
@@ -39,6 +39,7 @@ import { MessageQueue, QueueRow, queueLabel } from '../agent/messageQueue';
 import { pathsOf, WorktreeChange, WorktreeManager } from '../agent/worktrees';
 import { parseModelSuggestions, quickSuggestions, SuggestionFacts, suggestionPrompt, TaskSuggestion } from '../agent/taskSuggestions';
 import { quickPrompt } from './inlineEdit';
+import { CONTINUITY_MESSAGES, ContinuityFromWebview, ContinuityToWebview } from './continuityMessages';
 import { applyCodeBlock } from './codeBlockApply';
 import { correctPromptNames, PromptFix } from '../agent/promptCorrector';
 import { userText } from '../agent/clarify';
@@ -220,7 +221,8 @@ export type ToWebview =
   /** The prompt library (answer to `promptLibrary`, and again after a save or delete). `workspace`: a folder is open. */
   | { type: 'prompts'; items: PromptItem[]; workspace: boolean; dirs: { workspace?: string; user: string } }
   /** Answer to `savePrompt`: `exists` = the name is taken in that scope (the sheet offers Replace). */
-  | { type: 'promptSaved'; ok: boolean; error?: string; exists?: boolean; invoke?: string; file?: string };
+  | { type: 'promptSaved'; ok: boolean; error?: string; exists?: boolean; invoke?: string; file?: string }
+  | ContinuityToWebview;
 
 /** What the Run interrupted card shows about the run that did not finish. */
 export interface RunInterruptedState {
@@ -231,6 +233,23 @@ export interface RunInterruptedState {
   tasksTotal: number;
   /** Files the chat changed and the user has not reviewed yet (workspace-relative). */
   files: string[];
+  /** Continuity (SESSION): what the run did before it was cut off, newest last (`more` = earlier steps left out). */
+  ran?: { kind: string; name: string; status?: string; detail?: string; error?: string; start: number; end?: number }[];
+  ranMore?: number;
+  /** Continuity: the files the run changed (from its agent session), with A / M / D. */
+  changed?: { path: string; status: 'A' | 'M' | 'D' }[];
+  /** Continuity: the checkpoint taken before the run (Restore checkpoint puts the files back to it). */
+  checkpoint?: { run: number; kind?: string; createdAt: number };
+  /** Continuity: the chat's last answer is a partial one kept from its draft (the card offers Continue / Regenerate / Discard). */
+  partial?: boolean;
+}
+
+/** Continuity's SESSION module as the chat sees it (set by src/ui/sessionHost.ts); absent = 1.6 behaviour. */
+export interface ChatSessionRuns {
+  /** The Run interrupted card's details: what ran, the files changed, the checkpoint. */
+  details(sessionId: string): Promise<Pick<RunInterruptedState, 'ran' | 'ranMore' | 'changed' | 'checkpoint'> | undefined>;
+  /** The partial answer a chat's draft left (laptop off, crash), once. */
+  takePartial(session: Session): ChatMessage | undefined;
 }
 
 /**
@@ -310,6 +329,8 @@ export type FromWebview =
   | { type: 'keepWaiting'; sessionId: string }
   /** Stopped / interrupted run card: continue it, restore the last checkpoint, open its changes, or forget it. */
   | { type: 'runAction'; sessionId: string; action: 'continue' | 'restore' | 'review' | 'dismiss' }
+  /** "Interrupted — partial answer": continue from the partial text, regenerate the answer, or discard the partial text. */
+  | { type: 'resumeDraft'; sessionId: string; action: 'continue' | 'regenerate' | 'discard' }
   /** The git-conflict card asks which files are still in conflict (answered with `conflicts`). */
   | { type: 'checkConflicts'; sessionId: string }
   /** Opens the self-healing dashboard for this chat. */
@@ -384,7 +405,8 @@ export type FromWebview =
   /** `restoreType`: files only (`workspace`), conversation only (`task`) or both (the default). */
   | { type: 'restoreCheckpoint'; sessionId: string; messageIndex: number; restoreType?: RestoreType }
   /** Multi-file diff of what changed since the latest user message (`turn`) or in the whole chat (`session`). */
-  | { type: 'viewChanges'; sessionId: string; scope: 'turn' | 'session' }
+  /** `run`: the turn whose checkpoint to compare with (the Checkpoints page); default the last one. */
+  | { type: 'viewChanges'; sessionId: string; scope: 'turn' | 'session'; run?: number }
   | { type: 'openCheckpointSetting' }
   /** Edit & resend: drop this user message and everything after it, keep files as they are, put the text in the composer. */
   | { type: 'editMessage'; sessionId: string; messageIndex: number }
@@ -418,6 +440,7 @@ export type FromWebview =
   | { type: 'ratingDismiss'; forever: boolean }
   | { type: 'ratingLink'; which: 'review' | 'issue' }
   | { type: 'openChangelog' }
+  | ContinuityFromWebview
   | { type: 'copyText'; text: string }
   /**
    * A button on a recovery card. `text`: the guidance of `retryWithGuidance`; `attempt`: the attempt a `rollback` undoes
@@ -523,6 +546,9 @@ export class ChatController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly _onDidChangeActive = new vscode.EventEmitter<Session | undefined>();
   readonly onDidChangeActive = this._onDidChangeActive.event;
+  /** The user picked another model for a chat (continuity: the window check, model sessions). */
+  private readonly _onDidChangeModel = new vscode.EventEmitter<{ session: Session; from: string; to: string }>();
+  readonly onDidChangeModel = this._onDidChangeModel.event;
   private readonly _onDidChangeRuns = new vscode.EventEmitter<void>();
   readonly onDidChangeRuns = this._onDidChangeRuns.event;
   private readonly _onAgentEvent = new vscode.EventEmitter<AgentEvent>();
@@ -871,6 +897,36 @@ export class ChatController implements vscode.Disposable {
   }
   private pendingImages: { img: ImageAttachment; at: number }[] = [];
 
+  /** Tells the store why the next save rewrites history (continuity's branch reason); stores without hints ignore it. */
+  private hintStore(sessionId: string, reason: 'edit' | 'regenerate'): void {
+    const h = (this.store as { hint?: (id: string, r: 'edit' | 'regenerate') => void }).hint;
+    if (typeof h === 'function') {
+      h.call(this.store, sessionId, reason);
+    }
+  }
+
+  /** Continuity's webview handler (navigator, Trash, Versions, branches, export, share); set by the extension. */
+  continuityHost?: { handle(msg: ContinuityFromWebview, reply?: Sink): Promise<void> };
+  /** Continuity's SESSION module (src/ui/sessionHost.ts): the Run interrupted card's details and partial answers. */
+  sessionRuns?: ChatSessionRuns;
+
+  /** Posts to the surface that asked, or to every chat surface (continuity host, commands). */
+  publish(m: ToWebview, reply?: Sink): void {
+    this.replyTo(reply, m);
+  }
+
+  /** Shows a chat: makes it the active one everywhere (continuity: a chat opened from the navigator or restored). */
+  present(s: Session): void {
+    this.setActive(s);
+  }
+
+  /** Redraws a chat where it is shown (its messages were replaced: branch switch, remote update). */
+  redraw(s: Session): void {
+    if (s.id === this.activeSessionId) {
+      this.broadcast(this.sessionMsg(s));
+    }
+  }
+
   /** Answers the surface that asked (side bar or editor tab); without one (commands) every surface gets it. */
   private replyTo(reply: Sink | undefined, m: ToWebview): void {
     if (reply) {
@@ -1157,6 +1213,7 @@ export class ChatController implements vscode.Disposable {
 
   private setActive(s: Session): void {
     this.activeSessionId = s.id;
+    this.adoptPartial(s);
     this.broadcast(this.sessionMsg(s));
     this.pushChanges(s.id);
     this.postInterrupted(s.id);
@@ -1804,6 +1861,11 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** Open the multitask launcher in the attached chat UI; false when no UI is attached. */
+  /** Whether a chat webview is attached (commands post to it only then). */
+  hasSurface(): boolean {
+    return this.sinks.size > 0;
+  }
+
   openLauncher(kind?: 'tasks' | 'bestof'): boolean {
     if (!this.sinks.size) {
       return false;
@@ -1897,6 +1959,17 @@ export class ChatController implements vscode.Disposable {
   }
 
   async handle(msg: FromWebview, reply?: Sink): Promise<void> {
+    if (CONTINUITY_MESSAGES.has(msg.type)) {
+      // Navigator, Trash, Versions, branches, export/share (continuity, 1.7): handled in continuityHost.ts.
+      if (this.continuityHost) {
+        await this.continuityHost.handle(msg as ContinuityFromWebview, reply);
+      } else if (msg.type === 'nav') {
+        this.replyTo(reply, { type: 'navPage', seq: msg.seq, indexState: 'off', counts: undefined, projects: [], page: { rows: [], total: 0, offset: 0, limit: 0 } });
+      } else {
+        this.replyTo(reply, { type: 'toast', level: 'warn', text: 'Conversation storage is still starting — try again in a moment.' });
+      }
+      return;
+    }
     switch (msg.type) {
       case 'mcpStatus':
         this.broadcast(mcpChatStatus(this._mcp));
@@ -2321,9 +2394,13 @@ export class ChatController implements vscode.Disposable {
           this.telemetry?.record({ type: 'model_selected', sid: s.id, model: msg.model, source: 'picker', makeDefault: msg.makeDefault || undefined });
         }
         if (s) {
+          const from = s.model;
           s.model = msg.model;
           this.store.save(s);
           void this.warm(s);
+          if (from !== msg.model) {
+            this._onDidChangeModel.fire({ session: s, from, to: msg.model });
+          }
         }
         if (msg.makeDefault) {
           await setDefaultModel(msg.model);
@@ -2600,6 +2677,8 @@ export class ChatController implements vscode.Disposable {
         return this.switchModelAndRetry(msg.sessionId, msg.model);
       case 'runAction':
         return this.runAction(msg.sessionId, msg.action);
+      case 'resumeDraft':
+        return this.resumeDraft(msg.sessionId, msg.action);
       case 'checkConflicts':
         return this.checkConflicts(msg.sessionId, reply);
       case 'openRecovery':
@@ -2835,7 +2914,7 @@ export class ChatController implements vscode.Disposable {
         this.replyTo(reply, { type: 'checkpointExistsResult', sessionId: msg.sessionId, index: msg.index, ...(await this.checkpointExists(msg.sessionId, msg.index)) });
         return;
       case 'viewChanges':
-        await this.viewChanges(msg.sessionId, msg.scope);
+        await this.viewChanges(msg.sessionId, msg.scope, typeof msg.run === 'number' ? msg.run : undefined);
         return;
       case 'openCheckpointSetting':
         await vscode.commands.executeCommand('localpilot.openSettings', 'agent');
@@ -2895,6 +2974,9 @@ export class ChatController implements vscode.Disposable {
           await this.tracker.settle(s.id);
         } else {
           restore = await this.tracker.restoreTurn(s.id, key);
+          if (restore.restored && !restore.failed) {
+            this.runner.checkpoints?.noteRestored(s.id, key);
+          }
         }
       } catch (e) {
         this.telemetry?.record({ type: 'checkpoint', action: 'restore', outcome: 'failed' });
@@ -2980,6 +3062,8 @@ export class ChatController implements vscode.Disposable {
     if (parseMcpSlash(text)) {
       images = withoutMcpPromptImages(images, this.store.get(msg.sessionId)?.messages[msg.index]) ?? [];
     }
+    // Continuity: the edited message starts a new branch (the original stays, `< 1/2 >` on the message).
+    this.hintStore(msg.sessionId, 'edit');
     if (!(await this.rewindTo(msg.sessionId, msg.index, msg.restoreWorkspace ? 'both' : 'task', undefined, { resend: true }))) {
       if (!this.store.get(msg.sessionId)?.messages[msg.index]) {
         this.broadcast({ type: 'draft', text, images, attachments });
@@ -3030,7 +3114,7 @@ export class ChatController implements vscode.Disposable {
   }
 
   /** Multi-file diff of what changed since the chat's latest message (`turn`) or of everything the chat changed (`session`). */
-  private async viewChanges(sessionId: string, scope: 'turn' | 'session'): Promise<void> {
+  private async viewChanges(sessionId: string, scope: 'turn' | 'session', run?: number): Promise<void> {
     const s = this.store.get(sessionId);
     if (!s) {
       return;
@@ -3059,8 +3143,8 @@ export class ChatController implements vscode.Disposable {
         return;
       }
     } else {
-      title = 'Changes since your last message';
-      const key = lastTurnKey(s);
+      title = run !== undefined ? 'Changes since the checkpoint' : 'Changes since your last message';
+      const key = run ?? lastTurnKey(s);
       const entry = key !== undefined ? gitCheckpoint(s.checkpoints, key) : undefined;
       if (entry && this.runner.checkpoints) {
         let files: ChangedFile[];
@@ -3155,6 +3239,7 @@ export class ChatController implements vscode.Disposable {
     }
     const s = this.activeSession;
     if (s) {
+      this.adoptPartial(s);
       post(this.sessionMsg(s));
       this.pushChanges(s.id);
       this.postInterrupted(s.id, post);
@@ -3652,6 +3737,7 @@ export class ChatController implements vscode.Disposable {
         unattended: opts.unattended,
         resume: opts.resume || undefined,
         taskId: opts.taskId,
+        traceId: recorder.trace.id,
       });
       return result;
     } catch (e) {
@@ -3767,6 +3853,8 @@ export class ChatController implements vscode.Disposable {
     const last = session.messages[idx];
     const removed = session.messages.slice(idx);
     session.messages = session.messages.slice(0, idx);
+    // Continuity: the answer that follows is a regenerated one, on a new branch (the old answer stays).
+    this.hintStore(sessionId, 'regenerate');
     this.store.save(session);
     this.broadcast(this.sessionMsg(session));
     // Attachments are already inlined in the stored content, so send it verbatim with no new attachments; `display`
@@ -4157,7 +4245,91 @@ export class ChatController implements vscode.Disposable {
     const todos = s.todos ?? [];
     const root = this.sessionRoot(sessionId);
     const files = this.tracker.forSession(sessionId).map((c) => (root && c.fsPath.startsWith(root + path.sep) ? c.fsPath.slice(root.length + 1) : c.fsPath)).slice(0, 20);
-    post({ type: 'runInterrupted', sessionId, state: { startedAt: s.runningSince, steps, tasksDone: todos.filter((t) => t.status === 'done').length, tasksTotal: todos.length, files } });
+    const last = s.messages[s.messages.length - 1];
+    const state: RunInterruptedState = { startedAt: s.runningSince, steps, tasksDone: todos.filter((t) => t.status === 'done').length, tasksTotal: todos.length, files, ...(last?.role === 'assistant' && last.meta?.partial ? { partial: true } : {}) };
+    post({ type: 'runInterrupted', sessionId, state });
+    // Continuity (SESSION): what ran before the cut, the files the run changed and its checkpoint, posted again once read.
+    const runs = this.sessionRuns;
+    if (runs) {
+      void runs
+        .details(sessionId)
+        .then((more) => {
+          const now = this.store.has(sessionId) ? this.store.get(sessionId) : undefined;
+          if (more && now?.runningSince === state.startedAt && !this.busy(sessionId)) {
+            post({ type: 'runInterrupted', sessionId, state: { ...state, ...more } });
+          }
+        })
+        .catch((e: unknown) => this.log.debug(`continuity: run details: ${e instanceof Error ? e.message : String(e)}`));
+    }
+  }
+
+  /** Continuity attached after the chat was shown: its partial answer and Run interrupted details are posted now. */
+  redrawInterrupted(sessionId: string): void {
+    const s = this.store.has(sessionId) ? this.store.get(sessionId) : undefined;
+    if (!s || sessionId !== this.activeSessionId || this.busy(sessionId)) {
+      return;
+    }
+    const before = s.messages.length;
+    this.adoptPartial(s);
+    if (s.messages.length !== before) {
+      this.broadcast(this.sessionMsg(s));
+    }
+    this.postRunInterrupted(sessionId);
+  }
+
+  /**
+   * A chat whose answer was cut off (laptop off, crash) gets the partial text its draft kept as an assistant message
+   * with `meta.partial`; the chat offers Continue / Regenerate / Discard on it. Once per draft (the draft goes).
+   */
+  private adoptPartial(s: Session): void {
+    const runs = this.sessionRuns;
+    if (!runs || this.busy(s.id) || !this.store.has(s.id)) {
+      return;
+    }
+    let m: ChatMessage | undefined;
+    try {
+      m = runs.takePartial(s);
+    } catch (e) {
+      this.log.debug(`continuity: partial answer: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (m) {
+      s.messages.push(m);
+      s.runningSince ??= m.meta?.timestamp ?? Date.now();
+      this.store.save(s);
+    }
+  }
+
+  /** "Interrupted — partial answer": Continue (asks the model to carry on from the partial text), Regenerate, Discard. */
+  private async resumeDraft(sessionId: string, action: 'continue' | 'regenerate' | 'discard'): Promise<void> {
+    const s = this.store.has(sessionId) ? this.store.get(sessionId) : undefined;
+    if (!s) {
+      return;
+    }
+    if (this.runs.has(sessionId)) {
+      this.broadcast({ type: 'toast', level: 'info', text: 'This chat is running; stop it first' });
+      return;
+    }
+    delete s.runningSince;
+    this.broadcast({ type: 'runInterrupted', sessionId, state: null });
+    const last = s.messages[s.messages.length - 1];
+    const partial = last?.role === 'assistant' && last.meta?.partial;
+    if (action === 'continue') {
+      this.store.save(s);
+      await this.send(sessionId, CONTINUE_PARTIAL_PROMPT, [], undefined, { display: 'Continue the partial answer' });
+      return;
+    }
+    if (action === 'regenerate') {
+      // Retry drops everything after the last request (the partial answer included) and sends it again.
+      this.store.save(s);
+      await this.retry(sessionId);
+      return;
+    }
+    if (partial) {
+      s.messages.pop();
+      this.hintStore(sessionId, 'edit');
+    }
+    this.store.save(s);
+    this.broadcast(this.sessionMsg(s));
   }
 
   /** A button on a recovery card (live or interrupted). */
@@ -5017,6 +5189,8 @@ export class ChatController implements vscode.Disposable {
     this.notifier.dispose();
     this.pendingDeltas.clear();
     this._onDidChangeActive.dispose();
+    // Optional: tests build bare controllers from the prototype.
+    this._onDidChangeModel?.dispose();
     this._onDidChangeRuns.dispose();
     this._onAgentEvent.dispose();
     this.disposables.forEach((d) => d.dispose());
