@@ -5,6 +5,7 @@ description: Free, open-source coding agent for VS Code that runs on your own mo
 permalink: /
 ---
 <section class="lp-hero">
+  <div class="lp-orbs" aria-hidden="true"><span></span><span></span><span></span></div>
   <div class="wrap">
     <a class="lp-badge" href="{{ '/docs/continuity/' | relative_url }}"><span class="lp-badge-tag">New in v{{ site.version }}</span>Conversations, memory and encrypted sync<span aria-hidden="true">→</span></a>
     <h1>The coding agent<br><span>that runs on your machine.</span></h1>
@@ -15,10 +16,12 @@ permalink: /
     </div>
     <ul class="lp-proof"><li>Free &amp; MIT licensed</li><li>No account</li><li>Works offline</li><li>No telemetry upload</li></ul>
     {% include pageviews.html total=true %}
+    <div class="lp-window-glow">
     <figure class="lp-window">
       <div class="lp-window-bar" aria-hidden="true"><i></i><i></i><i></i><span>LocalPilot — VS Code</span></div>
       <img src="{{ '/assets/screenshots/hero-agent.png' | relative_url }}" width="1800" height="1125" alt="LocalPilot inside VS Code: the agent read cart.js and its test, fixed applyDiscount with a +1/−1 edit, ran npm test (2 passing) in the LocalPilot Agent terminal, and offers Apply to workspace or Discard" loading="eager" fetchpriority="high">
     </figure>
+    </div>
     <p class="lp-caption">A real session: <code>gpt-oss:20b</code> in Ollama fixed a failing test, ran the suite and asked for review.</p>
   </div>
 </section>
@@ -53,7 +56,29 @@ permalink: /
     </div>
     <div class="lp-runs">
       <span class="lp-runs-label">Runs on</span>
-      <ul><li>Ollama</li><li>LM Studio</li><li>llama.cpp</li><li>vLLM</li><li>SGLang</li><li>Docker Model Runner</li><li>colibri</li><li>OpenAI</li><li>Claude</li><li>Gemini</li><li>OpenRouter</li><li>Groq</li><li>Mistral</li><li>DeepSeek</li><li>Azure OpenAI</li></ul>
+      <div class="lp-marquee"><ul><li>Ollama</li><li>LM Studio</li><li>llama.cpp</li><li>vLLM</li><li>SGLang</li><li>Docker Model Runner</li><li>colibri</li><li>OpenAI</li><li>Claude</li><li>Gemini</li><li>OpenRouter</li><li>Groq</li><li>Mistral</li><li>DeepSeek</li><li>Azure OpenAI</li></ul><ul aria-hidden="true"><li>Ollama</li><li>LM Studio</li><li>llama.cpp</li><li>vLLM</li><li>SGLang</li><li>Docker Model Runner</li><li>colibri</li><li>OpenAI</li><li>Claude</li><li>Gemini</li><li>OpenRouter</li><li>Groq</li><li>Mistral</li><li>DeepSeek</li><li>Azure OpenAI</li></ul></div>
+    </div>
+  </div>
+</section>
+
+<section class="lp-run" id="run">
+  <div class="wrap">
+    <div class="lp-run-grid">
+      <div class="lp-run-text">
+        <span class="lp-kicker">How a run goes</span>
+        <h2>From a one-line request to passing tests</h2>
+        <p>LocalPilot reads the code it needs, makes a small edit, runs your tests in a terminal you can see, and fixes what it broke before it asks you to review.</p>
+        <ol class="lp-steps">
+          <li data-step="0"><b>Understand</b><span>Reads the files and tests that matter</span></li>
+          <li data-step="1"><b>Edit</b><span>A focused change, never a rewrite</span></li>
+          <li data-step="2"><b>Verify</b><span>Runs the tests and heals what failed</span></li>
+          <li data-step="3"><b>Review</b><span>You keep the diff, or discard it</span></li>
+        </ol>
+      </div>
+      <div class="lp-term" aria-label="An example agent run in the terminal">
+        <div class="lp-term-bar" aria-hidden="true"><i></i><i></i><i></i><span>localpilot — zsh</span></div>
+        <pre class="lp-term-body"><code><span class="t-line" data-step="0"><span class="t-p">$</span> localpilot "the discount test fails, fix it"</span><span class="t-line t-dim" data-step="0">◆ LocalPilot · ollama/gpt-oss:20b · agent</span><span class="t-line" data-step="0"><span class="t-ok">✓</span> Read src/cart.js <span class="t-dim">(lines 1–60)</span></span><span class="t-line" data-step="0"><span class="t-ok">✓</span> Read test/cart.test.js</span><span class="t-line" data-step="1"><span class="t-ok">✓</span> Edit src/cart.js <span class="t-add">+1</span> <span class="t-del">−1</span></span><span class="t-line t-dim" data-step="1">  applyDiscount: divide the percent by 100</span><span class="t-line" data-step="2"><span class="t-ok">✓</span> $ npm test</span><span class="t-line" data-step="2">  <span class="t-ok">✔</span> adds items and totals them</span><span class="t-line" data-step="2">  <span class="t-ok">✔</span> applies a percentage discount</span><span class="t-line" data-step="2">  <span class="t-dim">tests 2 · pass 2 · fail 0</span></span><span class="t-line" data-step="3"><span class="t-acc">●</span> 1 file changed · review with <b>localpilot diff</b></span><span class="t-caret" aria-hidden="true"></span></code></pre>
+      </div>
     </div>
   </div>
 </section>
@@ -64,7 +89,7 @@ permalink: /
       <h2>An agent you can watch, steer and undo</h2>
       <p>Built for local models, with smaller context windows and sometimes no tool calling. You approve the risky steps and keep only the changes you want.</p>
     </div>
-    <div class="lp-tabs" role="tablist" aria-label="Features"><button type="button" role="tab" id="t-review" aria-controls="tab-review" aria-selected="true">Review</button><button type="button" role="tab" id="t-parallel" aria-controls="tab-parallel" aria-selected="false" tabindex="-1">Parallel agents</button><button type="button" role="tab" id="t-conversations" aria-controls="tab-conversations" aria-selected="false" tabindex="-1">Conversations</button><button type="button" role="tab" id="t-sync" aria-controls="tab-sync" aria-selected="false" tabindex="-1">Sync &amp; recovery</button><button type="button" role="tab" id="t-terminal" aria-controls="tab-terminal" aria-selected="false" tabindex="-1">Terminal &amp; CLI</button><button type="button" role="tab" id="t-models" aria-controls="tab-models" aria-selected="false" tabindex="-1">Models</button></div>
+    <div class="lp-tabs" role="tablist" aria-label="Features"><span class="lp-tab-ind" aria-hidden="true"></span><button type="button" role="tab" id="t-review" aria-controls="tab-review" aria-selected="true">Review</button><button type="button" role="tab" id="t-parallel" aria-controls="tab-parallel" aria-selected="false" tabindex="-1">Parallel agents</button><button type="button" role="tab" id="t-conversations" aria-controls="tab-conversations" aria-selected="false" tabindex="-1">Conversations</button><button type="button" role="tab" id="t-sync" aria-controls="tab-sync" aria-selected="false" tabindex="-1">Sync &amp; recovery</button><button type="button" role="tab" id="t-terminal" aria-controls="tab-terminal" aria-selected="false" tabindex="-1">Terminal &amp; CLI</button><button type="button" role="tab" id="t-models" aria-controls="tab-models" aria-selected="false" tabindex="-1">Models</button></div>
     <div class="lp-panels">
       <div class="lp-panel" id="tab-review" role="tabpanel" aria-labelledby="t-review">
         <div class="lp-panel-text">
@@ -291,6 +316,7 @@ permalink: /
 </section>
 
 <section class="lp-final">
+  <div class="lp-final-glow" aria-hidden="true"></div>
   <div class="wrap">
     <h2>Try it on your next bug fix.</h2>
     <p>Free, MIT-licensed, no account. Install it, point it at Ollama, and keep your code at home.</p>
@@ -318,6 +344,36 @@ permalink: /
         if (d) { e.preventDefault(); pick(tabs[(i + d + tabs.length) % tabs.length], true); }
       });
     });
+  }
+  const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Sliding highlight under the selected tab.
+  const ind = document.querySelector('.lp-tab-ind');
+  const moveInd = () => { const t = document.querySelector('.lp-tabs [aria-selected="true"]'); if (!ind || !t) return; ind.style.width = t.offsetWidth + 'px'; ind.style.height = t.offsetHeight + 'px'; ind.style.transform = `translate(${t.offsetLeft}px, ${t.offsetTop}px)`; };
+  document.querySelectorAll('.lp-tabs [role="tab"]').forEach((t) => { t.addEventListener('click', () => requestAnimationFrame(moveInd)); t.addEventListener('keyup', () => requestAnimationFrame(moveInd)); });
+  addEventListener('resize', moveInd); document.fonts?.ready.then(moveInd); moveInd();
+  document.querySelector('.lp-tabs')?.classList.add('has-ind');
+  // Cards: a soft light follows the pointer.
+  document.querySelectorAll('.lp-card, .lp-mini .card, .lp-panel').forEach((c) => c.addEventListener('pointermove', (e) => { const r = c.getBoundingClientRect(); c.style.setProperty('--mx', (e.clientX - r.left) + 'px'); c.style.setProperty('--my', (e.clientY - r.top) + 'px'); }));
+  // Reveal on scroll, staggered within a group.
+  const items = document.querySelectorAll('.lp-head, .landing .section-head, .lp-card, .lp-mini .card, .lp-tabs, .lp-panels, .lp-run-text, .lp-term, .advisor, .compare, .proof, .faq details, .lp-final .wrap');
+  if (!calm && 'IntersectionObserver' in window) {
+    items.forEach((el) => { el.classList.add('lp-reveal'); const sib = [...el.parentElement.children].filter((x) => x.classList.contains('lp-reveal')); el.style.setProperty('--d', Math.min(sib.indexOf(el), 8) * 70 + 'ms'); });
+    const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    items.forEach((el) => io.observe(el));
+  }
+  // The terminal types its run when it scrolls into view, and the steps beside it follow; then it starts over.
+  const term = document.querySelector('.lp-term');
+  if (term) {
+    term.classList.add('js');
+    const lines = [...term.querySelectorAll('.t-line')];
+    const steps = [...document.querySelectorAll('.lp-steps li')];
+    const show = (n) => { lines.forEach((l, i) => l.classList.toggle('on', i < n)); const cur = n ? +lines[Math.min(n, lines.length) - 1].dataset.step : -1; steps.forEach((s) => { s.classList.toggle('on', +s.dataset.step === cur); s.classList.toggle('done', +s.dataset.step < cur); }); };
+    if (calm) { show(lines.length); } else {
+      let n = 0, timer = 0, started = false;
+      const tick = () => { n = n > lines.length ? 0 : n + 1; show(Math.min(n, lines.length)); timer = setTimeout(tick, n === 0 ? 500 : n >= lines.length ? 3200 : 520); };
+      new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting && !started) { started = true; tick(); } else if (!e.isIntersecting && started) { clearTimeout(timer); started = false; } }), { threshold: 0.3 }).observe(term);
+      show(0);
+    }
   }
   // Copy buttons on command lines.
   document.querySelectorAll('.lp-copy').forEach((b) => b.addEventListener('click', () => {
