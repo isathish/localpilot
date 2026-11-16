@@ -42,9 +42,12 @@ LocalPilot runs an AI agent that can read your project, edit files and run comma
 
 ## API keys
 
-- A key pasted into **Settings → Providers**, or entered with *LocalPilot: Set Provider API Key…*, is stored with VS Code's `SecretStorage`, which uses the operating system's keychain. settings.json only holds `${secret:<id>}`, so settings sync, dotfile repos and screenshots of settings never contain it.
-- `${env:NAME}` keys are read from the environment at use and never written anywhere.
-- The Settings webview is told only whether a key resolves and where it comes from, never the key.
+- A key pasted into **Settings → Providers**, entered with *LocalPilot: Set Provider API Key…*, or stored with `localpilot providers key` / `localpilot secrets set`, goes to LocalPilot's secret store, shared by VS Code and the CLI. settings.json only holds `${secret:<id>}`, so settings sync, dotfile repos and screenshots of settings never contain it. MCP sign-in tokens and sync credentials are kept there too.
+- **The store** is `~/.localpilot/secrets.db`: a SQLite database (sql.js) encrypted as a whole file with AES-256-GCM, so names as well as values are hidden. The file starts with a header (format, protection mode, salt, IV) that is authenticated as associated data; a wrong key or any change to the file is rejected. It is created readable by your user only (0600), written to a temporary file and renamed, and changed under a lock file so two processes never lose each other's writes.
+- **Its key** is 256 random bits kept in the operating system's keychain under the service `LocalPilot`: macOS Keychain (through `/usr/bin/security`), Windows Credential Manager (`CredReadW`/`CredWriteW`), or the Secret Service on Linux (`secret-tool`). A value is only ever passed to these tools on standard input, never on a command line. Where there is no keychain, the key is derived from `LOCALPILOT_SECRETS_PASSPHRASE` with scrypt (N = 2^15, r = 8, p = 1, a random 16-byte salt). There is no plain-text fallback: a store that cannot be unlocked is reported, and the CLI refuses to save keys.
+- Older plain-text files (`~/.localpilot/keys.json`, `secrets.json`) are moved into the store and deleted once every value reads back. Keys earlier versions kept in VS Code's `SecretStorage` are copied in once; if the store cannot open, VS Code's `SecretStorage` is used instead.
+- `${env:NAME}` keys from earlier versions are read from the environment at use and never written anywhere; Settings and `localpilot providers` offer to move them into the store.
+- The Settings webview is told only whether a key resolves, where it comes from and what uses it, never the key; **Replace…** asks for a new value in a VS Code password box on the extension side. The CLI never prints a value.
 - Removing a provider deletes its stored key. Keys go only to that provider's own endpoint: as a Bearer token, `x-api-key` for Anthropic, or `api-key` for Azure.
 
 ## Sync encryption
@@ -81,7 +84,7 @@ These are the places where text or code from someone else can influence the agen
 
 **MCP servers.** Each server is a program that you or the project configures (see *Untrusted repositories* above). It runs with your user account and inherits your environment variables. Add only servers you would run yourself, and set `approvals.network` to `ask` to see each tool call.
 
-**Secrets.** Provider API keys, and a web search key entered in **Settings**, are kept in the operating system's keychain through VS Code's `SecretStorage`; settings.json holds only a `${secret:<id>}` reference. A key can also be read from the environment with `${env:NAME}`. A key typed directly into settings.json stays there as plain text. The CLI keeps its keys in `~/.localpilot/keys.json`, readable only by your user (or in `LOCALPILOT_KEY_<NAME>` environment variables). Local servers usually need no key. If you turn on Redis storage for metrics, keep Redis on `127.0.0.1` or protect it with a password.
+**Secrets.** Provider API keys, a web search key entered in **Settings**, MCP sign-in tokens and sync credentials are kept in LocalPilot's encrypted secret store (see *API keys* above), which VS Code and the CLI share; settings.json holds only a `${secret:<id>}` reference. Older `${env:NAME}` keys are still read from the environment, and `LOCALPILOT_KEY_<NAME>` variables stand in for stored keys. A key typed directly into settings.json stays there as plain text. Local servers usually need no key. If you turn on Redis storage for metrics, keep Redis on `127.0.0.1` or protect it with a password.
 
 ## Isolation with git worktrees
 

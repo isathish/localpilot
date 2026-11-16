@@ -24,7 +24,7 @@ Auto-detection also probes a few other local ports and running Docker containers
 
 **Cloud providers** (OpenAI, Anthropic, Gemini, OpenRouter and the others under *Settings → Providers → Cloud APIs*) and **gateways** that forward to them (OmniRoute, LiteLLM) receive the prompts and code you send to their models, under that provider's terms. They are marked **cloud** in Settings and in the model picker. Automatic picks prefer local models, and two features never use a cloud model unless you choose one for them: inline completions (`localpilot.inlineCompletion.model`) and auto-tune.
 
-**API keys** you paste are stored in VS Code secret storage, which is your operating system's keychain. settings.json only holds a `${secret:<id>}` reference, so settings sync never carries the key. A key can also come from an environment variable (`${env:NAME}`). The Settings page is told only whether a key is present, never the key itself.
+**API keys** you paste, MCP sign-in tokens and sync credentials are stored in LocalPilot's encrypted secret store on your computer (`~/.localpilot/secrets.db`, shared by VS Code and the `localpilot` CLI). The whole file is encrypted with AES-256-GCM, and its key is kept in your operating system's keychain (or derived from a passphrase you set where there is none). settings.json only holds a `${secret:<id>}` reference, so settings sync never carries the key, and the store itself never syncs. Keys from earlier versions that use an environment variable (`${env:NAME}`) still work. The Settings page is told only whether a key is present and what uses it, never the key itself, and the CLI never prints one.
 
 ### Other network requests
 

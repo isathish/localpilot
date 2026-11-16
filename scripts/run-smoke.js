@@ -36,5 +36,9 @@ esbuild.buildSync({
 });
 process.env.LOCALPILOT_CONTINUITY_WORKER ??= workerOut;
 process.env.LOCALPILOT_SQLJS_WASM ??= path.resolve(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+// The secret store never touches the developer's keychain or ~/.localpilot: a throwaway folder and a test passphrase.
+process.env.LOCALPILOT_KEYCHAIN = 'none';
+process.env.LOCALPILOT_SECRETS_PASSPHRASE = 'test-passphrase';
+process.env.LOCALPILOT_SECRETS_DIR = require('fs').mkdtempSync(path.join(require('os').tmpdir(), 'lp-smoke-secrets-'));
 process.env.LOCALPILOT_PDFJS_DIR ??= path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build');
 require(outfile);

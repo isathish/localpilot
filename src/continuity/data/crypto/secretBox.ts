@@ -1,5 +1,5 @@
-// Where data keys live on this device (design §15): VS Code SecretStorage (the OS keychain) or the CLI's keys.json
-// (0600). Only data keys and backend credentials go here, never the passphrase. Pure: the VS Code adapter takes any
+// Where data keys live on this device (design §15): the encrypted secret store shared by VS Code and the CLI
+// (~/.localpilot/secrets.db). Only data keys and backend credentials go here, never the passphrase. Pure: the VS Code adapter takes any
 // object shaped like vscode.SecretStorage.
 import type { DataKey } from './keyring';
 
@@ -27,7 +27,7 @@ export function secretStorageBox(s: SecretStorageLike): SecretBox {
   };
 }
 
-/** CLI: entries `sync:<remoteId>:<keyId>` of ~/.localpilot/keys.json (readCliKeys / writeCliKey). */
+/** CLI: entries `sync:<remoteId>:<keyId>` of the secret store (readCliKeys / writeCliKey). */
 export function cliKeysBox(read: () => Record<string, string>, write: (name: string, value: string | undefined) => Promise<void>): SecretBox {
   return {
     get: async (k) => read()[k],

@@ -1,9 +1,7 @@
 import * as crypto from 'crypto';
-import { promises as fsp } from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { ProviderConfig } from '../types';
+import { keyForName } from '../secrets/storeStorage';
 import { secretRefs, setSecretValues } from './cloud';
 
 const PREFIX = 'localpilot.provider.';
@@ -16,15 +14,21 @@ const OWNERS_KEY = 'localpilot.providerSecretOwners';
 /** Names stored by older versions (no owner); still reserved so a new key never takes one over. */
 const LEGACY_NAMES_KEY = 'localpilot.providerSecretNames';
 
+/** Every provider key name this extension stored so far (owned or legacy), for the one-time move into the secret store. */
+export function knownSecretNames(state: Pick<vscode.Memento, 'get'>): string[] {
+  return [...new Set([...Object.keys(state.get<Record<string, string>>(OWNERS_KEY, {})), ...state.get<string[]>(LEGACY_NAMES_KEY, [])])];
+}
+
 /**
- * Provider API keys kept in VS Code's secret storage (the OS keychain) instead of settings.json. Settings hold a
+ * Provider API keys kept in LocalPilot's encrypted secret store (shared with the CLI; VS Code's secret storage when it
+ * cannot open) instead of settings.json. Settings hold a
  * `${secret:<name>}` reference; the values are loaded into memory so providers resolve keys synchronously.
  */
 export class ProviderSecrets implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
-    private readonly storage: vscode.SecretStorage,
+    readonly storage: vscode.SecretStorage,
     private readonly state: vscode.Memento
   ) {
     // A key entered in another window, or deleted there.
@@ -128,6 +132,22 @@ export class ProviderSecrets implements vscode.Disposable {
     return `\${secret:${name}}`;
   }
 
+  /** Replaces the value of a stored secret by its store name (Settings → Secrets → Replace…). */
+  async replace(name: string, value: string): Promise<void> {
+    await this.storage.store(keyForName(name), value);
+    if (!name.startsWith('localpilot.')) {
+      setSecretValues({ [name]: value });
+    }
+  }
+
+  /** Deletes a stored secret by its store name (Settings → Secrets → Delete). */
+  async remove(name: string): Promise<void> {
+    await this.storage.delete(keyForName(name));
+    if (!name.startsWith('localpilot.')) {
+      setSecretValues({ [name]: undefined });
+    }
+  }
+
   private async remember(name: string, owner: string): Promise<void> {
     const owners = this.state.get<Record<string, string>>(OWNERS_KEY, {});
     if (owners[name] !== owner) {
@@ -164,63 +184,4 @@ function providerRefs(p: ProviderConfig): string[] {
 function webSearchRefs(): string[] {
   const i = vscode.workspace.getConfiguration('localpilot').inspect<string>('webSearch.apiKey');
   return [i?.globalValue, i?.workspaceValue, i?.workspaceFolderValue].flatMap((v) => (typeof v === 'string' ? secretRefs(v) : []));
-}
-
-/**
- * Secret storage for the CLI, which has no OS keychain: one JSON object in `~/.localpilot/secrets.json`, readable by
- * the user only (0600). Same shape as `vscode.SecretStorage`, so the MCP sign-in code uses either.
- */
-export class FileSecretStorage {
-  private listeners = new Set<(e: { key: string }) => unknown>();
-  private chain: Promise<unknown> = Promise.resolve();
-
-  constructor(readonly file = path.join(os.homedir(), '.localpilot', 'secrets.json')) {}
-
-  private async read(): Promise<Record<string, string>> {
-    try {
-      const raw = JSON.parse(await fsp.readFile(this.file, 'utf8')) as unknown;
-      return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, string>) : {};
-    } catch {
-      return {};
-    }
-  }
-
-  private async write(all: Record<string, string>): Promise<void> {
-    await fsp.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    const tmp = `${this.file}.${process.pid}.tmp`;
-    await fsp.writeFile(tmp, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
-    await fsp.rename(tmp, this.file);
-    await fsp.chmod(this.file, 0o600).catch(() => undefined);
-  }
-
-  /** Writes run one at a time so two stores never drop each other's key. */
-  private update(fn: (all: Record<string, string>) => void, key: string): Promise<void> {
-    const next = this.chain.then(async () => {
-      const all = await this.read();
-      fn(all);
-      await this.write(all);
-      this.listeners.forEach((l) => l({ key }));
-    });
-    this.chain = next.catch(() => undefined);
-    return next;
-  }
-
-  async get(key: string): Promise<string | undefined> {
-    await this.chain;
-    const v = (await this.read())[key];
-    return typeof v === 'string' ? v : undefined;
-  }
-
-  store(key: string, value: string): Promise<void> {
-    return this.update((all) => (all[key] = value), key);
-  }
-
-  delete(key: string): Promise<void> {
-    return this.update((all) => delete all[key], key);
-  }
-
-  onDidChange = (listener: (e: { key: string }) => unknown): { dispose(): void } => {
-    this.listeners.add(listener);
-    return { dispose: () => this.listeners.delete(listener) };
-  };
 }

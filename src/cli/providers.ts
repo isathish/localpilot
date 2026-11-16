@@ -6,7 +6,8 @@ import { bedrockRegion, findPreset, PROVIDER_PRESETS, PresetGroup, presetFor, wi
 import { ProviderConfig } from '../types';
 import { DEFAULT_PROVIDERS } from '../providers/defaultProviders';
 import { sanitizeProviderConfig } from '../providers/sanitize';
-import { CLI_KEYS_PATH, CLI_SETTINGS_PATH, readCliConfig, writeCliConfig, writeCliKey } from './vscodeShim';
+import { ask, CLI_SETTINGS_PATH, readCliConfig, writeCliConfig } from './vscodeShim';
+import { cliSecretsFile, writeCliKey } from '../secrets/cliSecrets';
 import { getManagedPolicy, isManaged, mergeManagedProviders } from '../agent/managedPolicy';
 
 export interface Style {
@@ -86,9 +87,12 @@ function keyText(p: ProviderConfig, st: Style): string {
     return isRemoteUrl(p.baseUrl) || p.type === 'anthropic' ? st.red('no API key') : st.dim('no key');
   }
   if (!k.ok) {
-    return st.red(k.source === 'env' ? `${k.env} not set` : `key missing (set ${secretEnvName(p.apiKey!.replace(/^\$\{secret:|\}$/g, ''))} or run: localpilot providers key ${p.id})`);
+    return st.red(k.source === 'env' ? `${k.env} not set (store the key instead: localpilot providers key ${p.id})` : `key missing (run: localpilot providers key ${p.id}, or set ${secretEnvName(p.apiKey!.replace(/^\$\{secret:|\}$/g, ''))})`);
   }
-  return st.dim(k.source === 'keychain' ? 'key stored' : k.source === 'env' ? `key from $${k.env}` : 'key in settings');
+  // A key read from the environment still works, but belongs in the encrypted store.
+  return k.source === 'env'
+    ? `${st.dim(`key from $${k.env}`)} ${st.yellow(`· move into secret store: localpilot providers key ${p.id} --key-env ${k.env}`)}`
+    : st.dim(k.source === 'keychain' ? 'key stored' : 'key in settings');
 }
 
 function probeLine(r: ProbeResult | undefined, st: Style): string {
@@ -144,7 +148,7 @@ export function listPresets(st: Style, out: (s: string) => void = console.log): 
       out(`  ${have.has(pr.cfg.id) ? st.green('✓') : st.dim('·')} ${st.cyan(pr.key.padEnd(13))} ${pr.label.padEnd(22)} ${st.dim(pr.env ? `$${pr.env}` : pr.cfg.baseUrl)}`);
     }
   }
-  out(st.dim('\n✓ = configured. Add: localpilot providers add <name> [--key <key> | --key-env VAR]'));
+  out(st.dim('\n✓ = configured. Add: localpilot providers add <name> [--key <key> | --key-env VAR]  (--key-env copies the variable into the secret store)'));
 }
 
 /** Reads a key without echoing it (TTY), or from piped stdin. */
@@ -175,11 +179,20 @@ export async function readSecret(prompt: string): Promise<string | undefined> {
   }
 }
 
-/** Stores a key for the CLI and returns the reference to put in the provider. */
-async function storeKey(id: string, key: string): Promise<string> {
-  await writeCliKey(id, key);
+/** Stores a key in the encrypted secret store and returns the reference to put in the provider. */
+async function storeKey(id: string, key: string, source = 'cli'): Promise<string> {
+  await writeCliKey(id, key, source);
   setSecretValues({ [id]: key });
   return `\${secret:${id}}`;
+}
+
+/** The value of `--key-env VAR`, copied once into the store (the variable is not read again). */
+function envValue(name: string, st: Style, out: (s: string) => void): string | undefined {
+  const v = process.env[name]?.trim();
+  if (!v) {
+    out(`${st.red('✖')} $${name} is not set in this shell: there is nothing to copy into the secret store. Pass the key with --key, or pipe it in.`);
+  }
+  return v || undefined;
 }
 
 /** `localpilot providers add <preset|url>` */
@@ -238,15 +251,27 @@ export async function addProvider(target: string, flags: ProviderFlags, st: Styl
     cfg.cloud = true;
   }
   if (flags.keyEnv) {
-    cfg.apiKey = `\${env:${flags.keyEnv}}`;
+    const v = envValue(flags.keyEnv, st, out);
+    if (!v) {
+      return 2;
+    }
+    cfg.apiKey = await storeKey(id, v, `env:${flags.keyEnv}`);
   } else if (flags.key) {
     cfg.apiKey = await storeKey(id, flags.key);
-  } else if (preset?.group === 'cloud' && !resolveApiKey(cfg) && process.stdin.isTTY) {
-    // A cloud API without its key is useless: ask once (not echoed), unless the usual variable already has one.
-    out(st.dim(`${preset.env} is not set. Paste the key (get one at ${preset.keyUrl}), or press Enter to skip:`));
-    const k = await readSecret('API key: ');
-    if (k) {
-      cfg.apiKey = await storeKey(id, k);
+  } else if (preset?.group === 'cloud' && !resolveApiKey(cfg)) {
+    // A cloud API without its key is useless. The usual variable, when set, is offered as a one-time copy; otherwise
+    // the key is asked for once (not echoed).
+    const fromEnv = preset.env ? process.env[preset.env]?.trim() : undefined;
+    if (fromEnv && process.stdin.isTTY && /^(y|yes|)$/i.test(((await ask(`$${preset.env} is set in this shell. Copy it into the encrypted secret store? [Y/n] `)) ?? 'n').trim())) {
+      cfg.apiKey = await storeKey(id, fromEnv, `env:${preset.env}`);
+    } else if (fromEnv && !process.stdin.isTTY) {
+      out(st.dim(`$${preset.env} is set: copy it into the secret store with --key-env ${preset.env}`));
+    } else if (!fromEnv && process.stdin.isTTY) {
+      out(st.dim(`Paste the API key (get one at ${preset.keyUrl}), or press Enter to skip. It is kept in the encrypted secret store:`));
+      const k = await readSecret('API key: ');
+      if (k) {
+        cfg.apiKey = await storeKey(id, k);
+      }
     }
   }
   await patchProvider(id, sanitizeProviderConfig(cfg));
@@ -290,21 +315,19 @@ export async function setProviderKey(id: string, key: string | undefined, flags:
     out(`${st.green('✓')} Removed the key of ${id}`);
     return 0;
   }
-  if (flags.keyEnv) {
-    await patchKey(id, `\${env:${flags.keyEnv}}`);
-    out(`${st.green('✓')} ${id} reads its key from $${flags.keyEnv}${process.env[flags.keyEnv] ? '' : st.yellow(' (not set in this shell)')}`);
-  } else {
-    const k = key ?? (await readSecret(`API key for ${p.displayName || id}: `));
+  {
+    const k = flags.keyEnv ? envValue(flags.keyEnv, st, out) : key ?? (await readSecret(`API key for ${p.displayName || id}: `));
     if (!k) {
-      out(`${st.red('✖')} No key given. Usage: localpilot providers key ${id} <key>  (or pipe it in, or --key-env VAR)`);
+      if (!flags.keyEnv) {
+        out(`${st.red('✖')} No key given. Usage: localpilot providers key ${id} <key>  (or pipe it in, or --key-env VAR to copy a variable)`);
+      }
       return 2;
     }
-    const ref = await storeKey(id, k);
-    // Keep a VS Code keychain reference as it is: the CLI resolves `${secret:id}` from its own key file.
+    const ref = await storeKey(id, k, flags.keyEnv ? `env:${flags.keyEnv}` : 'cli');
     if (p.apiKey !== ref) {
       await patchKey(id, ref);
     }
-    out(`${st.green('✓')} Key for ${id} saved to ${st.dim(CLI_KEYS_PATH)} (readable by you only)`);
+    out(`${st.green('✓')} Key for ${id} saved in the encrypted secret store ${st.dim(`(${cliSecretsFile()})`)}${flags.keyEnv ? st.dim(`; $${flags.keyEnv} is no longer read`) : ''}`);
   }
   return reportProbe(configured().find((x) => x.id === id)!, st, out);
 }

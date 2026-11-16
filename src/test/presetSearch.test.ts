@@ -36,13 +36,13 @@ suite('Provider preset search', () => {
     assert.strictEqual(bestPreset('xq', PROVIDER_PRESETS), undefined);
   });
 
-  test('the new cloud presets carry a key URL and an environment variable, in the CLI and in Settings', () => {
+  test('the new cloud presets carry a key URL and an environment variable (offered for import, never referenced), in the CLI and in Settings', () => {
     const webview = fs.readFileSync(path.join(__dirname, '..', '..', 'media', 'settings.js'), 'utf8');
     for (const key of ['sambanova', 'minimax', 'zai', 'baseten', 'nebius', 'requesty', 'vercel', 'cerebras', 'huggingface', 'moonshot']) {
       const p = PROVIDER_PRESETS.find((x) => x.key === key);
       assert.ok(p, key);
       assert.ok(p.env && /^https:\/\//.test(p.keyUrl ?? ''), key);
-      assert.strictEqual(p.cfg.apiKey, `\${env:${p.env}}`);
+      assert.strictEqual(p.cfg.apiKey, undefined, 'a preset starts without a key: it goes into the secret store');
       assert.ok(webview.includes(`'${key}'`) && webview.includes(`'${p.cfg.baseUrl}'`) && webview.includes(`'${p.env}'`), `settings.js lists ${key}`);
     }
   });

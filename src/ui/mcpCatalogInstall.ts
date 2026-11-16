@@ -40,7 +40,7 @@ export class McpCatalogService {
 
 /**
  * Installs a catalog server into the user's `mcp.json`: asks local or remote (when both exist), a free name, and the
- * values of its variables. Secret values go to the OS keychain and the file gets `${secret:…}` references.
+ * values of its variables. Secret values go to the encrypted secret store and the file gets `${secret:…}` references.
  * Resolves the name written, or undefined when the user cancelled.
  */
 export async function installCatalogServer(entry: McpCatalogEntry, taken: string[], secrets: ProviderSecrets | undefined, file = userMcpFile()): Promise<string | undefined> {
@@ -69,7 +69,7 @@ export async function installCatalogServer(entry: McpCatalogEntry, taken: string
       const secret = v.secret !== false;
       const value = await vscode.window.showInputBox({
         title: `${entry.name}: ${v.name}`,
-        prompt: `${v.description ?? v.name}${v.url ? ` — get one at ${v.url}` : ''}${secret ? '. Stored in your OS keychain, not in mcp.json.' : ''}`,
+        prompt: `${v.description ?? v.name}${v.url ? ` — get one at ${v.url}` : ''}${secret ? '. Stored in the encrypted secret store, not in mcp.json.' : ''}`,
         value: v.default?.replace(/\$\{workspaceFolder\}/g, folder),
         password: secret,
         ignoreFocusOut: true,

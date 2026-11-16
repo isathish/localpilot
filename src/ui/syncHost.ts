@@ -62,6 +62,8 @@ export function passphraseStrength(p: string): { score: 0 | 1 | 2 | 3; label: st
 
 export interface SyncHostDeps {
   context: vscode.ExtensionContext;
+  /** Where sync credentials are kept (the shared secret store); default VS Code's secret storage. */
+  secrets?: vscode.SecretStorage;
   handle: ContinuityHandle;
   log: vscode.LogOutputChannel;
   /** Sends a message to the chat webview(s). */
@@ -213,12 +215,12 @@ export class SyncHost implements vscode.Disposable {
       }
       return false;
     }
-    if (s.backend === 's3' && !(await this.d.context.secrets.get(SECRET_NAMES.s3Secret))) {
+    if (s.backend === 's3' && !(await (this.d.secrets ?? this.d.context.secrets).get(SECRET_NAMES.s3Secret))) {
       if (!(await this.setSecret('s3'))) {
         return false;
       }
     }
-    if (s.backend === 'webdav' && !(await this.d.context.secrets.get(SECRET_NAMES.webdavPassword)) && !(await this.d.context.secrets.get(SECRET_NAMES.webdavToken))) {
+    if (s.backend === 'webdav' && !(await (this.d.secrets ?? this.d.context.secrets).get(SECRET_NAMES.webdavPassword)) && !(await (this.d.secrets ?? this.d.context.secrets).get(SECRET_NAMES.webdavToken))) {
       if (!(await this.setSecret('webdav'))) {
         return false;
       }
@@ -377,7 +379,7 @@ export class SyncHost implements vscode.Disposable {
   async setSecret(kind: 's3' | 'webdav'): Promise<boolean> {
     const v = await vscode.window.showInputBox({
       title: kind === 's3' ? 'S3 secret access key' : 'WebDAV password',
-      prompt: kind === 's3' ? 'Kept in the OS keychain on this device, never in settings.' : 'Your password or an app password (Nextcloud: Settings → Security → App passwords). Kept in the OS keychain.',
+      prompt: kind === 's3' ? 'Kept in the encrypted secret store on this device, never in settings.' : 'Your password or an app password (Nextcloud: Settings → Security → App passwords). Kept in the encrypted secret store.',
       password: true,
       ignoreFocusOut: true,
       validateInput: (x) => (x ? undefined : 'Required'),
@@ -385,7 +387,7 @@ export class SyncHost implements vscode.Disposable {
     if (!v) {
       return false;
     }
-    await this.d.context.secrets.store(kind === 's3' ? SECRET_NAMES.s3Secret : SECRET_NAMES.webdavPassword, v);
+    await (this.d.secrets ?? this.d.context.secrets).store(kind === 's3' ? SECRET_NAMES.s3Secret : SECRET_NAMES.webdavPassword, v);
     this.engine?.resetBackend();
     if (this.engine?.status().reason === 'auth') {
       this.engine.resume();
@@ -395,7 +397,7 @@ export class SyncHost implements vscode.Disposable {
   }
 
   async hasSecret(kind: 's3' | 'webdav'): Promise<boolean> {
-    return kind === 's3' ? !!(await this.d.context.secrets.get(SECRET_NAMES.s3Secret)) : !!(await this.d.context.secrets.get(SECRET_NAMES.webdavPassword)) || !!(await this.d.context.secrets.get(SECRET_NAMES.webdavToken));
+    return kind === 's3' ? !!(await (this.d.secrets ?? this.d.context.secrets).get(SECRET_NAMES.s3Secret)) : !!(await (this.d.secrets ?? this.d.context.secrets).get(SECRET_NAMES.webdavPassword)) || !!(await (this.d.secrets ?? this.d.context.secrets).get(SECRET_NAMES.webdavToken));
   }
 
   async test(): Promise<{ ok: boolean; message: string }> {

@@ -1,7 +1,7 @@
 // `localpilot sync …` (design §17.3): set up or join an end-to-end encrypted sync remote (folder, Git, S3-compatible,
 // WebDAV), sync now, pause / resume, devices, conflicts and their resolution, passphrase change, key rotation, device
-// removal, turning sync off. Settings go to ~/.localpilot/config.json, storage secrets and data keys to the CLI key file
-// (keys.json, 0600). Passphrases: a hidden prompt, or LOCALPILOT_SYNC_PASSPHRASE (and LOCALPILOT_SYNC_NEW_PASSPHRASE
+// removal, turning sync off. Settings go to ~/.localpilot/config.json, storage secrets and data keys to the encrypted
+// secret store shared with VS Code (secrets.db). Passphrases: a hidden prompt, or LOCALPILOT_SYNC_PASSPHRASE (and LOCALPILOT_SYNC_NEW_PASSPHRASE
 // for `passphrase`) for headless use. Also the interactive `/sync` slash command.
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -17,7 +17,8 @@ import { backendConfig, SyncEngine } from '../continuity/sync/syncEngine';
 import { FAVORITES_KEY, PreferenceAccess } from '../continuity/sync/extras';
 import { askHidden, openCliContinuity } from './continuityCmd';
 import type { Style } from './providers';
-import { loadSettings, readCliKeys, writeCliKey } from './vscodeShim';
+import { loadSettings } from './vscodeShim';
+import { readCliKeys, writeCliKey } from '../secrets/cliSecrets';
 
 export const SYNC_USAGE = `localpilot sync setup --backend folder|git|s3|webdav [backend flags] [--device-name n]
     folder:  --folder <path>

@@ -9,7 +9,15 @@ import { browserCommand } from '../cli/mcpOAuth';
 import { normalizeMcpServers, policyAndSettingsLayers, withMcpEnabled } from '../mcp/config';
 import { signInMcpServer } from '../mcp/mcpManager';
 import { McpOAuth } from '../mcp/oauth';
-import { FileSecretStorage } from '../providers/secrets';
+import * as vscodeApi from 'vscode';
+import { SecretStore } from '../secrets/store';
+import { StoreSecretStorage } from '../secrets/storeStorage';
+
+/** A throwaway secret store: passphrase-protected, never the developer's keychain. */
+async function tempStore(dir: string): Promise<StoreSecretStorage> {
+  const ext = vscodeApi.extensions.getExtension('localpilot.localpilot-agent');
+  return new StoreSecretStorage(await SecretStore.open({ dir, keychain: null, passphrase: 'test-passphrase', wasmPath: ext ? path.join(ext.extensionPath, 'dist', 'sqljs', 'sql-wasm.wasm') : undefined }));
+}
 
 const log = { info() {}, warn() {}, error() {}, debug() {}, trace() {} } as unknown as vscode.LogOutputChannel;
 
@@ -65,10 +73,10 @@ function oauthServer(): Promise<{ url: string; close(): void; hits: string[] }> 
 }
 
 suite('CLI mcp auth and organization servers', () => {
-  test('a server answering 401 starts the OAuth sign-in, stores the token in the secrets file and connects', async () => {
+  test('a server answering 401 starts the OAuth sign-in, stores the token in the encrypted secret store and connects', async () => {
     const srv = await oauthServer();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-mcp-auth-'));
-    const store = new FileSecretStorage(path.join(dir, 'secrets.json'));
+    const store = await tempStore(dir);
     const opened: string[] = [];
     // The "browser": follows the sign-in link straight to the loopback redirect with a code.
     const oauth = new McpOAuth(store, {
@@ -85,8 +93,9 @@ suite('CLI mcp auth and organization servers', () => {
       assert.strictEqual(opened.length, 1);
       assert.match(opened[0], /\/authorize\?/);
       assert.ok(srv.hits.includes('POST /register') && srv.hits.includes('POST /token'));
-      const file = path.join(dir, 'secrets.json');
-      assert.match(await fs.readFile(file, 'utf8'), /token-1/);
+      const file = path.join(dir, 'secrets.db');
+      assert.match(JSON.stringify(store.backing.all()), /token-1/);
+      assert.ok(!(await fs.readFile(file)).includes('token-1'), 'the token is encrypted on disk');
       if (process.platform !== 'win32') {
         assert.strictEqual((await fs.stat(file)).mode & 0o777, 0o600);
       }
@@ -96,12 +105,13 @@ suite('CLI mcp auth and organization servers', () => {
     } finally {
       oauth.dispose();
       srv.close();
+      store.backing.close();
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
 
   test('refuses a local server', async () => {
-    const oauth = new McpOAuth(new FileSecretStorage(path.join(os.tmpdir(), 'lp-unused-secrets.json')));
+    const oauth = new McpOAuth({ get: async () => undefined, store: async () => undefined, delete: async () => undefined });
     await assert.rejects(signInMcpServer('local', { command: 'node' }, oauth, log, '0'), /local server/);
   });
 

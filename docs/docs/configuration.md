@@ -35,7 +35,7 @@ The **Agent & approvals** page also has the terminal, hooks, worktree and parall
 
 | Setting | Default | Description |
 |---|---|---|
-| `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Local servers, gateways and cloud APIs. Per provider: `type` (`ollama`, `openai`, `anthropic`, or `vscode-lm` for VS Code's language models such as Copilot), `baseUrl` (not needed for `vscode-lm`), `apiKey` (`${secret:id}`, `${env:NAME}` or the key), `cloud`, `models`, `contextWindow`, `enabled`, and optionally `headers`, `timeoutMs`, `apiVersion`, `defaultModel`, `modelsUrl`, `extraBody` and `modelOverrides`. See [Models & providers]({{ '/docs/models/' | relative_url }}) |
+| `localpilot.providers` | Ollama, LM Studio, llama.cpp, vLLM on localhost | Local servers, gateways and cloud APIs. Per provider: `type` (`ollama`, `openai`, `anthropic`, or `vscode-lm` for VS Code's language models such as Copilot), `baseUrl` (not needed for `vscode-lm`), `apiKey` (`${secret:id}`, a pasted key that Settings moves into the [secret store](#secrets), or the older `${env:NAME}`), `cloud`, `models`, `contextWindow`, `enabled`, and optionally `headers`, `timeoutMs`, `apiVersion`, `defaultModel`, `modelsUrl`, `extraBody` and `modelOverrides`. See [Models & providers]({{ '/docs/models/' | relative_url }}) |
 | `localpilot.defaultModel` | `""` (auto) | `provider/model`. Empty picks the best tool-capable coder model that fits this machine |
 | `localpilot.models.disabled` | `[]` | `provider/model` ids hidden from pickers, routing and the status bar. Toggle them in **Settings → Models** |
 | `localpilot.models.autoSetup` | `true` | Offer to install Ollama and a starter model when no local model is found |
@@ -328,7 +328,8 @@ Conversations, memory, attachments and backups are kept in one data folder per c
 Sync between your devices through storage you choose, end-to-end encrypted (see
 [Sync across devices]({{ '/docs/continuity/' | relative_url }}#sync-across-devices)). Set it up in **Settings →
 Continuity & sync → Sync** or with `localpilot sync setup`; the passphrase, the S3 secret key and the WebDAV password are
-never settings (they live in the OS keychain, or `~/.localpilot/keys.json` for the CLI). All are machine settings.
+never settings (they live in the encrypted [secret store](#secrets) that VS Code and the CLI share). All are machine
+settings.
 
 | Setting | Default | Description |
 |---|---|---|
@@ -341,14 +342,50 @@ never settings (they live in the OS keychain, or `~/.localpilot/keys.json` for t
 | `localpilot.sync.s3.region` | `us-east-1` | Region (`auto` for Cloudflare R2) |
 | `localpilot.sync.s3.bucket` | `""` | Bucket |
 | `localpilot.sync.s3.prefix` | `""` | Folder in the bucket (optional) |
-| `localpilot.sync.s3.accessKeyId` | `""` | Access key ID; the secret key is kept in the keychain |
+| `localpilot.sync.s3.accessKeyId` | `""` | Access key ID; the secret key is kept in the secret store |
 | `localpilot.sync.s3.pathStyle` | `null` | `true`: `endpoint/bucket` addressing; `false`: `bucket.endpoint`; empty: path style except on AWS |
 | `localpilot.sync.webdav.url` | `""` | WebDAV folder URL (HTTPS; plain HTTP only for localhost) |
-| `localpilot.sync.webdav.username` | `""` | WebDAV user; the password is kept in the keychain |
+| `localpilot.sync.webdav.username` | `""` | WebDAV user; the password is kept in the secret store |
 | `localpilot.sync.intervalMinutes` | `5` | Minutes between automatic syncs (also 15 s after a change, on focus, and on Sync now) |
 | `localpilot.sync.categories` | all on except `checkpointContents` | `conversations`, `memory`, `attachments`, `agentState`, `checkpointContents`, `prompts`, `preferences`. A category turned off stays on this device; turning it on later sends what it held back |
 | `localpilot.sync.maxAttachmentMB` | `20` | Largest attachment synced (with Git, over 5 MB stays local) |
 | `localpilot.sync.deviceName` | `""` | This device's name on your other devices (empty: the computer's name) |
+
+## Secrets
+
+API keys, MCP sign-in tokens and sync credentials are never settings. They live in one encrypted secret store that
+every VS Code window and the `localpilot` CLI share, so a key entered in either works in both. Settings only hold a
+reference such as `${secret:openai}`.
+
+- **The file.** `~/.localpilot/secrets.db`: a small SQLite database encrypted as a whole file with AES-256-GCM, so
+  neither the names nor the values can be read on disk. It is readable by you only (0600), and every change is
+  written to a temporary file and renamed, so a crash never leaves half a file.
+- **The key.** A random 256-bit key kept in your operating system's keychain under the service name `LocalPilot`:
+  macOS Keychain, Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring or KWallet through
+  `secret-tool`). Where there is no keychain, set `LOCALPILOT_SECRETS_PASSPHRASE` and the key is derived from that
+  passphrase with scrypt. There is no plain-text fallback: when the store cannot be unlocked, LocalPilot says why.
+- **Settings → Data & system → Secrets** shows where the store is, how it is unlocked, and every stored name with what
+  uses it (a provider, web search, an MCP server, sync), where it came from, and when it was changed and last used.
+  **Replace…** asks for the new value in a VS Code password box and **Delete** warns when something still uses the
+  secret. Values are never sent to the Settings page. Providers whose key is an `${env:NAME}` reference are listed
+  with **Move into secret store**.
+- **In a terminal:** `localpilot secrets status|list|set|delete|import-env` (see
+  [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}#secrets)).
+
+Keys that earlier versions kept in VS Code's secret storage are copied into the store once (the old copies stay, so
+an older LocalPilot still finds them); the CLI's old `~/.localpilot/keys.json` and `secrets.json` are moved in and
+then deleted. If the store cannot be opened, VS Code keeps using its own secret storage and Settings shows the error.
+
+`${env:NAME}` references from earlier versions still resolve, but new providers no longer get them: copy the
+variable into the store once instead.
+
+| Environment variable | Effect |
+|---|---|
+| `LOCALPILOT_SECRETS_PASSPHRASE` | Passphrase that protects the store where no keychain is available (servers, containers, CI) |
+| `LOCALPILOT_KEYCHAIN=none` | Never use the OS keychain; the store needs `LOCALPILOT_SECRETS_PASSPHRASE` |
+| `LOCALPILOT_SECRETS_DIR` | Folder of `secrets.db` (default: `LOCALPILOT_DATA_DIR`, else `~/.localpilot`) |
+| `LOCALPILOT_DATA_DIR` | The CLI's data folder; the store lives there too unless `LOCALPILOT_SECRETS_DIR` is set |
+| `LOCALPILOT_KEY_<NAME>` | Stands in for a stored `${secret:<name>}` key, for example `LOCALPILOT_KEY_OPENAI` in CI |
 
 ## Web search
 
@@ -357,7 +394,7 @@ never settings (they live in the OS keychain, or `~/.localpilot/keys.json` for t
 | `localpilot.webSearch.enabled` | `true` | Web access for the agent. `false` removes `web_search`, `web_fetch` and the browser tools from every request and refuses `@https://…` mentions. Model providers are not affected |
 | `localpilot.webSearch.provider` | `duckduckgo` | `duckduckgo` (no key), `searxng`, `brave` or `tavily` |
 | `localpilot.webSearch.searxngUrl` | `http://localhost:8888` | Self-hosted SearXNG URL |
-| `localpilot.webSearch.apiKey` | `""` | Brave or Tavily API key |
+| `localpilot.webSearch.apiKey` | `""` | Brave or Tavily API key. A key typed in Settings goes to the secret store and the setting holds `${secret:<name>}` |
 | `localpilot.webSearch.maxResults` | `6` | Results per search |
 
 ## Inline completions

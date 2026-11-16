@@ -15,10 +15,21 @@ permalink: /docs/troubleshooting/
 
 ## A cloud provider shows "not set", "key missing" or 401
 
-- **"OPENAI_API_KEY not set"** (or another variable): VS Code was started without it. Paste the key into the provider card instead, which stores it in your OS keychain, or start VS Code from a shell that exports the variable.
-- **"key missing"**: the key in secret storage is gone, for example after moving to a new machine. Paste it again, or run *LocalPilot: Set Provider API Key…*.
+- **"OPENAI_API_KEY not set"** (or another variable): the provider reads its key from an environment variable (an `${env:…}` key from an earlier version) and VS Code was started without it. Paste the key into the provider card instead, which keeps it in the encrypted secret store, or start VS Code from a shell that exports the variable and click **Move into secret store**.
+- **"key missing"**: the key is not in the secret store, for example after moving to a new machine. Paste it again, run *LocalPilot: Set Provider API Key…*, or `localpilot providers key <id>`. `localpilot secrets list` shows what is stored.
 - **HTTP 401 / "invalid x-api-key"**: the key is wrong or revoked. Paste a new one.
 - **Azure OpenAI**: replace `YOUR-RESOURCE` in the Base URL with your resource name.
+
+## The secret store is locked
+
+API keys, MCP sign-in tokens and sync credentials are kept in `~/.localpilot/secrets.db`, encrypted with a key from your OS keychain (see [Secrets]({{ '/docs/configuration/' | relative_url }}#secrets)). When the store cannot be opened, **Settings → Data & system → Secrets** shows why and VS Code keeps using its own secret storage meanwhile; the CLI refuses to save keys (nothing is ever written in plain text). `localpilot secrets status` and `localpilot doctor` show the same message.
+
+- **No keychain on Linux** ("this machine has no keychain it can use", or a Secret Service error): install `secret-tool` (`sudo apt install libsecret-tools`, `sudo dnf install libsecret`) and make sure GNOME Keyring or KWallet is running and unlocked in your session. On a server, in a container or over SSH without a desktop session, set `LOCALPILOT_SECRETS_PASSPHRASE` instead (in your shell profile, and in the environment VS Code starts with); the store is then protected by that passphrase.
+- **"The key that unlocks … is missing from the keychain"**: the `LocalPilot` / `secret-store-key` entry was deleted, or the store was copied from another computer. The secrets in that file cannot be recovered without it: delete `~/.localpilot/secrets.db` and enter your keys again.
+- **"is protected by a passphrase"** or **"the passphrase is wrong"**: the store was created with `LOCALPILOT_SECRETS_PASSPHRASE`; set the same passphrase again. If it is lost, delete `secrets.db` and enter your keys again.
+- **"could not be decrypted … the file was changed outside LocalPilot"**: the file is damaged or was replaced. Restore it from a backup, or delete it and enter your keys again.
+- **`LOCALPILOT_KEYCHAIN=none`** turns the keychain off on purpose; the store then needs `LOCALPILOT_SECRETS_PASSPHRASE`.
+- **`~/.localpilot/keys.json` is still there**: it is moved into the store and deleted the first time the store opens. When it stays, it is not valid JSON (fix or delete it) or the store is locked; the CLI keeps reading it until the store can open.
 
 ## "rate limiting", "rejected the API key" or "out of credits"
 

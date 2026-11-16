@@ -1,7 +1,7 @@
 ---
 layout: docs
 title: Claude, OpenAI, Gemini and OpenRouter in VS Code — bring your own key
-description: Use cloud models from OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI and more in VS Code with LocalPilot. Your own API key, kept in your OS keychain, with local models still preferred for automatic picks.
+description: Use cloud models from OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI and more in VS Code with LocalPilot. Your own API key, kept in an encrypted store unlocked by your OS keychain, with local models still preferred for automatic picks.
 permalink: /guides/cloud-models-vscode/
 keywords: bring your own key VS Code, BYOK coding agent, Claude in VS Code, Anthropic API VS Code, OpenAI API VS Code agent, Gemini VS Code, OpenRouter VS Code, Groq VS Code, Mistral VS Code, DeepSeek VS Code, Azure OpenAI VS Code, Ollama Cloud VS Code
 ---
@@ -27,10 +27,10 @@ Prefer the keyboard? Run **LocalPilot: Set Provider API Key…** from the Comman
 
 | In the key field | Where the key lives |
 |---|---|
-| A pasted key | VS Code secret storage, which is your OS keychain (macOS Keychain, Windows Credential Manager, libsecret on Linux). settings.json only holds `${secret:<id>}`, so syncing or sharing settings never shares the key. |
-| `${env:OPENAI_API_KEY}` | An environment variable. Cloud presets start with the provider's usual variable, so a key you already export works as is. Launch VS Code from a shell that exports it. |
+| A pasted key | LocalPilot's encrypted secret store (`~/.localpilot/secrets.db`, AES-256-GCM), whose key is in your OS keychain (macOS Keychain, Windows Credential Manager, the Secret Service on Linux). settings.json only holds `${secret:<id>}`, so syncing or sharing settings never shares the key. |
+| `${env:OPENAI_API_KEY}` | An environment variable, from earlier versions. It still works, but the card offers **Move into secret store**. New cloud presets start without a key; when the provider's usual variable is set, the card offers to copy it into the store once. |
 
-The card header shows the state without revealing the key: no badge when the key resolves, or a warning such as **OPENAI_API_KEY not set** or **key missing** when it does not. Removing a provider deletes its stored key. The `localpilot` CLI cannot read the keychain and uses `LOCALPILOT_KEY_<ID>` instead, for example `LOCALPILOT_KEY_OPENAI`.
+The card header shows the state without revealing the key: no badge when the key resolves, or a warning such as **OPENAI_API_KEY not set** or **key missing** when it does not. Removing a provider deletes its stored key. The `localpilot` CLI shares the same store, so a key entered in VS Code works there too (and the other way round). **Settings → Data & system → Secrets** lists every stored key with what uses it. See [Secrets]({{ '/docs/configuration/' | relative_url }}#secrets).
 
 ## Which model answers
 
@@ -59,8 +59,8 @@ The card header shows the state without revealing the key: no badge when the key
 "localpilot.providers": [
   { "id": "ollama", "type": "ollama", "baseUrl": "http://localhost:11434" },
   { "id": "anthropic", "type": "anthropic", "baseUrl": "https://api.anthropic.com/v1", "apiKey": "${secret:anthropic}" },
-  { "id": "openai", "type": "openai", "baseUrl": "https://api.openai.com/v1", "apiKey": "${env:OPENAI_API_KEY}" },
-  { "id": "gemini", "type": "openai", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKey": "${env:GEMINI_API_KEY}" }
+  { "id": "openai", "type": "openai", "baseUrl": "https://api.openai.com/v1", "apiKey": "${secret:openai}" },
+  { "id": "gemini", "type": "openai", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKey": "${secret:gemini}" }
 ]
 ```
 
@@ -72,7 +72,8 @@ A cloud provider receives the prompts and code you send to its models, under tha
 
 ## Troubleshooting
 
-- **"OPENAI_API_KEY not set" on the card.** VS Code was started without the variable. Paste the key instead, or start VS Code from a shell that exports it.
+- **"OPENAI_API_KEY not set" on the card.** The provider reads its key from a variable VS Code was started without. Paste the key instead; it goes to the secret store.
+- **The secret store is locked.** See [Troubleshooting]({{ '/docs/troubleshooting/' | relative_url }}#the-secret-store-is-locked).
 - **401 or "invalid x-api-key".** The key is wrong or revoked. Paste a new one; it replaces the stored key.
 - **No models listed.** Some keys can only use certain models, and Azure deployments must exist first. Add model ids by hand in the card's **Models** field if the API does not list them.
 - **"Rate limiting" retries.** LocalPilot waits as long as the provider asks (`retry-after`) before retrying. A rejected key or an exhausted quota is reported at once instead of retried.

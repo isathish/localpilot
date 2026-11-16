@@ -230,7 +230,7 @@ export interface ProviderConfig {
   /** `ollama` native API, `openai` any OpenAI-compatible `/v1` API (local servers and most clouds), `anthropic` Claude's Messages API, `vscode-lm` VS Code's language models (Copilot; VS Code only). */
   type: 'ollama' | 'openai' | 'anthropic' | 'vscode-lm';
   baseUrl: string;
-  /** Literal key, an environment reference (`${env:OPENAI_API_KEY}`) or a key kept in VS Code's secret storage (`${secret:openai}`). */
+  /** A key kept in LocalPilot's encrypted secret store (`${secret:openai}`), a literal key, or (older setups) an environment reference (`${env:OPENAI_API_KEY}`). */
   apiKey?: string;
   /**
    * The server forwards prompts to cloud models although it runs locally (gateways such as OmniRoute or LiteLLM).

@@ -21,8 +21,8 @@ synced data is always encrypted with a passphrase only you know. There is no Loc
 These are kept separately and linked to each other, so you can delete a conversation without losing the project memory it
 created, or look at what an agent run did without opening the whole chat.
 
-API keys and passwords are never part of this. They stay in VS Code's secret storage (or the CLI's key file) and are never
-synced.
+API keys and passwords are never part of this. They stay in LocalPilot's encrypted secret store on this computer and are
+never synced.
 
 ## Where it is stored
 
@@ -348,8 +348,9 @@ click **Test connection**, then **Set up sync…** (also **LocalPilot: Set Up Sy
 | WebDAV | Nextcloud, ownCloud, Synology, any WebDAV server | URL, user name, and the password or an app password (**Set…**) |
 
 LocalPilot writes everything into a `localpilot-sync` folder (or prefix) of that storage. S3 and WebDAV need HTTPS (plain
-HTTP is accepted only for `localhost`). The S3 secret key and the WebDAV password are kept in VS Code's secret storage (the
-OS keychain), or in `~/.localpilot/keys.json` for the CLI; they never go into settings and never sync. A Git URL that
+HTTP is accepted only for `localhost`). The S3 secret key and the WebDAV password are kept in LocalPilot's encrypted
+[secret store]({{ '/docs/configuration/' | relative_url }}#secrets) (shared by VS Code and the CLI, its key in the OS keychain); they never go into settings and
+never sync. A Git URL that
 points at a folder with a working tree (a project) is refused. With Git, attachments over 5 MB stay local.
 
 **Test connection** checks access and says whether the storage is empty (set-up creates the encrypted remote) or already
@@ -360,7 +361,7 @@ holds LocalPilot data (set-up joins it with your passphrase). A wrong passphrase
 The first device creates a sync **passphrase** (asked twice, with a strength hint). Everything LocalPilot uploads is
 encrypted on your computer before it leaves, with AES-256-GCM and a random data key; the data key is protected by a key
 derived from your passphrase with scrypt. The passphrase itself is never stored; each device keeps only the data key, in
-its secret storage. Your storage provider sees object names (random-looking ids and numbers), sizes, counts and when they
+its secret store. Your storage provider sees object names (random-looking ids and numbers), sizes, counts and when they
 were written, and how many devices there are; it cannot read titles, messages, code, project names and paths, memory,
 tags, device names, or tell which attachments are the same as files it knows.
 

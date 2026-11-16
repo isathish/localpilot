@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -34,8 +35,10 @@ import { ServiceSupervisor } from './providers/supervisor';
 import { onLmModelsChanged } from './providers/vscodeLm';
 import { ProviderRegistry } from './providers/registry';
 import { ConnectivityMonitor, proxyConfigured } from './providers/connectivity';
-import { isCloudProvider, resolveApiKey, secretEnvName, secretRefs } from './providers/cloud';
+import { isCloudProvider, resolveApiKey, secretEnvName, secretRefs, setSecretUsedHook } from './providers/cloud';
 import { ProviderSecrets } from './providers/secrets';
+import { SecretStore } from './secrets/store';
+import { SharedSecretStorage } from './secrets/vscodeStorage';
 import { ColibriLauncher } from './ui/colibriCommand';
 import { GatewayLauncher } from './ui/gatewayCommand';
 import { ModelTuner } from './ui/modelAutoTune';
@@ -174,8 +177,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   // --- Core services -----------------------------------------------------------------------
   const providers = new ProviderRegistry(log);
   providers.telemetry = telemetry;
-  // API keys entered in Settings live in the OS keychain; settings.json holds only `${secret:<id>}` references.
-  const providerSecrets = new ProviderSecrets(context.secrets, context.globalState);
+  // Every LocalPilot secret (API keys, MCP sign-in tokens, sync credentials) lives in the encrypted store the CLI
+  // shares (~/.localpilot/secrets.db, its key in the OS keychain); settings.json holds only `${secret:<id>}` references.
+  // Tests get a throwaway store that never touches the real keychain.
+  const testMode = context.extensionMode === vscode.ExtensionMode.Test;
+  const isolated = testMode && !process.env.LOCALPILOT_SECRETS_DIR && !process.env.LOCALPILOT_DATA_DIR;
+  const secrets = new SharedSecretStorage(
+    context.secrets,
+    context.globalState,
+    () =>
+      SecretStore.open({
+        dir: isolated ? fs.mkdtempSync(path.join(os.tmpdir(), 'localpilot-test-secrets-')) : undefined,
+        wasmPath: process.env.LOCALPILOT_SQLJS_WASM || path.join(context.extensionPath, 'dist', 'sqljs', 'sql-wasm.wasm'),
+        ...(testMode && !process.env.LOCALPILOT_KEYCHAIN ? { keychain: null, passphrase: process.env.LOCALPILOT_SECRETS_PASSPHRASE || 'test-passphrase' } : {}),
+      }),
+    log
+  );
+  context.subscriptions.push(secrets);
+  setSecretUsedHook((name) => secrets.secretStore?.touch(name));
+  const providerSecrets = new ProviderSecrets(secrets, context.globalState);
   const loadSecrets = () => void providerSecrets.load().catch((e) => log.warn(`provider keys: ${e instanceof Error ? e.message : String(e)}`));
   context.subscriptions.push(providerSecrets, onConfigChange(loadSecrets));
   loadSecrets();
@@ -288,8 +308,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   mcp.trust = workspaceMcpTrust(context.workspaceState);
   mcp.onFileProblems = showMcpFileProblems;
   mcp.loadSecrets = (names) => providerSecrets.loadNames(names);
-  // OAuth tokens of remote MCP servers live in the OS keychain, keyed by server URL so every window shares them.
-  const mcpOAuth = new McpOAuth(context.secrets, { openExternal: (url) => vscode.env.openExternal(vscode.Uri.parse(url)), log: (m) => log.info(m) });
+  // OAuth tokens of remote MCP servers live in the secret store, keyed by server URL so every window and the CLI share them.
+  const mcpOAuth = new McpOAuth(secrets, { openExternal: (url) => vscode.env.openExternal(vscode.Uri.parse(url)), log: (m) => log.info(m) });
   mcp.oauth = mcpOAuth;
   context.subscriptions.push(mcpOAuth);
   controller.mcp = mcp;
@@ -400,7 +420,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     await Promise.all([store.load(), skills.refresh(), commands.refresh()]);
   })();
   // Continuity (event log + index, 1.7): opened once the chats are loaded, never awaited here (activation budget).
-  const continuity = openContinuity(context, log, controller.loaded);
+  const continuity = openContinuity(context, log, controller.loaded, secrets);
   registerContinuityCommands(context, continuity, log);
   // Conversations (1.7): the store's saves become conversation events; deletes go to Trash, retention archives.
   const continuityHost = new ContinuityHost(controller, store, continuity, log);
@@ -440,7 +460,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   context.subscriptions.push(continuityHost);
   // Sync (1.7): end-to-end encrypted sync of the log with a folder, Git, S3-compatible storage or WebDAV.
   let pushSyncSettings: (() => void) | undefined;
-  const syncHost = new SyncHost({ context, handle: continuity, log, publish: (m) => controller.publish(m as ToWebview), onChanged: () => pushSyncSettings?.() });
+  const syncHost = new SyncHost({ context, secrets, handle: continuity, log, publish: (m) => controller.publish(m as ToWebview), onChanged: () => pushSyncSettings?.() });
   continuityHost.sync = syncHost;
   context.subscriptions.push(syncHost);
   const shutdownBeforeContinuity = shutdown;
@@ -1820,7 +1840,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
     if (!target) {
       return;
     }
-    const key = await vscode.window.showInputBox({ title: `API key for ${target.displayName || target.id}`, prompt: 'Stored in VS Code secret storage (your OS keychain), not in settings.json. Leave empty to remove it.', password: true, ignoreFocusOut: true });
+    const key = await vscode.window.showInputBox({ title: `API key for ${target.displayName || target.id}`, prompt: 'Stored in the encrypted LocalPilot secret store (shared with the CLI), not in settings.json. Leave empty to remove it.', password: true, ignoreFocusOut: true });
     if (key === undefined) {
       return;
     }

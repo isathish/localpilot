@@ -22,7 +22,7 @@
 <table align="center">
   <tr>
     <td align="center" width="33%"><b>$0 per month</b><br><sub>Cloud assistants cost $8–200 per developer. LocalPilot runs on hardware you already own.</sub></td>
-    <td align="center" width="33%"><b>Private by construction</b><br><sub>Every provider address is <code>localhost</code> unless you add one. Cloud keys live in your OS keychain. No telemetry leaves the disk.</sub></td>
+    <td align="center" width="33%"><b>Private by construction</b><br><sub>Every provider address is <code>localhost</code> unless you add one. Cloud keys live in an encrypted store unlocked by your OS keychain. No telemetry leaves the disk.</sub></td>
     <td align="center" width="33%"><b>Works offline</b><br><sub>Unplug the network: it keeps editing, running tests and reviewing diffs.</sub></td>
   </tr>
 </table>
@@ -122,7 +122,7 @@ Each tab is an independent agent in its own git worktree, so nothing collides. *
 | **Parallel agents** | Independent tabs, one worktree each, Best-of-N across models, live Agents panel, per-agent pause and stop. |
 | **Change review & checkpoints** | Side-by-side diffs, accept or reject per file or session, restore any checkpoint. |
 | **Zero-config providers** | Auto-detects Ollama, LM Studio, llama.cpp, vLLM, Docker Model Runner, Jan, SGLang, KoboldCpp, the OmniRoute and LiteLLM gateways, and model servers in Docker. |
-| **Cloud providers, your own key** | One-click presets for OpenAI, Anthropic (Claude), Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Azure OpenAI and Ollama Cloud. Keys go to your OS keychain. Automatic picks keep preferring local models. |
+| **Cloud providers, your own key** | One-click presets for OpenAI, Anthropic (Claude), Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, Together, Fireworks, Cerebras, Hugging Face, NVIDIA NIM, Azure OpenAI and Ollama Cloud. Keys go to an encrypted store unlocked by your OS keychain. Automatic picks keep preferring local models. |
 | **Conversations & search** | Every chat kept and searchable, including code and error output. Pinned, Favorites, Archive, tags, Trash with restore, branches instead of overwrites, Compare answers, export to Markdown, HTML, PDF or JSON. |
 | **Memory & context** | Six kinds of memory (project, developer, conversation, task, knowledge, agent) in one manager, and named context sets you attach with `#context:`. |
 | **Encrypted sync** | Continue a chat on another computer. Conversations, memory and checkpoints sync through your cloud-drive folder, Git, S3-compatible storage or WebDAV, end-to-end encrypted with your passphrase. No server, no account. |

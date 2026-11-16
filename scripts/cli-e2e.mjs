@@ -181,11 +181,15 @@ const healingCommands = (records) => records.filter((x) => x.type === 'tool_star
 const nodePackage = (test) => JSON.stringify({ name: 'e2e-heal', version: '1.0.0', private: true, scripts: { test } }, null, 2);
 const ADD_TEST = "const { add } = require('./math');\nif (add(2, 2) !== 4) {\n  console.error('test failed: add(2, 2) should be 4');\n  process.exit(1);\n}\nconsole.log('1 passing');\n";
 
-/** Runs the CLI with a fresh environment (no real keys leak in) and returns its exit code and output. */
+/**
+ * Runs the CLI with a fresh environment (no real keys leak in) and returns its exit code and output. The secret store
+ * never touches the developer's keychain: LOCALPILOT_KEYCHAIN=none and a test passphrase, in the throwaway HOME.
+ */
+const SECRETS_ENV = { LOCALPILOT_KEYCHAIN: 'none', LOCALPILOT_SECRETS_PASSPHRASE: 'e2e-secrets-passphrase' };
 function cli(args, { input, env = {}, cwd = ws, onSpawn } = {}) {
   return new Promise((resolve) => {
-    const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/API_KEY|_TOKEN$|^LOCALPILOT_KEY_/.test(k)));
-    const child = spawn(process.execPath, [CLI, ...args], { cwd, env: { ...clean, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(home, '.config'), NO_COLOR: '1', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/API_KEY|_TOKEN$|^LOCALPILOT_KEY_|^LOCALPILOT_(SECRETS_DIR|DATA_DIR|KEYCHAIN|SECRETS_PASSPHRASE)$/.test(k)));
+    const child = spawn(process.execPath, [CLI, ...args], { cwd, env: { ...clean, ...SECRETS_ENV, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(home, '.config'), NO_COLOR: '1', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
     let stdout = '';
     let stderr = '';
@@ -201,8 +205,18 @@ function cli(args, { input, env = {}, cwd = ws, onSpawn } = {}) {
   });
 }
 const cfgFile = path.join(home, '.localpilot', 'config.json');
-const keysFile = path.join(home, '.localpilot', 'keys.json');
+const secretsDb = path.join(home, '.localpilot', 'secrets.db');
 const readCfg = () => JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+/** Names in the encrypted store, through `localpilot secrets list --json` (values are never printed). */
+const storedNames = async (env = {}) => {
+  const r = await cli(['secrets', 'list', '--json'], { env });
+  try {
+    return JSON.parse(r.stdout).map((x) => x.name);
+  } catch {
+    return [`(unparsable: ${r.out.slice(0, 200)})`];
+  }
+};
+const dbHas = (text, file = secretsDb) => fs.existsSync(file) && fs.readFileSync(file).includes(text);
 
 try {
   console.log('[localpilot providers]');
@@ -214,8 +228,8 @@ try {
   const cfg = readCfg();
   const claude = cfg.providers.find((p) => p.id === 'anthropic');
   check('settings hold a ${secret:anthropic} reference, never the key', claude?.apiKey === '${secret:anthropic}' && !fs.readFileSync(cfgFile, 'utf8').includes('sk-e2e-claude'), cfg);
-  const mode = fs.statSync(keysFile).mode & 0o777;
-  check('key stored in keys.json, readable by the owner only', JSON.parse(fs.readFileSync(keysFile, 'utf8')).anthropic === 'sk-e2e-claude' && (process.platform === 'win32' || mode === 0o600), mode.toString(8));
+  const mode = fs.statSync(secretsDb).mode & 0o777;
+  check('key stored in the encrypted secret store (secrets.db, owner only), never in plain text', (await storedNames()).includes('anthropic') && !dbHas('sk-e2e-claude') && !dbHas('anthropic') && !fs.existsSync(path.join(home, '.localpilot', 'keys.json')) && (process.platform === 'win32' || mode === 0o600), mode.toString(8));
 
   r = await cli(['providers', 'add', 'omniroute', '--url', `${base}/omni/v1`]);
   check('add the OmniRoute gateway: marked cloud, models listed', r.code === 0 && readCfg().providers.find((p) => p.id === 'omniroute')?.cloud === true && /omniroute\/auto\/coding/.test(r.out), r.out);
@@ -223,17 +237,28 @@ try {
   r = await cli(['providers', 'add', `${base}/local/v1`, '--id', 'local', '--name', 'Local server']);
   check('add a custom local URL', r.code === 0 && /Connected/.test(r.out), r.out);
 
-  r = await cli(['providers', 'add', 'openai', '--key-env', 'MY_OPENAI']);
-  check('add openai reading its key from an environment variable', readCfg().providers.find((p) => p.id === 'openai')?.apiKey === '${env:MY_OPENAI}', r.out);
+  r = await cli(['providers', 'add', 'openai', '--url', `${base}/nope/v1`, '--key-env', 'MY_OPENAI']);
+  check('--key-env with the variable unset: nothing to copy, exit 2, provider not added', r.code === 2 && /MY_OPENAI is not set/.test(r.out) && !readCfg().providers.some((p) => p.id === 'openai'), r.out);
+  r = await cli(['providers', 'add', 'openai', '--url', `${base}/nope/v1`, '--key-env', 'MY_OPENAI'], { env: { MY_OPENAI: 'sk-e2e-from-env-openai' } });
+  check('add openai --key-env: the variable is COPIED into the store, settings hold ${secret:openai}', readCfg().providers.find((p) => p.id === 'openai')?.apiKey === '${secret:openai}' && (await storedNames()).includes('openai') && !dbHas('sk-e2e-from-env-openai') && !fs.readFileSync(cfgFile, 'utf8').includes('sk-e2e-from-env'), r.out);
+  // A key set up before the store (`${env:VAR}`) still resolves, and is offered a move into the store.
+  const legacyCfg = readCfg();
+  legacyCfg.providers.push({ id: 'legacyenv', type: 'openai', baseUrl: `${base}/nope/v1`, apiKey: '${env:E2E_LEGACY_KEY}', cloud: true });
+  fs.writeFileSync(cfgFile, JSON.stringify(legacyCfg, null, 2));
+  r = await cli(['providers'], { env: { E2E_LEGACY_KEY: 'sk-e2e-legacy' } });
+  check('a legacy ${env:VAR} key still works and says "move into secret store"', /key from \$E2E_LEGACY_KEY/.test(r.out) && /move into secret store: localpilot providers key legacyenv --key-env E2E_LEGACY_KEY/.test(r.out) && !r.out.includes('sk-e2e-legacy'), r.out);
+  r = await cli(['providers', 'key', 'legacyenv', '--key-env', 'E2E_LEGACY_KEY'], { env: { E2E_LEGACY_KEY: 'sk-e2e-legacy' } });
+  check('providers key --key-env moves it: copied into the store, reference rewritten', readCfg().providers.find((p) => p.id === 'legacyenv')?.apiKey === '${secret:legacyenv}' && (await storedNames()).includes('legacyenv') && !dbHas('sk-e2e-legacy') && /no longer read/.test(r.out), r.out);
+  await cli(['providers', 'remove', 'legacyenv']);
 
   r = await cli(['providers']);
   const localPart = r.out.split('Cloud')[0];
   const cloudPart = r.out.split('Cloud')[1] ?? '';
   check('list: local and VS Code providers under Local, Claude and the gateway under Cloud', /local\b/.test(localPart) && /vsc\b/.test(localPart) && /anthropic/.test(cloudPart) && /omniroute/.test(cloudPart), r.out);
-  check('list: key state shown, the key itself never printed', /key stored/.test(r.out) && /MY_OPENAI not set/.test(r.out) && !r.out.includes('sk-e2e-claude'), r.out);
+  check('list: key state shown, the key itself never printed', /key stored/.test(r.out) && !r.out.includes('sk-e2e-claude') && !r.out.includes('sk-e2e-from-env'), r.out);
 
   r = await cli(['providers', 'key', 'vsc'], { input: 'sk-piped-for-vsc\n' });
-  check('key for a VS Code provider, piped in: stored for the CLI', r.code === 0 && JSON.parse(fs.readFileSync(keysFile, 'utf8')).vsc === 'sk-piped-for-vsc' && readCfg().providers.find((p) => p.id === 'vsc')?.apiKey === '${secret:vsc}', r.out);
+  check('key for a VS Code provider, piped in: stored in the shared store', r.code === 0 && (await storedNames()).includes('vsc') && !dbHas('sk-piped-for-vsc') && readCfg().providers.find((p) => p.id === 'vsc')?.apiKey === '${secret:vsc}', r.out);
   check('the VS Code provider keeps its URL from VS Code (merged by id)', readCfg().providers.find((p) => p.id === 'vsc')?.baseUrl === undefined && /From VS Code/.test((await cli(['providers'])).out));
 
   console.log('[localpilot models / doctor]');
@@ -388,7 +413,7 @@ try {
   removeTemp(deadHome);
   check('--json: failures before the run (unreachable provider, -k without -P, unknown -P) are JSON error lines on stderr, exit 2', jsonErrs.every((x) => x.ok), jsonErrs);
   r = await cli(['-y', '--no-mcp', '-P', 'local', '-k', 'sk-run-only', '-p', 'Say hi']);
-  check('-P/-k: the key is used for this run and not saved', r.code === 0 && seen.localAuth.at(-1) === 'Bearer sk-run-only' && !fs.readFileSync(cfgFile, 'utf8').includes('sk-run-only') && !(fs.existsSync(keysFile) && fs.readFileSync(keysFile, 'utf8').includes('sk-run-only')), r.out);
+  check('-P/-k: the key is used for this run and not saved', r.code === 0 && seen.localAuth.at(-1) === 'Bearer sk-run-only' && !fs.readFileSync(cfgFile, 'utf8').includes('sk-run-only') && !(await storedNames()).some((n) => /run/.test(n)), r.out);
   r = await cli(['-y', ...local, '-s', 'E2E-SYSTEM-APPEND', '-p', 'Say hi']);
   check('-s appends to the system prompt', r.code === 0 && String(seen.localBodies.at(-1)?.messages?.[0]?.content ?? '').includes('E2E-SYSTEM-APPEND'), r.out);
   r = await cli(['config', 'tools', '--json']);
@@ -565,11 +590,53 @@ try {
   console.log('[keys]');
   r = await cli(['providers', 'key', 'anthropic', '--remove-key']);
   const after = await cli(['providers']);
-  check('remove-key: key deleted and the provider reports it', r.code === 0 && !('anthropic' in JSON.parse(fs.readFileSync(keysFile, 'utf8'))) && /no API key/.test(after.out), after.out);
+  check('remove-key: key deleted and the provider reports it', r.code === 0 && !(await storedNames()).includes('anthropic') && /no API key/.test(after.out), after.out);
   r = await cli(['providers', 'key', 'anthropic', 'sk-e2e-claude']);
   check('key given as an argument: saved and connection checked', r.code === 0 && /Connected/.test(r.out), r.out);
   const envOnly = await cli(['providers', 'test', 'vsc'], { env: { LOCALPILOT_KEY_VSC: 'from-env' } });
   check('test one provider', envOnly.code === 0 && /Connected/.test(envOnly.out), envOnly.out);
+
+  console.log('[localpilot secrets]');
+  r = await cli(['secrets', 'status', '--json']);
+  const sst = r.code === 0 ? JSON.parse(r.stdout) : {};
+  check('secrets status --json: AES-256-GCM, unlocked by the passphrase here, counts entries', sst.cipher === 'AES-256-GCM' && sst.mode === 'passphrase' && sst.count >= 2 && sst.file === secretsDb, r.out);
+  r = await cli(['secrets', 'set', 'e2e-token', '-'], { input: 'tok-E2E-piped-value\n' });
+  const listed = await cli(['secrets', 'list']);
+  const listedJson = await cli(['secrets', 'list', '--json']);
+  check('secrets set (piped) and list: the name with its source, never the value', r.code === 0 && /e2e-token/.test(listed.out) && !listed.out.includes('tok-E2E') && !listedJson.out.includes('tok-E2E') && JSON.parse(listedJson.stdout).find((x) => x.name === 'e2e-token')?.source === 'cli' && !dbHas('tok-E2E') && !dbHas('e2e-token'), listed.out);
+  check('secrets list: what uses each key', /anthropic\s+provider/.test(listed.out) && JSON.parse(listedJson.stdout).find((x) => x.name === 'anthropic')?.usedBy?.[0]?.startsWith('provider'), listed.out);
+  r = await cli(['secrets', 'set', 'e2e-token', 'value-on-the-command-line']);
+  check('secrets set refuses a value as an argument (shell history)', r.code === 2 && !(await cli(['secrets', 'list'])).out.includes('value-on'), r.out);
+  r = await cli(['secrets', 'import-env', 'e2e-env', 'E2E_IMPORT_ME'], { env: { E2E_IMPORT_ME: 'imported-E2E-value' } });
+  check('secrets import-env copies a variable once', r.code === 0 && JSON.parse((await cli(['secrets', 'list', '--json'])).stdout).find((x) => x.name === 'e2e-env')?.source === 'env:E2E_IMPORT_ME' && !r.out.includes('imported-E2E-value'), r.out);
+  r = await cli(['secrets', 'import-env', 'e2e-env2', 'E2E_NOT_SET']);
+  check('secrets import-env of an unset variable fails', r.code === 1 && /not set/.test(r.out), r.out);
+  r = await cli(['secrets', 'delete', 'e2e-token']);
+  const r2 = await cli(['secrets', 'delete', 'e2e-token']);
+  check('secrets delete: removed; a second delete says there is none', r.code === 0 && r2.code === 1 && !(await storedNames()).includes('e2e-token'), r.out + r2.out);
+  r = await cli(['secrets', 'delete', 'e2e-env']);
+  check('secrets: a stored ${secret:…} reference still resolves after other changes', (await cli(['providers', 'test', 'anthropic'])).code === 0, r.out);
+  // A machine with the plain-text files of 1.7: moved into the store on first run, each file deleted after it reads back.
+  const legacyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-cli-legacy-'));
+  const lenv = { HOME: legacyHome, USERPROFILE: legacyHome, APPDATA: path.join(legacyHome, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(legacyHome, '.config') };
+  fs.mkdirSync(path.join(legacyHome, '.localpilot'), { recursive: true });
+  fs.writeFileSync(path.join(legacyHome, '.localpilot', 'keys.json'), JSON.stringify({ oldkey: 'sk-LEGACY-plain', 'sync:r1:k1': 'ZGF0YQ==' }), { mode: 0o600 });
+  fs.writeFileSync(path.join(legacyHome, '.localpilot', 'secrets.json'), JSON.stringify({ 'localpilot.mcp.oauth.https://mcp.example.com/mcp': '{"tokens":{"access_token":"at-LEGACY"}}' }), { mode: 0o600 });
+  const migratedNames = await storedNames(lenv);
+  const ldb = path.join(legacyHome, '.localpilot', 'secrets.db');
+  check('legacy keys.json and secrets.json moved into the store and deleted', migratedNames.includes('oldkey') && migratedNames.includes('sync:r1:k1') && migratedNames.includes('localpilot.mcp.oauth.https://mcp.example.com/mcp') && !fs.existsSync(path.join(legacyHome, '.localpilot', 'keys.json')) && !fs.existsSync(path.join(legacyHome, '.localpilot', 'secrets.json')) && !dbHas('sk-LEGACY', ldb) && !dbHas('at-LEGACY', ldb), migratedNames);
+  fs.writeFileSync(path.join(legacyHome, '.localpilot', 'keys.json'), '{ broken');
+  r = await cli(['secrets', 'list'], { env: lenv });
+  check('a legacy file that is not valid JSON is left untouched and reported', fs.readFileSync(path.join(legacyHome, '.localpilot', 'keys.json'), 'utf8') === '{ broken' && /not valid JSON/.test(r.out), r.out);
+  // No keychain and no passphrase: the store is locked; keys are refused instead of written in plain text.
+  const lockedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-cli-locked-'));
+  const lockedEnv = { HOME: lockedHome, USERPROFILE: lockedHome, APPDATA: path.join(lockedHome, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(lockedHome, '.config'), LOCALPILOT_SECRETS_PASSPHRASE: '' };
+  r = await cli(['secrets', 'status'], { env: lockedEnv });
+  const lockedAdd = await cli(['providers', 'add', 'anthropic', '--url', `${base}/anthropic/v1`, '--key', 'sk-should-not-be-written'], { env: lockedEnv });
+  const plain = fs.readdirSync(path.join(lockedHome, '.localpilot')).filter((f) => fs.readFileSync(path.join(lockedHome, '.localpilot', f)).includes('sk-should-not-be-written'));
+  check('locked store (no keychain, no passphrase): status explains, a key is refused, nothing in plain text', r.code === 1 && /LOCALPILOT_SECRETS_PASSPHRASE/.test(r.out) && lockedAdd.code !== 0 && /Cannot save the key/.test(lockedAdd.out) && !plain.length, { status: r.out, add: lockedAdd.out, plain });
+  removeTemp(legacyHome);
+  removeTemp(lockedHome);
 
   console.log('[remove]');
   r = await cli(['providers', 'remove', 'omniroute']);

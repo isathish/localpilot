@@ -306,13 +306,13 @@ Containers appear as providers named `docker-<container>`, for example *vLLM (Do
 
 The quickest way is **Settings → Providers** (gear icon in the chat toolbar):
 
-1. Under **Add a provider**, choose **On this machine**, **Cloud APIs** or **Gateways** and click a preset. **Find a provider…** searches all three, best match first (`hf` finds Hugging Face, `vercel` the Vercel AI Gateway). Use the arrow keys to move through the presets, **Enter** to add one and **Esc** to clear the search. For anything else, use **Custom endpoint**. The cloud presets include SambaNova, MiniMax, Z.AI, Baseten, Nebius AI Studio, Requesty and Vercel AI Gateway, each reading its key from the provider's usual environment variable.
-2. Enter the URL and, if needed, an API key. Cloud presets fill in the URL and read the key from the provider's usual environment variable (`${env:OPENAI_API_KEY}`, `${env:ANTHROPIC_API_KEY}`, `${env:GEMINI_API_KEY}`…). If you paste the key itself instead, LocalPilot stores it in VS Code secret storage (your OS keychain) and writes only `${secret:<id>}` to settings.json. **LocalPilot: Set Provider API Key…** does the same from the Command Palette.
+1. Under **Add a provider**, choose **On this machine**, **Cloud APIs** or **Gateways** and click a preset. **Find a provider…** searches all three, best match first (`hf` finds Hugging Face, `vercel` the Vercel AI Gateway). Use the arrow keys to move through the presets, **Enter** to add one and **Esc** to clear the search. For anything else, use **Custom endpoint**. The cloud presets include SambaNova, MiniMax, Z.AI, Baseten, Nebius AI Studio, Requesty and Vercel AI Gateway.
+2. Enter the URL and, if needed, an API key. Cloud presets fill in the URL and start without a key: paste it, and LocalPilot keeps it in its encrypted [secret store]({{ '/docs/configuration/' | relative_url }}#secrets) (shared with the CLI, unlocked by your OS keychain) and writes only `${secret:<id>}` to settings.json. When the provider's usual environment variable is set (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`…), the card offers **Copy $OPENAI_API_KEY into the secret store**, a one-time copy; the variable is not read again. **LocalPilot: Set Provider API Key…** stores a key from the Command Palette.
 3. Press **Test connection** to confirm the server answers and see which models it exposes.
 
 Configured providers are listed under **Local** and **Cloud**.
 
-![A cloud provider's card: OpenAI with the warning OPENAI_API_KEY not set, the API key field first with a Get an API key link, then ID, API type, base URL and context window]({{ '/assets/screenshots/settings-provider-cloud.png' | relative_url }}) A card's header shows what needs attention: a server that is unreachable, or a key that is missing (**OPENAI_API_KEY not set**, **key missing**). When everything works it shows the model count and latency instead. For a cloud provider the **API key** field comes first, with a link to the provider's key page.
+![A cloud provider's card: OpenAI with the warning OPENAI_API_KEY not set, the API key field first with a Get an API key link, then ID, API type, base URL and context window]({{ '/assets/screenshots/settings-provider-cloud.png' | relative_url }}) A card's header shows what needs attention: a server that is unreachable, or a key that is missing (**no API key**, **key missing**, or **OPENAI_API_KEY not set** for an older `${env:…}` key). When everything works it shows the model count and latency instead. For a cloud provider the **API key** field comes first, with a link to the provider's key page.
 
 ![Add a provider: the Cloud APIs tab with presets for Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI and more, a search box, and a Custom endpoint button]({{ '/assets/screenshots/settings-add-provider.png' | relative_url }})
 
@@ -332,20 +332,20 @@ The same configuration lives in `localpilot.providers` if you prefer `settings.j
 }
 ```
 
-Cloud providers look like this:
+Cloud providers look like this once their keys are stored:
 
 ```jsonc
-{ "id": "openai", "type": "openai", "baseUrl": "https://api.openai.com/v1", "apiKey": "${env:OPENAI_API_KEY}" },
-{ "id": "anthropic", "type": "anthropic", "baseUrl": "https://api.anthropic.com/v1", "apiKey": "${env:ANTHROPIC_API_KEY}" },
-{ "id": "gemini", "type": "openai", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKey": "${env:GEMINI_API_KEY}" }
+{ "id": "openai", "type": "openai", "baseUrl": "https://api.openai.com/v1", "apiKey": "${secret:openai}", "cloud": true },
+{ "id": "anthropic", "type": "anthropic", "baseUrl": "https://api.anthropic.com/v1", "apiKey": "${secret:anthropic}", "cloud": true },
+{ "id": "gemini", "type": "openai", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKey": "${secret:gemini}", "cloud": true }
 ```
 
 Ways to give a key:
 
 | `apiKey` | Where the key lives |
 |---|---|
-| `${secret:<id>}` | VS Code secret storage (OS keychain). Written for you when you paste a key in Settings or run **Set Provider API Key…**. The `localpilot` CLI has no keychain access and reads `LOCALPILOT_KEY_<ID>` instead, for example `LOCALPILOT_KEY_OPENAI`. |
-| `${env:NAME}` | An environment variable in VS Code's environment. Launch VS Code from a shell that exports it, or set it in your shell profile. |
+| `${secret:<id>}` | LocalPilot's encrypted secret store (`~/.localpilot/secrets.db`, AES-256-GCM, its key in your OS keychain). Written for you when you paste a key in Settings, run **Set Provider API Key…**, or `localpilot providers key <id>`. VS Code and the `localpilot` CLI share it. `LOCALPILOT_KEY_<ID>` (for example `LOCALPILOT_KEY_OPENAI`) stands in for it, for CI. |
+| `${env:NAME}` | An environment variable, read when the key is used. Still works for providers set up this way, but Settings and `localpilot providers` show **Move into secret store**, which copies the value in once and replaces the reference. |
 | the key itself | settings.json, in plain text. Avoid this if you sync settings. |
 
 Azure OpenAI uses the v1 endpoint, `https://<resource>.openai.azure.com/openai/v1`, and the key is sent as `api-key`. For a deployment-style URL (`…/openai/deployments/<name>`), set **Azure api-version** (`apiVersion`) and it is added to every request.
@@ -364,7 +364,7 @@ A provider card's **Default model** lists the models the server reported (with a
 
 ```jsonc
 {
-  "id": "openrouter", "type": "openai", "baseUrl": "https://openrouter.ai/api/v1", "apiKey": "${env:OPENROUTER_API_KEY}",
+  "id": "openrouter", "type": "openai", "baseUrl": "https://openrouter.ai/api/v1", "apiKey": "${secret:openrouter}",
   "defaultModel": "qwen/qwen3-coder",
   "timeoutMs": 90000,
   "extraBody": { "provider": { "sort": "throughput" } },

@@ -90,16 +90,17 @@ An installed Ollama that is not running is started by the CLI when a run or `loc
 | `localpilot config [kind] [--json]` | Lists what is in force, with source path and on/off state: `rules`, `skills`, `agents`, `commands`, `hooks`, `mcp`, `tools` (with the approval each needs) or `plugins`. Without a kind, all of them |
 | `localpilot providers` | Lists providers under **Local** and **Cloud** with reachability, model count and where each key comes from. Never prints a key |
 | `localpilot providers presets` | Lists what `providers add` accepts: local servers, cloud APIs and gateways |
-| `localpilot providers add <preset\|url>` | Adds a provider: a preset (`openai`, `anthropic`, `gemini`, `openrouter`, `groq`, `omniroute`…) or any OpenAI-compatible URL; a close name such as `hf` picks the matching preset and says which. Options: `--key <key>`, `--key-env VAR`, `--url <url>`, `--region <aws-region>` (Amazon Bedrock), `--id <id>`, `--name <name>`, `--type ollama\|openai\|anthropic`, `--cloud` / `--no-cloud`. Checks the connection and lists the models |
-| `localpilot providers key <id> [key]` | Sets a provider's API key: as an argument, typed at a hidden prompt, or piped in (`pass openai \| localpilot providers key openai`). `--key-env VAR` reads it from a variable instead; `--remove-key` deletes it |
+| `localpilot providers add <preset\|url>` | Adds a provider: a preset (`openai`, `anthropic`, `gemini`, `openrouter`, `groq`, `omniroute`…) or any OpenAI-compatible URL; a close name such as `hf` picks the matching preset and says which. Options: `--key <key>`, `--key-env VAR` (copies the variable's value into the secret store once), `--url <url>`, `--region <aws-region>` (Amazon Bedrock), `--id <id>`, `--name <name>`, `--type ollama\|openai\|anthropic`, `--cloud` / `--no-cloud`. Checks the connection and lists the models |
+| `localpilot providers key <id> [key]` | Sets a provider's API key: as an argument, typed at a hidden prompt, or piped in (`pass openai \| localpilot providers key openai`). `--key-env VAR` copies it from a variable instead (the variable is not read again); `--remove-key` deletes it. Keys go to the encrypted [secret store](#secrets) |
 | `localpilot providers test [id]` | Checks one provider, or all, and lists their models |
 | `localpilot providers remove <id>` | Removes a provider added from the CLI, with its stored key. A provider from VS Code settings is disabled for the CLI only |
 | `localpilot mcp [list] [--json]` | Lists the MCP servers in force: transport, command or URL, on/off state, where each comes from (your organization's policy, the setting, a file or a plugin) and any definition it overrides. Without arguments in a terminal, a numbered menu to add, remove, enable, disable or sign in |
 | `localpilot mcp add <name> [--env K=V]… -- <command> [args…]` | Adds a local (stdio) server to `~/.localpilot/mcp.json`, or to `./.mcp.json` with `--scope project`. Everything after `--` is the server's command line. `--force` replaces a server of the same name |
 | `localpilot mcp add <name> <url> [--transport http\|sse] [--header "K: V"]…` | Adds a remote server. Without `--transport`, Streamable HTTP is tried first, then SSE |
 | `localpilot mcp remove\|enable\|disable <name>` | Removes a server from its file, or switches it on or off where it is defined (a file's `disabled` field, or the `localpilot.mcpServers` setting in `~/.localpilot/config.json`). A server from your organization's policy is switched off with a `{ "enabled": false }` entry in that setting, unless the policy keeps it always on |
-| `localpilot mcp auth <name>` | Connects to a remote server and reports its tools. When the server asks for sign-in (OAuth), your browser opens; the token is saved in `~/.localpilot/secrets.json` (readable only by you) and later CLI sessions use it |
-| `localpilot skill install <source> [--user]` | Installs a skill from `owner/repo[/path]`, `owner/repo@ref/path`, a GitHub URL, a `SKILL.md` URL or a folder. `--user` installs to `~/.localpilot/skills` |
+| `localpilot mcp auth <name>` | Connects to a remote server and reports its tools. When the server asks for sign-in (OAuth), your browser opens; the token is saved in the encrypted [secret store](#secrets) that VS Code shares, so later CLI sessions and VS Code windows use it |
+| `localpilot secrets status\|list [--json]\|set <name> [-]\|delete <name>\|import-env <name> <ENV_VAR>` | The encrypted secret store VS Code and the CLI share; see [Secrets](#secrets). Never prints a value |
+| `localpilot skill install <source> [-u\|--user]` | Installs a skill from `owner/repo[/path]`, `owner/repo@ref/path`, a GitHub URL, a `SKILL.md` URL or a folder. `-u`/`--user` installs to `~/.localpilot/skills` |
 | `localpilot skill search <words> [--install]` | Ranks the skill registry (`localpilot.skills.repositories`) for a query. `--install` installs the best match |
 | `localpilot eval [--models a,b]` | Benchmarks models on real coding tasks; see [Benchmarking models](#benchmarking-models) |
 | `localpilot scan [folder]` | Security scan: vulnerable dependencies, committed secrets and risky code; see [Security scanning](#security-scanning) |
@@ -224,6 +225,7 @@ In the chat, `/scan` runs the same scan and fixes what is safe to fix: it upgrad
 | `--compaction <strategy>` | How a full context is compacted for this run: `agentic` (model summary), `basic` (no model call) or `off`. Overrides `localpilot.compaction.strategy` |
 | `-v`, `--verbose` | Show tool arguments and debug logs |
 | `--ide` (`--vscode`) | Open the task in VS Code instead of running it in the shell |
+| `--parallel` | Like `--ide`, and the task opens as a parallel session in VS Code's Agents panel |
 | `--settings`, `--setup` | Open LocalPilot Settings or the setup wizard in VS Code |
 | `-h`, `--help`; `-V`, `--version` | Help, version |
 
@@ -341,7 +343,7 @@ The CLI reads settings in this order, later sources winning:
 3. `~/.localpilot/config.json`
 4. command-line flags
 
-A model server configured in LocalPilot Settings is therefore already known to the CLI. API keys that Settings stored in VS Code's secret storage (`${secret:<id>}`) are out of the CLI's reach: set `LOCALPILOT_KEY_<ID>` instead, the provider id in upper case with other characters as `_` (for example `LOCALPILOT_KEY_OPENAI` or `LOCALPILOT_KEY_OLLAMA_CLOUD`). Keys written as `${env:NAME}` work in both. Changes saved from the CLI (such as `localpilot providers add`) go to `~/.localpilot/config.json`, never to VS Code's settings. `/model` and `-m`/`--model` apply to the current run only; the lasting default is `defaultModel` in `~/.localpilot/config.json` or in VS Code's settings. Logs go to `~/.localpilot/cli.log`.
+A model server configured in LocalPilot Settings is therefore already known to the CLI, and so are its API keys: Settings and the CLI keep them in the same encrypted [secret store](#secrets), so a `${secret:<id>}` key entered in either works in both. `LOCALPILOT_KEY_<ID>` stands in for a stored key (the provider id in upper case with other characters as `_`, for example `LOCALPILOT_KEY_OPENAI` or `LOCALPILOT_KEY_OLLAMA_CLOUD`), which suits CI. Older keys written as `${env:NAME}` still work in both. Changes saved from the CLI (such as `localpilot providers add`) go to `~/.localpilot/config.json`, never to VS Code's settings. `/model` and `-m`/`--model` apply to the current run only; the lasting default is `defaultModel` in `~/.localpilot/config.json` or in VS Code's settings. Logs go to `~/.localpilot/cli.log`.
 
 `~/.localpilot/config.json` uses the same keys without the `localpilot.` prefix:
 
@@ -359,9 +361,9 @@ The CLI sees every provider configured in VS Code. Providers you add with `local
 
 ```bash
 localpilot providers presets                      # what you can add
-localpilot providers add openai                   # uses $OPENAI_API_KEY, or asks for the key
-localpilot providers add anthropic --key "$KEY"   # stores the key (see below)
-localpilot providers add groq --key-env GROQ_API_KEY
+localpilot providers add openai                   # asks for the key (or offers to copy $OPENAI_API_KEY)
+localpilot providers add anthropic --key "$KEY"   # stores the key in the secret store
+localpilot providers add groq --key-env GROQ_API_KEY   # copies $GROQ_API_KEY into the store once
 localpilot providers add omniroute                # local gateway, marked cloud
 localpilot providers add http://gpu-box:8000/v1 --id homelab
 localpilot providers                              # Local / Cloud, reachability, key state
@@ -372,9 +374,28 @@ Where keys come from:
 
 | `apiKey` | In the CLI |
 |---|---|
-| `${env:NAME}` | The variable in your shell. |
-| `${secret:<id>}` | VS Code keeps this key in the OS keychain, which the CLI cannot read. It uses `~/.localpilot/keys.json` instead (written by `providers add --key` and `providers key`, readable by you only), or the variable `LOCALPILOT_KEY_<ID>`, for example `LOCALPILOT_KEY_OPENAI`. |
+| `${secret:<id>}` | The encrypted secret store shared with VS Code (written by `providers add --key`, `providers add --key-env`, `providers key` and Settings), or the variable `LOCALPILOT_KEY_<ID>`, for example `LOCALPILOT_KEY_OPENAI`. |
+| `${env:NAME}` | The variable in your shell. Still works, but `localpilot providers` shows **move into secret store** with the command that copies it in (`localpilot providers key <id> --key-env NAME`). |
 | the key itself | Used as is. |
+
+A preset given with `-P` for one run (`OPENAI_API_KEY=… localpilot -P openai "task"`) reads the provider's usual variable for that run only and stores nothing.
+
+### Secrets
+
+API keys, MCP sign-in tokens and sync credentials live in one encrypted store that the CLI and every VS Code window share: `~/.localpilot/secrets.db` (or `LOCALPILOT_SECRETS_DIR`, else `LOCALPILOT_DATA_DIR`), AES-256-GCM over the whole file, so names and values are both hidden. Its key is in your OS keychain (macOS Keychain, Windows Credential Manager, or the Secret Service through `secret-tool` on Linux). On a server or in a container without a keychain, set `LOCALPILOT_SECRETS_PASSPHRASE`; `LOCALPILOT_KEYCHAIN=none` never uses the keychain. Nothing is ever kept in plain text: when the store cannot be unlocked, commands that save a key fail and say why (see [Troubleshooting]({{ '/docs/troubleshooting/' | relative_url }}#the-secret-store-is-locked)).
+
+```bash
+localpilot secrets status                 # file, AES-256-GCM, unlocked by …, count and size (--json too)
+localpilot secrets list                   # names, what uses each, source, changed, last used (--json too)
+localpilot secrets set github-token       # typed at a hidden prompt
+printf %s "$TOKEN" | localpilot secrets set github-token -   # or piped in
+localpilot secrets import-env github-token GITHUB_TOKEN      # copy a variable in once
+localpilot secrets delete github-token    # says what still references it
+```
+
+Reference a stored value as `${secret:<name>}` in a provider's key or headers, the web search key, or an MCP server's `env` and `headers`. Values are never printed and never taken as a command-line argument. `localpilot doctor` shows the store's state under **Secret store**.
+
+LocalPilot 1.7 and earlier kept the CLI's keys in `~/.localpilot/keys.json` and its MCP sign-in tokens in `~/.localpilot/secrets.json`, in plain text. The first command that opens the store moves both in and deletes each file only after every value reads back from the store. A file that is not valid JSON is left alone and reported; a name the store already holds with another value is kept as `<name>.from-keys` (or `.from-secrets`), so nothing is lost.
 
 Cloud models are marked `cloud` in `localpilot models`. As in the editor, a run without `-m` uses Auto, which prefers local models: a cloud model answers when you pick it with `-m`, `/model` or as the default model.
 
