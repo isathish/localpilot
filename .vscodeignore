@@ -3,6 +3,7 @@
 out/**
 scripts/**
 docs/**
+dev/**
 .github/**
 media/logo-128.png
 node_modules/**

@@ -9,8 +9,10 @@ import { ollamaModelsOnDisk } from '../providers/ollamaLauncher';
 
 /**
  * Real end-to-end runs against a local model server (Ollama on :11434).
- * Skipped automatically when no server / tool-capable model is available, so CI stays green.
- * Set LOCALPILOT_E2E_MODEL to force a specific model id (e.g. ollama/qwen2.5-coder:1.5b).
+ * Opt-in: skipped unless LOCALPILOT_E2E_MODEL names the model to use (e.g. ollama/qwen2.5-coder:1.5b, or "auto" for the
+ * largest tool-capable Ollama model), so a plain `npm test` (and CI) never starts or loads a model. When set, a stopped
+ * Ollama with models on disk is started (LOCALPILOT_E2E_INSTALL=1 also installs it and pulls the model), and a missing
+ * server or model fails the suite instead of skipping it.
  */
 suite('LocalPilot end-to-end (real local model)', () => {
   let api: LocalPilotApi;
@@ -57,6 +59,10 @@ suite('LocalPilot end-to-end (real local model)', () => {
 
   suiteSetup(async function () {
     this.timeout(240_000);
+    if (!process.env.LOCALPILOT_E2E_MODEL) {
+      console.log('      e2e: skipped; set LOCALPILOT_E2E_MODEL=ollama/<tag> to run the real-model tests');
+      this.skip();
+    }
     const ext = vscode.extensions.getExtension<LocalPilotApi>('localpilot.localpilot-agent');
     assert.ok(ext);
     api = await ext.activate();
@@ -68,14 +74,11 @@ suite('LocalPilot end-to-end (real local model)', () => {
     // has models on disk, and nothing is downloaded; with it, a missing Ollama is installed with a starter model too.
     const install = process.env.LOCALPILOT_E2E_INSTALL === '1';
     if (!(await ollamaUp())) {
-      if (!install && !(await ollamaModelsOnDisk())) {
-        this.skip();
-      }
+      // Opted in with LOCALPILOT_E2E_MODEL: a missing model server is a failure, not a silent skip.
+      assert.ok(install || (await ollamaModelsOnDisk()), 'LOCALPILOT_E2E_MODEL is set but Ollama is not running and has no models on disk (set LOCALPILOT_E2E_INSTALL=1 to install it)');
       const r = await api.autoSetupModels({ installRuntime: install });
       console.log(`      e2e: Ollama was not running; setup → ${JSON.stringify(r)}`);
-      if (!(await ollamaUp())) {
-        this.skip();
-      }
+      assert.ok(await ollamaUp(), `LOCALPILOT_E2E_MODEL is set but Ollama could not be started: ${JSON.stringify(r)}`);
     }
     let models = await api.listModels();
     const forced = process.env.LOCALPILOT_E2E_MODEL;
@@ -87,11 +90,9 @@ suite('LocalPilot end-to-end (real local model)', () => {
     // Prefer the largest tool-capable Ollama model (parameter count parsed from the tag, e.g. ":7b").
     const size = (id: string) => Number(/(\d+(?:\.\d+)?)b\b/i.exec(id)?.[1] ?? 0);
     const candidates = models.filter((m) => m.providerId === 'ollama').sort((a, b) => Number(b.supportsTools) - Number(a.supportsTools) || size(b.id) - size(a.id));
-    const pick = forced ? models.find((m) => m.id === forced) : candidates[0];
-    if (!pick) {
-      this.skip();
-    }
-    model = pick!.id;
+    const pick = forced && forced !== 'auto' ? models.find((m) => m.id === forced) : candidates[0];
+    assert.ok(pick, `LOCALPILOT_E2E_MODEL=${forced} is not available (Ollama models: ${candidates.map((m) => m.id).join(', ') || 'none'}); set LOCALPILOT_E2E_INSTALL=1 to pull it`);
+    model = pick.id;
     const cfg = vscode.workspace.getConfiguration('localpilot');
     await cfg.update('defaultModel', model, vscode.ConfigurationTarget.Global);
     await cfg.update('approvals.write', 'always', vscode.ConfigurationTarget.Global);

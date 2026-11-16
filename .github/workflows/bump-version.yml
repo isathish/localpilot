@@ -29,12 +29,14 @@ jobs:
   bump:
     name: Bump version & changelog
     runs-on: ubuntu-latest
+    # release.js --ci compiles, runs the smoke tests and packages the VSIX before committing.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -57,9 +59,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          HEAD_SHA=$(git rev-parse HEAD)
+          # A minute of slack for clock skew between the runner and GitHub.
+          SINCE=$(date -u -d '-60 seconds' +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run release.yml --ref main
-          sleep 5
-          RUN=$(gh run list --workflow=release.yml --branch main --limit 1 --json databaseId,url --jq '.[0].url')
+          # Link only the run this dispatch started: a workflow_dispatch run on the release commit, created after it
+          # (a push-triggered run or another dispatch must not be mistaken for it).
+          RUN=""
+          for i in $(seq 1 12); do
+            sleep 5
+            RUN=$(gh run list --workflow=release.yml --branch main --event workflow_dispatch --commit "$HEAD_SHA" --limit 5 --json url,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$SINCE\")][0].url // empty")
+            [ -n "$RUN" ] && break
+          done
           {
             echo "## Prepared v${version}"
             echo ""

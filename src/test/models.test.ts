@@ -18,6 +18,19 @@ import { HttpError } from '../providers/http';
 import { pairToolCalls } from '../providers/toolPairing';
 import { endpointKey } from '../providers/discovery';
 import { isRemoteUrl } from '../providers/cloud';
+import { getConfig } from '../config';
+import { sleep, waitFor } from './waitFor';
+
+/** Waits until a registry has rebuilt its providers from the current settings (it does so on the change event). */
+const synced = (reg: ProviderRegistry) =>
+  waitFor(
+    () => {
+      const key = (list: { id: string; type: string }[]) => list.map((p) => `${p.id}:${p.type}`).sort().join(',');
+      return key(reg.all) === key(getConfig().providers.filter((p) => p.type !== 'vscode-lm'));
+    },
+    5_000,
+    'the provider registry to pick up the new settings'
+  );
 
 /** Ollama look-alike with pull/delete so the model manager can be exercised without downloading anything. */
 interface FakeModel {
@@ -393,7 +406,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
       await cfg.update('routing.vision', '', vscode.ConfigurationTarget.Global);
       await cfg.update('inlineCompletion.model', '', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
 
       const all = await reg.listAllModels(true);
       assert.deepStrictEqual(all.map((x) => x.modelId).sort(), ['qwen2.5-coder:1.5b-base', 'qwen2.5-coder:14b', 'qwen2.5vl:7b']);
@@ -419,7 +432,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       // qualifies for an agent run — pull a second tool-capable model to see the spread.)
       const busy = { assigned: new Map([['fake/qwen2.5-coder:14b', 1]]), serial: new Set(['fake/qwen2.5-coder:14b']), slots: 4 };
       await cfg.update('defaultModel', 'fake/qwen2.5-coder:14b', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       assert.strictEqual((await reg.route({ spread: true, load: busy })).model.modelId, 'qwen2.5-coder:14b', 'no tool-capable neighbour: queue on the same model');
       await (await fetch(`${srv.url}/api/pull`, { method: 'POST', body: JSON.stringify({ model: 'gemma4:12b' }) })).text();
       await reg.listModels(true);
@@ -430,7 +443,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       assert.strictEqual((await reg.route({ modelRef: 'fake/qwen2.5-coder:14b', spread: true, load: busy })).model.modelId, 'gemma4:12b', 'an inherited ref is still spreadable when the caller says so');
       assert.strictEqual((await reg.route({ spread: true, load: { ...busy, serial: new Set() } })).model.modelId, 'qwen2.5-coder:14b', 'one run on a model with free slots is not saturation');
       await cfg.update('routing.parallelModels', false, vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       assert.strictEqual((await reg.route({ spread: true, load: busy })).model.modelId, 'qwen2.5-coder:14b', 'setting off: queue');
       await cfg.update('routing.parallelModels', undefined, vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
@@ -452,7 +465,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       // Disabling a model hides it from listModels and from routing, but listAllModels still shows it flagged.
       await cfg.update('models.disabled', ['fake/qwen2.5-coder:14b'], vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       const enabled = await reg.listModels();
       assert.ok(!enabled.some((x) => x.modelId === 'qwen2.5-coder:14b'));
       assert.strictEqual((await reg.listAllModels()).find((x) => x.modelId === 'qwen2.5-coder:14b')!.disabled, true);
@@ -462,7 +475,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       // Routing off: image turns stay on the session model.
       await cfg.update('models.disabled', [], vscode.ConfigurationTarget.Global);
       await cfg.update('routing.enabled', false, vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       assert.strictEqual((await reg.route({ modelRef: 'fake/qwen2.5-coder:14b', needsVision: true })).model.modelId, 'qwen2.5-coder:14b');
     } finally {
       reg.dispose();
@@ -489,7 +502,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('routing.reasoning', '', vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', 'fake/qwen2.5-coder:14b', vscode.ConfigurationTarget.Global);
       await (await fetch(`${srv.url}/api/pull`, { method: 'POST', body: JSON.stringify({ model: 'gemma4:12b' }) })).text();
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       await reg.listModels(true);
 
       const code = await reg.route({ role: 'agent', byTask: true });
@@ -534,11 +547,11 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('providers', [{ id: 'cloud', type: 'openai', baseUrl: 'https://cloud.invalid/v1' }], vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
       await cfg.update('inlineCompletion.model', 'tiny-fim:1b', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       await assert.rejects(reg.route({ role: 'completion' }), /not available locally/);
       // Chosen explicitly, the cloud model is still used for completions.
       await cfg.update('inlineCompletion.model', 'cloud/big-coder', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       const pinned = await reg.route({ role: 'completion' });
       assert.strictEqual(pinned.model.id, 'cloud/big-coder');
       assert.ok(!pinned.fallback);
@@ -563,7 +576,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('models.disabled', [], vscode.ConfigurationTarget.Global);
       await cfg.update('contextWindow', 16384, vscode.ConfigurationTarget.Global);
       await cfg.update('keepAlive', '45m', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       await reg.listModels(true);
       const provider = reg.get('fake');
 
@@ -584,8 +597,11 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       assert.strictEqual(srv.chats.length, before + 1, 'evicted model warmed again');
 
       // A settings change that does not touch the provider keeps the same instance (and its model-info cache).
+      let rebuilt = false;
+      const rebuildSub = reg.onDidChange(() => (rebuilt = true));
       await cfg.update('models.disabled', ['fake/qwen2.5vl:7b'], vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await waitFor(() => rebuilt, 5_000, 'the registry to handle the settings change');
+      rebuildSub.dispose();
       assert.strictEqual(reg.get('fake'), provider);
 
       // Background refresh: a model pulled outside LocalPilot shows up without anyone asking.
@@ -628,7 +644,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
       await cfg.update('models.disabled', [], vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       await reg.listModels(true);
       assert.strictEqual((await reg.route({ fresh: true })).model.modelId, 'qwen2.5-coder:14b');
 
@@ -649,7 +665,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       srv.deleted.splice(srv.deleted.indexOf('gemma4:12b'), 1);
       await reg.listModels(true);
       await cfg.update('defaultModel', 'fake/gemma4:12b', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       assert.strictEqual((await reg.route({ fresh: true })).model.modelId, 'gemma4:12b');
       const removed = new Promise<string[]>((r) => reg.onDidRemoveModels((ids) => ids.includes('fake/gemma4:12b') && r(ids)));
       srv.deleted.push('gemma4:12b');
@@ -681,11 +697,11 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     try {
       await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', 'fake/qwen2.5-coder:14b', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       assert.ok((await reg.listModels(true)).length >= 2);
       srv.deleted.push(...srv.models.map((m) => m.name));
       assert.deepStrictEqual(await reg.listModels(true), []);
-      await new Promise((r) => setTimeout(r, 100));
+      await sleep(100); // nothing should happen: an empty listing alone never removes the default
       assert.deepStrictEqual(removed, []);
       assert.strictEqual(vscode.workspace.getConfiguration('localpilot').get('defaultModel'), 'fake/qwen2.5-coder:14b');
     } finally {
@@ -717,8 +733,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
       await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
       await cfg.update('models.disabled', [], vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 200));
-      await api.listModels();
+      await waitFor(async () => (await api.listModels()).some((m) => m.providerId === 'fake'), 10_000, 'the extension to list the fake server\'s models');
       const id = await api.runPrompt('Reply OK', 'ask');
       await idle(id);
       assert.strictEqual(api.getSession(id)!.model, '', 'first turn leaves the chat on Auto');
@@ -732,7 +747,8 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       srv.deleted.push(answered);
       srv.models.push({ name: 'devstral:24b', caps: ['completion', 'tools'], ctx: 131072, size: 14e9, params: '23.6B' });
       // Past the registry's short freshness window, so the turn re-reads the installed list.
-      await new Promise((r) => setTimeout(r, 3_200));
+      // (A fixed wait on purpose: the freshness window is the behaviour under test.)
+      await sleep(3_200);
       await api.send(id, 'Once more');
       await idle(id);
       assert.strictEqual(asked().pop(), 'devstral:24b', `answered by ${asked().pop()} after ${answered} was removed`);
@@ -754,7 +770,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     const mm = new ModelManager(reg, log);
     try {
       await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       const progress: number[] = [];
       const sub = mm.onDidChange(() => {
         const j = mm.activeJobs[0];
@@ -812,7 +828,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     const mm = new ModelManager(reg, log);
     try {
       await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       const [a, b] = await Promise.all([mm.pull('ollama', 'smollm2:1.7b', 'fake'), mm.pull('ollama', 'smollm2:1.7b', 'fake')]);
       assert.strictEqual(a.status, 'done', a.error);
       assert.strictEqual(b.status, 'done', b.error);
@@ -834,7 +850,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     const mm = new ModelManager(reg, log);
     try {
       await cfg.update('providers', [{ id: 'fake', type: 'ollama', baseUrl: srv.url }], vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       const r = await mm.autoSetup();
       assert.strictEqual(r.status, 'already');
       assert.strictEqual((r as { models: number }).models, 3);
@@ -865,7 +881,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     const mm = new ModelManager(reg, log);
     try {
       await cfg.update('providers', [{ id: 'dead', type: 'ollama', baseUrl: 'http://127.0.0.1:9' }], vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       const stub = mm as unknown as { detectRuntimes: () => Promise<unknown[]>; startOllama: () => Promise<unknown> };
       stub.detectRuntimes = async () => [
         { target: 'ollama', label: 'Ollama', installed: true, running: false },
@@ -908,14 +924,18 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
   test('changing providers while a model listing is in flight lists the new providers, not the old ones', async function () {
     this.timeout(30_000);
     // An OpenAI-style server that answers /v1/models slowly, so the first listing is still running when the setting changes.
+    const arrived = new Set<string>();
     const server = (id: string, delayMs: number) =>
       new Promise<{ url: string; close(): void }>((resolve) => {
-        const srv = http.createServer((req, res) =>
+        const srv = http.createServer((req, res) => {
+          if (req.url?.startsWith('/v1/models')) {
+            arrived.add(id);
+          }
           setTimeout(() => {
             res.setHeader('content-type', 'application/json');
             res.end(JSON.stringify({ data: req.url?.startsWith('/v1/models') ? [{ id, object: 'model' }] : [] }));
-          }, delayMs)
-        );
+          }, delayMs);
+        });
         srv.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`, close: () => srv.close() }));
       });
     const [oldSrv, newSrv] = await Promise.all([server('old-model', 1500), server('new-model', 0)]);
@@ -924,8 +944,9 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     const reg = new ProviderRegistry(log);
     try {
       await cfg.update('providers', [{ id: 'old', type: 'openai', baseUrl: oldSrv.url }], vscode.ConfigurationTarget.Global);
+      await synced(reg);
       const inFlight = reg.listModels();
-      await new Promise((r) => setTimeout(r, 200));
+      await waitFor(() => arrived.has('old-model'), 5_000, 'the first listing to reach the slow server');
       await cfg.update('providers', [{ id: 'new', type: 'openai', baseUrl: newSrv.url }], vscode.ConfigurationTarget.Global);
       const [first, now] = await Promise.all([inFlight, reg.listModels()]);
       assert.deepStrictEqual(now.map((m) => m.id), ['new/new-model'], 'a caller after the change sees the new provider');
@@ -942,8 +963,10 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
   test('invalidate() during a model listing drops the in-flight round, so the next listing sees the server as it is now', async function () {
     this.timeout(30_000);
     let id = 'old-model';
+    let requests = 0;
     const srv = http.createServer((req, res) => {
       const listed = id; // what the server lists when the request arrives
+      requests++;
       setTimeout(() => {
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({ data: req.url?.startsWith('/v1/models') ? [{ id: listed, object: 'model' }] : [] }));
@@ -956,8 +979,9 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
     const reg = new ProviderRegistry(log);
     try {
       await cfg.update('providers', [{ id: 'srv', type: 'openai', baseUrl: url }], vscode.ConfigurationTarget.Global);
+      await synced(reg);
       const inFlight = reg.listModels();
-      await new Promise((r) => setTimeout(r, 200));
+      await waitFor(() => requests > 0, 5_000, 'the first listing to reach the server');
       id = 'new-model';
       reg.invalidate();
       const now = await reg.listModels();
@@ -1033,7 +1057,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
         vscode.ConfigurationTarget.Global
       );
       await cfg.update('defaultModel', 'fake/qwen2.5-coder:14b', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       assert.ok(!(await reg.listModels(true)).some((m) => m.providerId === 'fake'), 'the local server starts out stopped');
       const [a, b] = await Promise.all([reg.route({}), reg.route({})]);
       assert.strictEqual(starts, 1, 'two runs at once start it once');
@@ -1047,7 +1071,7 @@ suite('LocalPilot models: system profile, catalog, routing, model manager', () =
       await assert.rejects(reg.route({}), (e: Error) => /qwen2\.5-coder:14b runs on fake/.test(e.message) && /could not be started/.test(e.message) && /does not switch a local model to a cloud one/.test(e.message));
       // Auto (no default) may still use the cloud model when nothing local can run: that is documented behaviour.
       await cfg.update('defaultModel', '', vscode.ConfigurationTarget.Global);
-      await new Promise((r) => setTimeout(r, 100));
+      await synced(reg);
       assert.strictEqual((await reg.route({})).model.id, 'cloudy/cloud-model');
     } finally {
       reg.dispose();

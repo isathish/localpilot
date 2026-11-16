@@ -11,7 +11,8 @@ import { nextStreamId, RedisTelemetry, redisVersionSupported } from '../storage/
 /**
  * The optional Redis Stack store inside the real extension: settings switch telemetry over, events and log lines land in
  * Redis streams and time series, the Dashboard summary reads them back, and an unreachable server falls back to files.
- * Needs a Redis at LOCALPILOT_E2E_REDIS (default redis://127.0.0.1:16379/5 — a throwaway db index); skipped otherwise.
+ * Needs a Redis at LOCALPILOT_E2E_REDIS (default redis://127.0.0.1:16379/5 — a throwaway db index); skipped otherwise,
+ * except in CI jobs that start one (CI=true and REDIS_REQUIRED=1), where a missing server fails the suite.
  */
 const URL = process.env.LOCALPILOT_E2E_REDIS || 'redis://127.0.0.1:16379/5';
 const DEAD = 'redis://127.0.0.1:1/5';
@@ -40,6 +41,10 @@ suite('Redis Stack storage (real server, end to end)', function () {
   suiteSetup(async function () {
     const probe = await probeRedis(URL);
     if (!probe.ok) {
+      if (process.env.CI === 'true' && process.env.REDIS_REQUIRED === '1') {
+        throw new Error(`REDIS_REQUIRED=1 but no Redis answered at ${URL}: ${JSON.stringify(probe)}`);
+      }
+      console.log(`      redis: skipped; no Redis at ${URL}`);
       this.skip();
     }
     api = (await vscode.extensions.getExtension('localpilot.localpilot-agent')!.activate()) as LocalPilotApi;

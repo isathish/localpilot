@@ -5,6 +5,7 @@ on:
     branches: [main]
     # Everything except the website and prose, but CHANGELOG.md and MARKETPLACE.md are release inputs
     # (release notes and the Marketplace README inside the VSIX) and docs/_config.yml carries the version.
+    # The website (docs/**) is built and link-checked by the Docs workflow instead.
     paths: ['**', '!docs/**', '!**.md', 'CHANGELOG.md', 'MARKETPLACE.md', 'docs/_config.yml']
   pull_request:
     branches: [main]
@@ -22,13 +23,14 @@ jobs:
   build:
     name: Build & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -44,10 +46,18 @@ jobs:
       - name: Start Redis Stack (Linux)
         if: runner.os == 'Linux'
         run: |
-          docker run -d --name lp-redis -p 16379:6379 redis/redis-stack-server:latest
-          for i in $(seq 1 30); do docker exec lp-redis redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 1; done
+          docker run -d --name lp-redis -p 16379:6379 redis/redis-stack-server:7.4.0-v8
+          for i in $(seq 1 30); do
+            if docker exec lp-redis redis-cli ping 2>/dev/null | grep -q PONG; then echo "Redis is up"; exit 0; fi
+            sleep 1
+          done
+          docker logs lp-redis || true
+          echo "::error::Redis Stack did not answer PING within 30 s"; exit 1
       - name: Extension Host tests (Linux)
         if: runner.os == 'Linux'
+        env:
+          # Redis runs on Linux only (Docker); there the Redis suite must run, not skip.
+          REDIS_REQUIRED: '1'
         run: xvfb-run -a npm test
       - name: Extension Host tests
         if: runner.os != 'Linux'
@@ -57,8 +67,35 @@ jobs:
         run: npx @vscode/vsce package --no-dependencies --readme-path MARKETPLACE.md --out localpilot.vsix
       - name: Upload VSIX artifact
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: localpilot-vsix
           path: localpilot.vsix
           retention-days: 14
+
+  cli-node:
+    # The CLI promises Node 18.17+ (esbuild targets node18); the build job above runs it on Node 22 only.
+    name: CLI on Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18.17.0', '20']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      # Build with the toolchain's own Node, then run the bundled CLI the way users do, on the older Node.
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Bundle
+        run: node esbuild.js
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: CLI end-to-end on Node ${{ matrix.node }}
+        run: |
+          node --version
+          node scripts/cli-e2e.mjs
