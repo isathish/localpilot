@@ -2161,6 +2161,16 @@ async function cmdSkillInstall(core: Core, args: Args, renderer: Renderer): Prom
   }
 }
 
+// Node 18 and 20 write to pipes asynchronously on macOS, so `localpilot … --json | jq` lost everything past ~8 KB when
+// a command called process.exit() right after printing. Blocking writes (what Node already does for terminals) make
+// every write complete before the process can exit; files and terminals are unaffected.
+for (const stream of [process.stdout, process.stderr]) {
+  const handle = (stream as unknown as { _handle?: { setBlocking?: (b: boolean) => void } })._handle;
+  if (!stream.isTTY && handle?.setBlocking) {
+    handle.setBlocking(true);
+  }
+}
+
 async function main(): Promise<void> {
   // The secret store is opened once, before anything reads a key (not for --help / --version, which need none).
   const argv = process.argv.slice(2);
