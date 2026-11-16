@@ -4,6 +4,42 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Added
+- **Encrypted secret store, shared by VS Code and the CLI.** API keys, MCP sign-in tokens and sync credentials now live in one encrypted store, `~/.localpilot/secrets.db`: a single database sealed as a whole with AES-256-GCM (neither names nor values are readable on disk), readable by you only. Its key is kept in your OS keychain (macOS Keychain, Windows Credential Manager, or the Secret Service through `secret-tool` on Linux); where there is no keychain, set `LOCALPILOT_SECRETS_PASSPHRASE` — LocalPilot never falls back to plain text. A key saved in VS Code works in the CLI and the other way round, and MCP sign-ins are shared too. On first start, keys VS Code already held are moved in (the old copies stay, in case you go back to an older version), and the CLI's plain-text `keys.json` and `secrets.json` are moved in and deleted once every value reads back. New **Settings → Secrets** (status, what uses each key, last used, **Replace…**, **Delete**) and `localpilot secrets status|list|set|delete|import-env`. Values never reach the Settings page and are never printed.
+- **`localpilot.models.localOnly`.** Keeps every automatic pick (Auto, routing roles, fallback, images, completions, subagents) on this machine; a cloud model answers only when you pick it yourself.
+- **`localpilot.maxIterations`** (default 40, previously only documented) and **`localpilot.agent.modelRetries`** (default 3) are real settings. Passing failures are retried with backoff up to 20 s, honouring Retry-After, and an answer cut off by a dropped connection is resumed once from where it stopped.
+- **Import conversations** from the conversation menu, the Trash menu and the navigator, completing the round trip of **Export → JSON**.
+- **New keys.** <kbd>Ctrl+Alt+L</kbd> (<kbd>Ctrl+Cmd+L</kbd> on Mac) opens the chat from the editor; <kbd>Ctrl/Cmd+Shift+Backspace</kbd> rejects the file in a review diff.
+
+### Changed
+- **Cloud presets start without a key.** Paste one (it goes to the secret store) or copy the usual environment variable in once; settings no longer map keys to environment variables. `--key-env VAR` now copies the variable into the store instead of reading it on every run. Existing `${env:…}` keys keep working, and Settings and `localpilot providers` offer **Move into secret store**.
+- **Approval levels no longer sync by default.** They are a separate, opt-in **Approval levels** sync category, because loosening approvals on one device loosened them everywhere.
+- **Smarter Auto mode.** Auto reads intent: *Implement the plan* and *Add a retry strategy* run in Agent, *Add error handling* and *Write tests for the error parser* no longer go to Debug, and *Can you add …?* is a change. Plan needs planning intent; Debug needs a reported failure.
+- **Skills are preloaded only on a strong or clear match,** never for questions about the conversation itself.
+- **Accept / Reject everywhere.** Agent changes are named the same in the chat, commands, menus, notifications and docs.
+- **Agent-run details older than the history window are pruned** (the run, its checkpoints and the chat stay), and logs of closed windows and other devices are compacted too.
+- **Backups are written and restored as a stream.** Encrypted backups are sealed in parts, so a cut-short file is detected; older backups still restore.
+
+### Fixed
+- **Images stay local unless you choose otherwise.** A chat on a local model was switched to a cloud model to read images; now the chat asks you to install a local vision model or pick the cloud one.
+- **File tools can no longer leave the workspace through a symbolic link** (existing files, new files and dangling links).
+- **`memory_save` refuses notes that contain a secret,** with the scan automatic memory uses. When a scope is over `localpilot.memory.maxNotes`, only notes the agent created and nobody edited are removed; your own notes never are.
+- **Deleting a conversation for good removes its text from every log on this computer** (other windows, the CLI, copies of other devices' logs) and from backups made afterwards, also when the deletion comes from another device.
+- **A device removed from sync can no longer send changes:** what it writes after its removal is skipped and shown in Recent activity.
+- **A data folder copied to another computer gets its own device identity,** and sync pauses rather than overwriting when two computers upload as the same device. Note: the device identity is now tied to this computer and user; if the home folder changes or `~/.localpilot/machine-id` is deleted, LocalPilot starts a new identity, and changes made under the old one that never synced stay on this computer.
+- **Sync across windows, the CLI and devices.** Two processes can no longer write the same log at once; Pause and Turn off made in one window are no longer undone by a sync running in another; one unreadable device no longer stops sync for the others; crash recovery no longer mistakes a new process for a crashed one; two windows no longer write the same automatic backup; an attachment re-used just before a clean-up is no longer removed; a chat deleted elsewhere while open here is cleaned up once it is idle; chats started in the CLI appear in VS Code on the same machine.
+- **The agent's history tools stay out of Trash and in the current project,** and are off when related conversations are off.
+- **Tool calls with broken JSON arguments** are repaired when possible; otherwise the model is told the arguments were not valid JSON, and only valid JSON is sent back to OpenAI-compatible servers.
+- **Web tools.** `web_fetch` streams with a size cap and refuses binary content with a clear message; a blocked or rate-limited web search is reported as an error instead of "no results".
+- **CLI output piped to another program was cut off at about 8 KB on Node 18 and 20** (for example `localpilot config tools --json | jq`).
+- **Accessibility.** Continuity pages keep keyboard focus inside while open and return it when they close; chat images open full size with Enter or Space in a labelled viewer; the Tasks panel reports whether it is expanded; Settings tab strips work with the arrow keys, Home and End; restoring from Trash keeps the row until the restore is confirmed. CLI `--help` lists `--parallel`, `providers add --type/--name/--no-cloud`, `-u` and `secrets`.
+
+### Development
+- The VSIX no longer ships the internal `dev/` notes.
+- Tests run with a throwaway home folder and never touch `~/.localpilot` or the OS keychain; the real-model end-to-end tests are opt-in (`LOCALPILOT_E2E_MODEL`).
+- Releases: automatic bumps follow semantic versioning (breaking → major, `feat` → minor, fixes → patch), publishing runs in the `marketplace` environment so it can require approval, and the CLI is tested on Node 18.17 and 20.
+- CI: workflow actions pinned to commit SHAs with Dependabot updates, job timeouts, a Redis Stack suite that must run in CI and release builds, and an offline link and anchor check for the website.
+
 ## 1.7.0 — 2026-11-07
 
 ### Added
