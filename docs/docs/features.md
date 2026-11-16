@@ -29,7 +29,7 @@ LocalPilot is a coding agent for VS Code. It reads your project, edits files, ru
 
   Claude uses its native API, with tool use, thinking and prompt caching. See [Cloud models]({{ '/guides/cloud-models-vscode/' | relative_url }}).
 - **Gateways.** OmniRoute and LiteLLM run on your machine and forward to many cloud providers. They are treated as cloud. See [OmniRoute & LiteLLM]({{ '/guides/omniroute-vscode/' | relative_url }}).
-- **Keys stay out of settings.json.** A pasted key goes to your OS keychain, and settings hold only `${secret:<id>}`. A key can also come from an environment variable (`${env:OPENAI_API_KEY}`). The provider card says when a key is missing, never what it is.
+- **Keys stay out of settings.json.** A pasted key goes to LocalPilot's encrypted secret store (AES-256-GCM, unlocked by your OS keychain, shared with the CLI), and settings hold only `${secret:<id>}`. A key in an environment variable is copied in once. The provider card says when a key is missing, never what it is.
 - **Local first, cloud when you choose.** Cloud models are marked **cloud** everywhere. Auto, subagents, images and ghost text prefer local models and use a cloud model only when nothing local fits, or when you pick it.
 - **Model manager.** **Settings → Models** shows what this machine can run (a model budget from RAM and GPU), what is installed, and which model handles which task. It installs from a curated catalog to Ollama, Docker Model Runner or LM Studio.
 - **Model gallery.** Search the Ollama library, Docker Hub's `ai/` models and Hugging Face GGUF repositories. Every size is marked *fits*, *tight* or *too big*.
@@ -159,7 +159,7 @@ See [Parallel agents & change review]({{ '/docs/parallel-agents/' | relative_url
 - **Jupyter notebooks.** In a `.ipynb` notebook, the toolbar's **Generate Cell with LocalPilot** asks what to add and has the agent insert a cell after the selected one; each cell's title bar has **Explain Cell** (starts a chat) and **Improve Cell** (asks what to change, then replaces the cell). The agent edits cells with the `notebook_edit` tool (insert, replace or delete by cell number; asks like any edit), so it never rewrites the notebook JSON; it sees the cell's type, source, execution count and text outputs plus the two cells on either side. In the CLI, `notebook_edit` edits the `.ipynb` file directly.
 - A **[Markdown reader]({{ '/docs/viewers/' | relative_url }})** for long answers and the plans and reports the agent writes, with Mermaid diagrams, math, scroll sync with the source and an "Open With…" editor for any `.md` file.
 - **Agent terminal.** Commands run in a visible **LocalPilot Agent** terminal. Right-click any terminal for **Explain Terminal Output**, **Fix Failed Command** or **Add Terminal Output to Chat**.
-- **The `localpilot` CLI.** It is the same agent in any shell, with approvals, a REPL, isolation in a worktree, skills, `models` and `doctor`. `localpilot providers` adds and checks local and cloud providers and sets keys; it keeps its own key file because the CLI cannot read the keychain. See [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}).
+- **The `localpilot` CLI.** It is the same agent in any shell, with approvals, a REPL, isolation in a worktree, skills, `models` and `doctor`. `localpilot providers` adds and checks local and cloud providers and sets keys in the encrypted secret store it shares with VS Code; `localpilot secrets` manages that store. See [Terminal & CLI]({{ '/docs/terminal-and-cli/' | relative_url }}).
 
 ## 9. Measure, configure, extend
 

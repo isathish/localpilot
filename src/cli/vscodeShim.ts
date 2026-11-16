@@ -514,31 +514,6 @@ export async function writeCliConfig(cfg: Record<string, unknown>): Promise<void
   configEmitter.fire({ affectsConfiguration: (s: string) => s === 'localpilot' || s.startsWith('localpilot.providers') });
 }
 
-/**
- * API keys for `${secret:<name>}` references when running outside VS Code, which has the OS keychain the CLI cannot
- * reach. Readable by the owner only. `LOCALPILOT_KEY_<NAME>` environment variables work too.
- */
-export const CLI_KEYS_PATH = path.join(os.homedir(), '.localpilot', 'keys.json');
-
-export function readCliKeys(): Record<string, string> {
-  const raw = readJsonc(CLI_KEYS_PATH);
-  return Object.fromEntries(Object.entries(raw).filter((e): e is [string, string] => typeof e[1] === 'string' && !!e[1]));
-}
-
-export async function writeCliKey(name: string, key: string | undefined): Promise<void> {
-  const keys = readCliKeys();
-  assertWritable(CLI_KEYS_PATH);
-  if (key) {
-    keys[name] = key;
-  } else {
-    delete keys[name];
-  }
-  await fsp.mkdir(path.dirname(CLI_KEYS_PATH), { recursive: true, mode: 0o700 });
-  await fsp.writeFile(CLI_KEYS_PATH, JSON.stringify(keys, null, 2) + '\n', { mode: 0o600 });
-  // writeFile keeps the mode of an existing file: tighten it in case it was created more permissively.
-  await fsp.chmod(CLI_KEYS_PATH, 0o600).catch(() => undefined);
-}
-
 const configEmitter = new EventEmitter<{ affectsConfiguration(s: string): boolean }>();
 
 // ------------------------------------------------------------------ interaction (terminal)

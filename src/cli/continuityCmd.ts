@@ -9,7 +9,8 @@ import { Continuity, continuityDataDir } from '../continuity/continuity';
 import { isEncryptedBackup, WrongBackupPassphraseError } from '../continuity/data/backup';
 import { cliKeysBox } from '../continuity/data/crypto/secretBox';
 import { cliDataDir } from '../sessions/cliStorage';
-import { readCliKeys, userSettingsPath, writeCliKey } from './vscodeShim';
+import { userSettingsPath } from './vscodeShim';
+import { readCliKeys, writeCliKey } from '../secrets/cliSecrets';
 import type { Style } from './providers';
 
 export const DATA_USAGE = `localpilot data stats [--json]                 sizes, counts, index and migration state

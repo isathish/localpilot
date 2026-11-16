@@ -68,8 +68,10 @@ import { parseApprovalAnswer, toDecision } from '../agent/approvalLevel';
 import { shouldRingBell } from '../ui/notifyPolicy';
 import { addProvider, listPresets, listProviders, ProviderFlags, removeProvider, setProviderKey, Style, testProviders } from './providers';
 import { cmdMcp, parseMcpArgs } from './mcpCmd';
-import { setSecretValues } from '../providers/cloud';
-import { ask, withPromptLock, setPromptOutput, CLI_KEYS_PATH, CLI_SETTINGS_PATH, cliOverrides, readCliKeys, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, loadSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, userSettingsPath } from './vscodeShim';
+import { setSecretUsedHook, setSecretValues } from '../providers/cloud';
+import { cliMigration, cliSecretStore, openCliSecrets, readCliKeys } from '../secrets/cliSecrets';
+import { cmdSecrets, secretStoreLine } from './secretsCmd';
+import { ask, withPromptLock, setPromptOutput, CLI_SETTINGS_PATH, cliOverrides, isAutoApprove, LOG_FILE, ignoredWorkspaceSettings, loadSettings, setAutoApprove, setLogLevel, setReadline, setTrustWorkspace, setWorkspaceRoot, userSettingsPath } from './vscodeShim';
 import { audit as auditPolicy, describePolicy, getManagedPolicy, managedPolicyPath } from '../agent/managedPolicy';
 import { EvalRun, formatReport, loadSuite, previousRun, projectSuites, runTask, saveRun, summarize } from '../eval/runner';
 import { LEASE_MS, TeamBoard, canFinish } from '../agent/teamBoard';
@@ -162,15 +164,18 @@ ${bold('Usage')}
   localpilot eval [--models a,b]         benchmark models on real coding tasks [--suite file.json] [--tasks id,…] [--keep] [--json out.json]
   localpilot providers                    local and cloud providers: reachability, models, key state
   localpilot providers presets            providers you can add (Ollama, LM Studio… OpenAI, Claude, Gemini, OpenRouter…)
-  localpilot providers add <preset|url>   add one [--id <id>] [--key <key> | --key-env VAR] [--url <url>] [--region <aws-region>] [--cloud]
+  localpilot providers add <preset|url>   add one [--id <id>] [--name <label>] [--type openai|ollama|anthropic]
+                                          [--key <key> | --key-env VAR] [--url <url>] [--region <aws-region>] [--cloud | --no-cloud]
   localpilot providers key <id> [key]     set its API key (prompted if omitted, or piped in) [--key-env VAR] [--remove-key]
+  localpilot secrets status|list [--json]|set <name> [-]|delete <name>|import-env <name> <ENV_VAR>
+                                          the encrypted secret store shared with VS Code (values are never printed)
   localpilot providers test [id]          check a provider and list its models
   localpilot providers remove <id>        remove a provider added here (disables a VS Code one for the CLI)
   localpilot mcp [list] [--json]          MCP servers in force; without arguments in a terminal, a menu to manage them
   localpilot mcp add <name> <url> | add <name> [--env K=V]… -- <command> [args…]   add one [--transport stdio|http|sse]
                                           [--header "K: V"]… [--scope user|project] (~/.localpilot/mcp.json or ./.mcp.json)
   localpilot mcp remove|enable|disable|auth <name>   remove, switch on/off, or sign in to a remote server
-  localpilot skill install <source>       install a skill (owner/repo[/path], github URL, SKILL.md URL or folder) [--user]
+  localpilot skill install <source>       install a skill (owner/repo[/path], github URL, SKILL.md URL or folder) [-u, --user]
   localpilot skill search <words>         find skills in the catalog repositories (localpilot.skills.repositories); add --install for the best match
   localpilot -c | -r [id]                continue the last session / pick one to resume (with a task: run it there)
   localpilot recovery list|show <id>|resume <id>|clear [id]   self-healing state of this folder's sessions: interrupted,
@@ -191,7 +196,7 @@ ${bold('Usage')}
   localpilot schedule create <name> --cron "0 3 * * *" --prompt "…"   scheduled unattended runs via cron/launchd/Task
                                           Scheduler [--cwd] [--mode] [--model] [--timeout]; schedule list|run|pause|resume|delete|history <name>
   localpilot --acp                        Agent Client Protocol server on stdio (Zed, JetBrains, Neovim)
-  localpilot --ide [options] "task"       open the task in VS Code instead
+  localpilot --ide [options] "task"       open the task in VS Code instead (--parallel: as a parallel session in its Agents panel)
 
 ${bold('Options')}
   --auto                       each message picks its mode (Ask, Plan, Agent, Debug, a specialist…) from what it asks
@@ -251,8 +256,10 @@ ${bold('In a session')}
   agent continue and leaves the command running (its later output goes to ~/.localpilot/cmd-logs).
 
 ${bold('Settings')} read from ${dim(userSettingsPath())}, ./.vscode/settings.json and ${dim(CLI_SETTINGS_PATH)}.
-${bold('API keys')} \${env:NAME} works everywhere. Keys VS Code keeps in your OS keychain (\${secret:id}) are read here from
-${dim(CLI_KEYS_PATH)} (set with \`localpilot providers key <id>\`) or LOCALPILOT_KEY_<ID>.
+${bold('API keys')} live in an encrypted secret store shared with VS Code (${dim('~/.localpilot/secrets.db')}, AES-256-GCM, unlocked
+by your OS keychain; set LOCALPILOT_SECRETS_PASSPHRASE where there is none). Settings reference them as \${secret:id}.
+Store one with \`localpilot providers key <id>\`; \`--key-env VAR\` copies a variable in once. LOCALPILOT_KEY_<ID> stands in
+for a stored key; an old \${env:NAME} reference still works (\`localpilot providers\` offers to move it).
 Log: ${dim(LOG_FILE)}`;
 
 // ------------------------------------------------------------------ args
@@ -1846,7 +1853,7 @@ async function cmdEval(core: Core, args: Args): Promise<number> {
   console.log(`${BRAND} benchmark ${bold(suite.name)}: ${tasks.length} task${tasks.length === 1 ? '' : 's'} × ${models.length} model${models.length === 1 ? '' : 's'}\n`);
   for (const model of models) {
     console.log(bold(model));
-    // A model the CLI cannot reach (a cloud key only in VS Code's secret storage) would be replaced by a fallback.
+    // A model the CLI cannot reach (a cloud key the secret store does not have) would be replaced by a fallback.
     const route = await core.providers.route({ modelRef: model }).catch((e) => e as Error);
     if (route instanceof Error || route.fallback || (route.model.id !== model && route.model.modelId !== model)) {
       const why = `${model} is not available to the CLI — missing key? set LOCALPILOT_KEY_<ID> or run localpilot providers key <id>`;
@@ -1917,9 +1924,13 @@ async function useRunProvider(args: Args): Promise<string | undefined> {
     setWorkspaceRoot(args.cwd);
   }
   const secret = `localpilot-run-${id}`;
-  const useKey = !!key && !args.saveKey;
+  // A preset that is not configured reads its usual variable for this run only (CI: OPENAI_API_KEY=… localpilot -P openai).
+  const preset = findPreset(id);
+  const presetEnv = !configured().some((p) => p.id === id) && preset?.env ? process.env[preset.env]?.trim() : undefined;
+  const runKey = key && !args.saveKey ? key : presetEnv;
+  const useKey = !!runKey && !(key && args.saveKey);
   if (useKey) {
-    setSecretValues({ [secret]: key });
+    setSecretValues({ [secret]: runKey });
   }
   const r = runProviderList(configured(), id, findPreset(id)?.cfg, useKey ? `\${secret:${secret}}` : undefined);
   if (r.error) {
@@ -2059,6 +2070,7 @@ async function cmdDoctor(core: Core, args?: Args): Promise<void> {
   // An installed Ollama that is stopped is started here too, so the list shows what runs will actually get.
   await core.providers.listModelsStartingLocal().catch(() => undefined);
   await listProviders(STYLE, (l) => console.log(`  ${l}`), { compact: true });
+  console.log(`\n${bold('Secret store')}\n  ${secretStoreLine(STYLE)}`);
   console.log(`\n${bold('Workspace')}\n  ${core.workspace.root ?? dim('(none)')}`);
   console.log(`  skills: ${core.skills.allSkills.length}   subagents: ${core.skills.allAgents.length}   mcp servers: ${core.mcp ? core.mcp.status.map((s) => `${s.name}(${s.error ? red('failed') : s.state === 'disabled' ? dim('off') : `${s.tools} tools`})`).join(', ') : dim('none configured')}`);
   const rg = await runProcess('rg', ['--version']).then(() => true).catch(() => false);
@@ -2150,6 +2162,26 @@ async function cmdSkillInstall(core: Core, args: Args, renderer: Renderer): Prom
 }
 
 async function main(): Promise<void> {
+  // The secret store is opened once, before anything reads a key (not for --help / --version, which need none).
+  const argv = process.argv.slice(2);
+  if (!argv.some((a) => ['-h', '--help', '-V', '--version'].includes(a)) && !['help', 'version'].includes(argv[0] ?? '')) {
+    await openCliSecrets();
+    setSecretUsedHook((name) => cliSecretStore()?.touch(name));
+    if (process.stderr.isTTY && argv[0] !== 'secrets') {
+      for (const m of cliMigration()) {
+        process.stderr.write(m.error ? `${yellow('!')} ${m.error}\n` : dim(`Moved ${m.moved.length} secret(s) from ${m.file} into the encrypted secret store and deleted the file.\n`));
+      }
+    }
+  }
+  // `secrets …` manages the store itself.
+  if (argv[0] === 'secrets') {
+    loadSettings(process.cwd());
+    process.exitCode = await cmdSecrets(argv.slice(1), STYLE).catch((e) => {
+      console.error(`${red('✖')} ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    });
+    process.exit(process.exitCode);
+  }
   // `schedule …` parses its own options (--cron, --prompt…) and only manages files and the OS scheduler.
   if (process.argv[2] === 'schedule') {
     process.exitCode = await cmdSchedule(process.argv.slice(3), STYLE, cliLauncher());
@@ -2270,7 +2302,7 @@ async function main(): Promise<void> {
   }
   // --json keeps stderr to JSON error records: log lines stay in the log file only.
   setLogLevel(args.verbose ? 'debug' : args.json && !args.cmd ? 'off' : 'warn');
-  // Keys for `${secret:id}` references: VS Code keeps them in the OS keychain, the CLI in its own key file.
+  // Keys for `${secret:id}` references, from the encrypted secret store VS Code shares.
   setSecretValues(readCliKeys());
   if (args.cmd === 'doctor' && args.prompt === 'log') {
     process.exitCode = doctorLog();

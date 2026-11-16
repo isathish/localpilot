@@ -97,6 +97,17 @@ const extra = () => ({
       { pattern: 'pytest tests/very/long/path/to/some/module/test_with_a_really_long_name.py -k "slow and not flaky"', kind: 'allow', raw: 'Bash(pytest …)', file: '/repo/.claude/settings.json', scope: 'workspace', editable: false, where: '.claude/settings.json' },
     ] },
   shortcuts: SHORTCUTS, isMac: q.get('win') ? false : true,
+  // Settings → Secrets (?secrets=locked: no keychain on Linux; ?secrets=empty: nothing stored yet). Names only, never values.
+  secrets: q.get('secrets') === 'locked'
+    ? { ok: false, error: 'LocalPilot cannot keep secrets: this machine has no keychain it can use (install libsecret-tools for secret-tool, with GNOME Keyring or KWallet running). Set LOCALPILOT_SECRETS_PASSPHRASE to protect /home/me/.localpilot/secrets.db with a passphrase instead.', count: 0, bytes: 0, rows: [], envSet: { OPENAI_API_KEY: true }, platform: 'linux' }
+    : { ok: true, file: '/Users/me/.localpilot/secrets.db', cipher: 'AES-256-GCM', mode: 'keychain', unlockedBy: 'macOS Keychain', count: q.get('secrets') === 'empty' ? 0 : 5, bytes: 12288, envSet: { OPENAI_API_KEY: true, ANTHROPIC_API_KEY: false, GEMINI_API_KEY: true }, platform: 'darwin',
+      rows: q.get('secrets') === 'empty' ? [] : [
+        { name: 'anthropic', usedBy: ['provider Anthropic (Claude)'], source: 'migrated:vscode', createdAt: Date.now() - 40 * 864e5, updatedAt: Date.now() - 3 * 864e5, lastUsedAt: Date.now() - 5 * 60e3 },
+        { name: 'openrouter', usedBy: ['provider OpenRouter'], source: 'env:OPENROUTER_API_KEY', createdAt: Date.now() - 9 * 864e5, updatedAt: Date.now() - 9 * 864e5 },
+        { name: 'websearch', usedBy: ['web search'], source: 'vscode', createdAt: Date.now() - 20 * 864e5, updatedAt: Date.now() - 20 * 864e5, lastUsedAt: Date.now() - 2 * 3600e3 },
+        { name: 'localpilot.mcp.oauth.https://mcp.linear.app/mcp', usedBy: ['MCP sign-in (https://mcp.linear.app/mcp)'], source: 'cli', createdAt: Date.now() - 2 * 864e5, updatedAt: Date.now() - 864e5 },
+        { name: 'old-gateway', usedBy: [], source: 'migrated:keys.json', createdAt: Date.now() - 90 * 864e5, updatedAt: Date.now() - 90 * 864e5 },
+      ] },
 });
 const SHORTCUTS = [
   { id: 'global', title: 'VS Code', customizable: true, rows: [

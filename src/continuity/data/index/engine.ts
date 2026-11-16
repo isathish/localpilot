@@ -12,6 +12,7 @@ import { streamLastSeq } from '../eventLog';
 import { Applier } from './apply';
 import { Db } from './db';
 import * as Q from './queries';
+import { loadSqlJs } from './sqljsLoader';
 import { createSchema, FtsKind, probeFts, SCHEMA_VERSION, userVersion } from './schema';
 
 export type IndexState = 'loading' | 'catching-up' | 'rebuilding' | 'ready' | 'failed';
@@ -57,17 +58,7 @@ export interface EngineOptions {
   sqlJs?: SqlJsStatic;
 }
 
-let sqlJsPromise: Promise<SqlJsStatic> | undefined;
-/** Loads sql.js once per thread, with its wasm from `wasmPath` (dist/sqljs/sql-wasm.wasm in the packaged extension). */
-export function loadSqlJs(wasmPath?: string): Promise<SqlJsStatic> {
-  if (!sqlJsPromise) {
-    const init = require('sql.js') as (o: { locateFile?: (f: string) => string; wasmBinary?: Uint8Array }) => Promise<SqlJsStatic>;
-    const file = wasmPath || process.env.LOCALPILOT_SQLJS_WASM;
-    sqlJsPromise = init(file ? { wasmBinary: fs.readFileSync(file) } : {});
-    sqlJsPromise.catch(() => (sqlJsPromise = undefined));
-  }
-  return sqlJsPromise;
-}
+export { loadSqlJs };
 
 const DAY = 86_400_000;
 

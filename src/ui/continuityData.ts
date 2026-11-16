@@ -34,7 +34,7 @@ export interface ContinuityView {
  * Opens continuity once `loaded` settled (the SessionStore read its chats). The data root is the setting, else
  * LOCALPILOT_CONTINUITY_DIR, else ~/.localpilot/continuity; extension tests without either get a throwaway folder.
  */
-export function openContinuity(context: vscode.ExtensionContext, log: vscode.LogOutputChannel, loaded: Promise<unknown>): ContinuityHandle {
+export function openContinuity(context: vscode.ExtensionContext, log: vscode.LogOutputChannel, loaded: Promise<unknown>, secrets: vscode.SecretStorage = context.secrets): ContinuityHandle {
   const handle: ContinuityHandle = { opened: Promise.resolve(undefined) };
   const testMode = context.extensionMode === vscode.ExtensionMode.Test;
   const setting = getConfig().continuity.dataDir;
@@ -49,7 +49,7 @@ export function openContinuity(context: vscode.ExtensionContext, log: vscode.Log
         dataDir,
         writer: 'vscode',
         appVersion: String((context.extension.packageJSON as { version?: string }).version ?? '0.0.0'),
-        secrets: secretStorageBox(context.secrets),
+        secrets: secretStorageBox(secrets),
         log,
         settings: () => getConfig().continuity,
         wasmPath: process.env.LOCALPILOT_SQLJS_WASM || path.join(dist, 'sqljs', 'sql-wasm.wasm'),

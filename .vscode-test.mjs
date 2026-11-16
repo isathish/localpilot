@@ -11,10 +11,12 @@ const telemetryDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'localpilot
 const skillCatalog = path.join(path.dirname(telemetryDir), 'skill-catalog.json');
 // Worktrees the agent tests create stay out of the real ~/.localpilot/worktrees.
 const worktreesDir = path.join(path.dirname(telemetryDir), 'worktrees');
+// The secret store: a throwaway folder, unlocked by a test passphrase, never the developer's keychain or ~/.localpilot.
+const secretsDir = path.join(path.dirname(telemetryDir), 'secrets');
 
 export default defineConfig({
 	files: 'out/test/**/*.test.js',
 	workspaceFolder,
-	env: { LOCALPILOT_TELEMETRY_DIR: telemetryDir, LOCALPILOT_SKILL_CATALOG: skillCatalog, LOCALPILOT_WORKTREES_DIR: worktreesDir },
+	env: { LOCALPILOT_TELEMETRY_DIR: telemetryDir, LOCALPILOT_SKILL_CATALOG: skillCatalog, LOCALPILOT_WORKTREES_DIR: worktreesDir, LOCALPILOT_KEYCHAIN: 'none', LOCALPILOT_SECRETS_PASSPHRASE: 'test-passphrase', LOCALPILOT_SECRETS_DIR: secretsDir },
 	mocha: { timeout: 20_000 },
 });

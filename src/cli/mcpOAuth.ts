@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { McpOAuth } from '../mcp/oauth';
-import { FileSecretStorage } from '../providers/secrets';
+import { cliSecretStorage } from '../secrets/cliSecrets';
+import type { OAuthSecretStore } from '../mcp/oauth';
 
 /** The command that opens a URL in the system browser. */
 export function browserCommand(url: string, platform: NodeJS.Platform = process.platform): [string, string[]] {
@@ -22,7 +23,7 @@ export async function openInBrowser(url: string, write: (s: string) => void = (s
   });
 }
 
-/** OAuth for remote MCP servers in the CLI: tokens in `~/.localpilot/secrets.json` (0600), sign-in in the system browser. */
-export function cliMcpOAuth(log?: (m: string) => void, store = new FileSecretStorage()): McpOAuth {
+/** OAuth for remote MCP servers in the CLI: tokens in the encrypted secret store (shared with VS Code), sign-in in the system browser. */
+export function cliMcpOAuth(log?: (m: string) => void, store: OAuthSecretStore = cliSecretStorage()): McpOAuth {
   return new McpOAuth(store, { openExternal: (url) => openInBrowser(url), log });
 }

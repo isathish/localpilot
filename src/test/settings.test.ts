@@ -323,6 +323,23 @@ suite('LocalPilot settings & setup', () => {
     }
   });
 
+  test('Settings → Secrets: in the Data & system group and the search; values only travel through a host password box', () => {
+    const ext = vscode.extensions.getExtension('localpilot.localpilot-agent')!;
+    const read = (rel: string) => fs.readFileSync(path.join(ext.extensionPath, rel), 'utf8');
+    const webview = read('media/settings.js');
+    const panel = read('src/ui/settingsPanel.ts');
+    assert.match(webview, /\['secrets', 'Secrets', I\.key\]/, 'Secrets is a section');
+    assert.match(webview, /items: \['memory', 'continuity', 'secrets',/, 'Secrets sits in Data & system');
+    assert.match(webview, /\n {4}secrets: '[^']*keychain[^']*'/, 'Secrets has search words');
+    assert.match(webview, /secrets: secSecrets/);
+    assert.doesNotMatch(webview, /apiKey: `\\\$\{env:/, 'presets no longer write ${env:…} keys');
+    const fromWebview = /type FromSettings =([\s\S]*?);\n/.exec(panel)?.[1] ?? '';
+    for (const t of ['secretReplace', 'secretDelete', 'keyFromEnv']) {
+      assert.match(fromWebview, new RegExp(`type: '${t}'; (name|id): string`), `${t} carries a name or id, never a value`);
+    }
+    assert.match(panel, /showInputBox\(\{[\s\S]{0,200}password: true/, 'Replace… asks in a VS Code password box');
+  });
+
   test('pruning provider keys keeps keys owned by other workspaces; workspace keys get their own name', async () => {
     const vault = new Map<string, string>([['localpilot.provider.other.ws-0000abcd', 'sk-other'], ['localpilot.provider.old-user', 'sk-old']]);
     const changed = new vscode.EventEmitter<vscode.SecretStorageChangeEvent>();

@@ -3,7 +3,7 @@ import { ProviderConfig } from '../types';
 import { expandMcpServer } from '../mcp/config';
 import { cleanHeaders } from './providerOptions';
 
-/** Keys from VS Code's secret storage by name, loaded by ProviderSecrets so key resolution stays synchronous. */
+/** Keys from the secret store by name, loaded by ProviderSecrets so key resolution stays synchronous. */
 const secretValues = new Map<string, string>();
 const secretListeners = new Set<() => void>();
 
@@ -31,6 +31,28 @@ export function onSecretsChanged(listener: () => void): { dispose(): void } {
   return { dispose: () => secretListeners.delete(listener) };
 }
 
+/** Told when a `${secret:NAME}` key is used for a request, so the secret store can show "last used". */
+let usedHook: ((name: string) => void) | undefined;
+const lastUsed = new Map<string, number>();
+
+export function setSecretUsedHook(hook: ((name: string) => void) | undefined): void {
+  usedHook = hook;
+}
+
+function used(name: string): void {
+  // Once a minute per name at most: the store rewrites its file to record it.
+  const now = Date.now();
+  if (!usedHook || now - (lastUsed.get(name) ?? 0) < 60_000) {
+    return;
+  }
+  lastUsed.set(name, now);
+  try {
+    usedHook(name);
+  } catch {
+    // only a convenience
+  }
+}
+
 /** Secret names referenced as `${secret:NAME}` in a key. */
 export function secretRefs(apiKey: string | undefined): string[] {
   return [...(apiKey ?? '').matchAll(SECRET_REF)].map((m) => m[1]);
@@ -39,18 +61,29 @@ export function secretRefs(apiKey: string | undefined): string[] {
 const SECRET_REF = /\$\{secret:([A-Za-z0-9_.-]+)\}/g;
 
 /**
- * The provider's API key with references expanded: `${env:NAME}` from the environment, `${secret:NAME}` from VS Code's
- * secret storage. So cloud keys need not be stored in settings.json. Undefined when unset or the reference is empty.
+ * The provider's API key with references expanded: `${secret:NAME}` from LocalPilot's encrypted secret store, and (for
+ * keys set up before the store existed) `${env:NAME}` from the environment. So cloud keys need not be stored in
+ * settings.json. Undefined when unset or the reference is empty.
  */
 export function resolveApiKey(cfg: Pick<ProviderConfig, 'apiKey'>): string | undefined {
+  return expandKey(cfg, true);
+}
+
+function expandKey(cfg: Pick<ProviderConfig, 'apiKey'>, use: boolean): string | undefined {
   const raw = cfg.apiKey?.trim();
   if (!raw) {
     return undefined;
   }
   const key = raw
     .replace(/\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => process.env[name] ?? '')
-    // Outside VS Code (the CLI) there is no secret storage: LOCALPILOT_KEY_<NAME> stands in for it.
-    .replace(SECRET_REF, (_, name: string) => secretValues.get(name) ?? process.env[secretEnvName(name)] ?? '')
+    // LOCALPILOT_KEY_<NAME> stands in for a stored key (CI, a machine whose store is locked).
+    .replace(SECRET_REF, (_, name: string) => {
+      const v = secretValues.get(name);
+      if (v && use) {
+        used(name);
+      }
+      return v ?? process.env[secretEnvName(name)] ?? '';
+    })
     .trim();
   return key || undefined;
 }
@@ -77,7 +110,7 @@ export function resolveHeaders(cfg: Pick<ProviderConfig, 'headers'>): Record<str
   return out;
 }
 
-/** Environment variable the CLI reads for a `${secret:NAME}` key, e.g. `LOCALPILOT_KEY_OPENAI`. */
+/** Environment variable that stands in for a `${secret:NAME}` key, e.g. `LOCALPILOT_KEY_OPENAI`. */
 export function secretEnvName(name: string): string {
   return `LOCALPILOT_KEY_${name.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
 }
@@ -90,7 +123,7 @@ export function missingKeyReason(cfg: Pick<ProviderConfig, 'apiKey'>): string {
     return `Environment variable ${env[1]} is not set`;
   }
   const secret = secretRefs(raw)[0];
-  return secret ? `The stored API key is missing from VS Code secret storage — enter it again (the CLI reads ${secretEnvName(secret)})` : 'API key required';
+  return secret ? `The stored API key "${secret}" is missing from the secret store — enter it again (or set ${secretEnvName(secret)})` : 'API key required';
 }
 
 /** Where a provider's key comes from and whether it resolves right now — never the key itself (shown in Settings). */
@@ -106,7 +139,7 @@ export function keyStatus(cfg: Pick<ProviderConfig, 'apiKey'>): KeyStatus {
   if (!raw) {
     return { source: 'none', ok: false };
   }
-  const ok = !!resolveApiKey(cfg);
+  const ok = !!expandKey(cfg, false);
   if (secretRefs(raw).length) {
     return { source: 'keychain', ok };
   }

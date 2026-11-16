@@ -61,7 +61,7 @@ The same configuration is stored in the `localpilot.mcpServers` setting:
 
 `command`, `args`, `env` values, `cwd`, `url` and `headers` accept `${env:NAME}`, `${secret:NAME}` and Claude-style `${NAME}` or `${NAME:-default}`. A reference that resolves to nothing is left as written, and the log gets one warning for that server. Settings always show the references, never the values.
 
-Avoid committing tokens in `env` or `headers` to a shared workspace `settings.json`: use `${env:NAME}` references, or put such servers in your user settings. A `${secret:NAME}` reference also resolves from a `LOCALPILOT_KEY_<NAME>` environment variable, and the CLI reads it from `~/.localpilot/keys.json`, but VS Code cannot store MCP header secrets in the keychain yet.
+Avoid committing tokens in `env` or `headers` to a shared workspace `settings.json`: store the token with `localpilot secrets set <name>` and write `${secret:<name>}`, use an `${env:NAME}` reference, or put such servers in your user settings. `${secret:NAME}` resolves from LocalPilot's encrypted [secret store]({{ '/docs/configuration/' | relative_url }}#secrets), which VS Code and the CLI share, or from a `LOCALPILOT_KEY_<NAME>` environment variable.
 
 ### Server files (`.mcp.json`)
 
@@ -104,7 +104,7 @@ A remote server that answers `401` with a `WWW-Authenticate` header needs you to
 2. it registers itself as a client, unless the server has `"oauthClient": { "clientId": "…", "clientSecret": "…" }` (Claude Code's `oauth` is read too);
 3. it opens your browser with a PKCE (S256) sign-in and waits up to 10 minutes for the redirect to `http://127.0.0.1:<1456–1461>/mcp/oauth/callback`.
 
-If you register a client yourself, allow those six redirect URIs. The tokens are stored per server URL in VS Code's secret storage (in `~/.localpilot/secrets.json`, readable only by you, for the CLI), so every window reuses them. They are refreshed before they expire and sent as `Authorization: Bearer …`. A server whose `headers` already set `Authorization` never goes through OAuth. When the server refuses the refresh token, the server shows **Authenticate** again; a network or server error keeps you signed in, and a token another window already refreshed is reused.
+If you register a client yourself, allow those six redirect URIs. The tokens are stored per server URL in LocalPilot's encrypted [secret store]({{ '/docs/configuration/' | relative_url }}#secrets), so every window and the `localpilot` CLI reuse them. They are refreshed before they expire and sent as `Authorization: Bearer …`. A server whose `headers` already set `Authorization` never goes through OAuth. When the server refuses the refresh token, the server shows **Authenticate** again; a network or server error keeps you signed in, and a token another window already refreshed is reused.
 
 [Plugins]({{ '/docs/claude-code-compatibility/' | relative_url }}#plugins) can add servers through their `.mcp.json`, local or remote (`{ "type": "http", "url": …, "headers": … }`, the same format as Claude Code). Those appear as `plugin:server`.
 

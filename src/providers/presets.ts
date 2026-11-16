@@ -9,7 +9,10 @@ export interface ProviderPreset {
   label: string;
   group: PresetGroup;
   cfg: ProviderConfig;
-  /** Environment variable cloud presets read the key from until one is stored. */
+  /**
+   * The environment variable this provider's key usually lives in. Only offered as a one-time copy into the secret
+   * store (Settings, `providers add`); a preset never references it.
+   */
   env?: string;
   /** Where to get an API key (cloud) or set the gateway up. */
   keyUrl?: string;
@@ -22,8 +25,9 @@ const cloud = (key: string, label: string, type: ProviderConfig['type'], baseUrl
   group: 'cloud',
   env,
   keyUrl,
-  // Explicitly cloud: it stays cloud behind a proxy or a regional URL that looks local.
-  cfg: { id: key, type, baseUrl, displayName: label, apiKey: `\${env:${env}}`, cloud: true },
+  // Explicitly cloud: it stays cloud behind a proxy or a regional URL that looks local. No key yet: one is stored in the
+  // encrypted secret store when the provider is added.
+  cfg: { id: key, type, baseUrl, displayName: label, cloud: true },
 });
 
 const withModels = (p: ProviderPreset, models: string[]): ProviderPreset => ({ ...p, cfg: { ...p.cfg, models } });

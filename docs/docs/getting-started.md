@@ -52,7 +52,7 @@ On first launch the **Setup** screen opens. It looks for running model servers o
 
 ## 3. Get a model
 
-**Prefer a cloud model?** In the setup screen, click **Use a cloud API…**, pick OpenAI, Claude, Gemini, OpenRouter, Groq or another provider, and paste your API key. The key goes to your OS keychain. See [Cloud models]({{ '/guides/cloud-models-vscode/' | relative_url }}). You can add a local model later; automatic picks then prefer it.
+**Prefer a cloud model?** In the setup screen, click **Use a cloud API…**, pick OpenAI, Claude, Gemini, OpenRouter, Groq or another provider, and paste your API key. The key goes to LocalPilot's encrypted secret store, unlocked by your OS keychain and shared with the `localpilot` CLI. See [Cloud models]({{ '/guides/cloud-models-vscode/' | relative_url }}). You can add a local model later; automatic picks then prefer it.
 
 If you have no model server, let LocalPilot set one up:
 

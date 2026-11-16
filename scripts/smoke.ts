@@ -82,6 +82,7 @@ import { memorySmoke as continuityMemorySmoke } from './smokeMemory';
 import { contextSmoke } from './smokeContext';
 import { sessionSmoke } from './smokeSession';
 import { syncSmoke } from './smokeSync';
+import { secretsSmoke } from './smokeSecrets';
 import { chatUxSmoke } from './smokeChatUx';
 import { orgPolicySmoke } from './smokeOrgPolicy';
 import { cliParity } from './smokeCliParity';
@@ -2692,6 +2693,7 @@ async function healingSmokes() {
   await contextSmoke(check);
   await sessionSmoke(check);
   await syncSmoke(check);
+  await secretsSmoke(check);
   await chatUxSmoke(check);
   await orgPolicySmoke(check);
   cliParity(check);

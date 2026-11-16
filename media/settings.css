@@ -1489,3 +1489,28 @@ body.vscode-high-contrast .sync-body .sdot, body.vscode-high-contrast-light .syn
 /* Tab strips that share a row with other controls: the tablist is its own flex group. */
 .chip-tabs, .gal-tablist { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .gal-tablist { gap: 8px; }
+
+/* Settings → Secrets: the store's status, keys still read from environment variables, and the stored names. */
+.policy.err-note { border-color: color-mix(in srgb, var(--error) 45%, var(--border)); background: color-mix(in srgb, var(--error) 8%, transparent); }
+.policy.err-note > svg { color: var(--error-text); }
+.kv.store dd.mono { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.sec-env-lead { margin: 0; padding: 10px 14px 4px; }
+.sec-env { margin: 0; padding: 8px 14px; align-items: center; }
+.sec-env + .sec-env { border-top: 1px solid var(--border-soft); }
+.tbl.secrets-tbl { margin: 0; }
+.tbl.secrets-tbl td.mono { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tbl.secrets-tbl td:nth-child(2) { max-width: 180px; overflow-wrap: anywhere; }
+.tbl.secrets-tbl td:nth-child(3) { max-width: 130px; overflow-wrap: anywhere; }
+.tbl.secrets-tbl td:nth-child(4), .tbl.secrets-tbl td:nth-child(5), .tbl.secrets-tbl th { white-space: nowrap; }
+.tbl.secrets-tbl td.act { width: 1%; white-space: nowrap; text-align: right; }
+.tbl.secrets-tbl td.act .btn + .btn { margin-left: 4px; }
+@media (max-width: 760px) {
+  /* Each secret becomes a small card: name, what uses it, source · changed · used, then the actions. */
+  .tbl.secrets-tbl, .tbl.secrets-tbl tbody { display: block; }
+  .tbl.secrets-tbl thead { display: none; }
+  .tbl.secrets-tbl tr { display: grid; grid-template-columns: repeat(3, auto) minmax(0, 1fr); align-items: center; column-gap: 8px; row-gap: 2px; padding: 9px 12px; border-bottom: 1px solid var(--border-soft); }
+  .tbl.secrets-tbl tr:last-child { border-bottom: 0; }
+  .tbl.secrets-tbl td { display: block; padding: 0; border: 0; max-width: none !important; }
+  .tbl.secrets-tbl td.mono, .tbl.secrets-tbl td:nth-child(2) { grid-column: 1 / -1; max-width: none; }
+  .tbl.secrets-tbl td.act { grid-column: 1 / -1; text-align: left; margin-top: 4px; }
+}

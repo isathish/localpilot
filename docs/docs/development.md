@@ -94,7 +94,7 @@ The full surface (`LocalPilotApi` in `src/extension.ts`):
 ```
 src/
   providers/      Ollama, OpenAI-compatible and Anthropic clients, registry (provider/model ids, routing),
-                  cloud (key references, cloud detection, known model limits), secrets (OS keychain), catalog,
+                  cloud (key references, cloud detection, known model limits), secrets (key references), catalog,
                   discovery (auto-detect, Docker), modelManager, modelGallery, colibri, usageAdvisor
   agent/          agentLoop (model⇄tools), subagents, skills, prompts, parallel pool, changeTracker
   context/        contextManager (budget → prune → compact), tokenizer, workspaceContext (@mentions, rules)
@@ -103,6 +103,8 @@ src/
   ui/             chatController, chatViewProvider (webview), agentsView, chatParticipant,
                   lmProvider (Language Model API), inlineCompletion, inlineEdit, images, markdownViewer,
                   modelAutoTune, settingsPanel (Settings / provider manager / setup wizard webview), cli
+  secrets/        the encrypted secret store shared with the CLI (store: AES-256-GCM sql.js file; keychain:
+                  macOS / Windows / Secret Service; vscodeStorage: VS Code's SecretStorage view; cliSecrets)
   mcp/            MCP client (mcpManager)
   cli/            the `localpilot` terminal CLI and its VS Code shim
   telemetry/      local-only metrics store behind the Dashboard

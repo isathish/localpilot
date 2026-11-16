@@ -94,7 +94,7 @@
   };
   const SECTIONS = [
     ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['marketplace', 'Marketplace', I.download], ['customize', 'Customize', I.scale], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
-    ['web', 'Web search', I.globe], ['documents', 'Markdown & PDF', I.file], ['memory', 'Memory & history', I.brain], ['continuity', 'Continuity & sync', I.cloud], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['telemetry', 'Telemetry', I.pulse], ['shortcuts', 'Keyboard shortcuts', I.keyboard], ['advanced', 'Advanced', I.wrench],
+    ['web', 'Web search', I.globe], ['documents', 'Markdown & PDF', I.file], ['memory', 'Memory & history', I.brain], ['continuity', 'Continuity & sync', I.cloud], ['secrets', 'Secrets', I.key], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['telemetry', 'Telemetry', I.pulse], ['shortcuts', 'Keyboard shortcuts', I.keyboard], ['advanced', 'Advanced', I.wrench],
   ];
   /** Sidebar order: the Dashboard overview on top (never folds), then where models come from, how the agent behaves, what it can reach, and what it keeps. */
   const NAV_HOME = ['dashboard'];
@@ -102,7 +102,7 @@
     { id: 'models', label: 'Models', items: ['providers', 'models', 'gallery'] },
     { id: 'agent', label: 'Agent', items: ['agent', 'skills', 'marketplace', 'customize', 'completions'] },
     { id: 'tools', label: 'Tools & integrations', items: ['mcp', 'web', 'documents'] },
-    { id: 'data', label: 'Data & system', items: ['memory', 'continuity', 'telemetry', 'shortcuts', 'advanced'] },
+    { id: 'data', label: 'Data & system', items: ['memory', 'continuity', 'secrets', 'telemetry', 'shortcuts', 'advanced'] },
   ];
   /** Settings search. Sections match on their name plus these words; fields match on label and key and jump to the row
    *  (`field()` tags it with data-deps). Keep FIELD_INDEX in step with the field() calls of each section. */
@@ -120,6 +120,7 @@
     memory: 'history chats notes retention transcripts',
     continuity: 'continuity sync backup restore trash undelete version history index rebuild search data folder storage migration import 1.6 legacy event log devices passphrase encryption icloud dropbox onedrive google drive git s3 r2 minio webdav nextcloud conflicts',
     mcp: 'model context protocol server tools reconnect',
+    secrets: 'secrets secret store api keys tokens passwords credentials keychain credential manager libsecret secret-tool passphrase encrypted encryption aes environment variables env import move delete replace',
     dashboard: 'telemetry metrics usage logs redis stats throughput self-healing recovery failures root cause patches regression intervention',
     telemetry: 'telemetry metrics usage record retention redis otlp opentelemetry otel collector traces grafana langfuse export delete',
     advanced: 'setup welcome terminal cli settings.json logs chat location about',
@@ -240,7 +241,7 @@
       ['azure', 'Azure OpenAI', 'your-resource.openai.azure.com', 'openai', 'https://YOUR-RESOURCE.openai.azure.com/openai/v1', 'AZURE_OPENAI_API_KEY', 'https://portal.azure.com'],
       // Bedrock's OpenAI-compatible endpoint has no /models, so its models are listed. IAM / SigV4 auth goes through LiteLLM.
       ['bedrock', 'Amazon Bedrock', 'bedrock-runtime · API key', 'openai', 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1', 'AWS_BEARER_TOKEN_BEDROCK', 'https://console.aws.amazon.com/bedrock/home#/api-keys', ['openai.gpt-oss-120b-1:0', 'openai.gpt-oss-20b-1:0']],
-    ].map(([key, label, sub, type, baseUrl, env, keyUrl, models]) => ({ key, label, sub, group: 'cloud', keyUrl, cfg: { id: key, type, baseUrl, displayName: label, apiKey: `\${env:${env}}`, cloud: true, ...(models ? { models } : {}) } })),
+    ].map(([key, label, sub, type, baseUrl, env, keyUrl, models]) => ({ key, label, sub, group: 'cloud', keyUrl, env, cfg: { id: key, type, baseUrl, displayName: label, cloud: true, ...(models ? { models } : {}) } })),
   ];
   const CUSTOM_PRESET = { key: 'custom', label: 'Custom endpoint', cfg: { id: 'custom', type: 'openai', baseUrl: '', displayName: 'Custom' } };
   const PRESET_GROUPS = [
@@ -278,7 +279,7 @@
     const q = query.trim().toLowerCase(); if (!q) { return presets.map((preset) => ({ preset, score: 0, labelHl: [] })); }
     const hits = [];
     presets.forEach((preset, i) => {
-      const env = (/\$\{env:([^}]+)\}/.exec(preset.cfg.apiKey || '') || [])[1];
+      const env = preset.env;
       const label = fuzzyMatch(q, preset.label); const key = fuzzyMatch(q, preset.key); const host = fuzzyMatch(q, preset.sub || preset.cfg.baseUrl); const ev = env ? fuzzyMatch(q, env) : null;
       let score = Math.max(label ? label.score : -Infinity, key ? key.score - 1 : -Infinity, host ? host.score - 6 : -Infinity, ev ? ev.score - 8 : -Infinity);
       if (score === -Infinity) { return; }
@@ -1072,7 +1073,7 @@
   function renderSection() {
     if (state.section !== 'dashboard' && state.dash.timer) { stopDashboardTimer(); }
     const sec = el('section', 'sec');
-    ({ providers: secProviders, models: secModels, gallery: secGallery, marketplace: secMarketplace, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, continuity: secContinuity, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, shortcuts: secShortcuts, advanced: secAdvanced }[state.section] || secProviders)(sec);
+    ({ providers: secProviders, models: secModels, gallery: secGallery, marketplace: secMarketplace, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, continuity: secContinuity, secrets: secSecrets, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, shortcuts: secShortcuts, advanced: secAdvanced }[state.section] || secProviders)(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
@@ -1266,7 +1267,7 @@
     const k = (state.data.keys || {})[p.id];
     if (!k || (k.source === 'none' && !isRemoteUrl(p.baseUrl))) { return { warn: '', note: '' }; }
     if (!k.ok) { return { warn: k.source === 'env' ? `${k.env} not set` : k.source === 'keychain' ? 'key missing' : 'no API key', note: '' }; }
-    return { warn: '', note: k.source === 'keychain' ? 'Saved in your OS keychain.' : k.source === 'env' ? `Read from <code>$${esc(k.env)}</code>.` : 'Stored in settings.json.' };
+    return { warn: '', note: k.source === 'keychain' ? 'Saved in the encrypted secret store.' : k.source === 'env' ? `Read from <code>$${esc(k.env)}</code>, an older setup: move it into the secret store.` : 'Stored in settings.json.' };
   }
   /** Model ids the provider's last check listed (without the `provider/` prefix). */
   const listedIds = (p, probe) => (probe && probe.ok ? probe.models.map((m) => (String(m.id).startsWith(`${p.id}/`) ? String(m.id).slice(p.id.length + 1) : String(m.id))) : []);
@@ -1407,6 +1408,23 @@
     const tip = [v[2], h.detail, live && h.models !== undefined ? plural(h.models, 'model') : '', live && ms ? `answered in ${ms}` : '', when].filter(Boolean).join(' · ');
     return `<span class="badge ${v[0]} health" title="${esc(tip)}">${esc(v[1])}</span>`;
   }
+  /** The environment variable a key reads (`${env:VAR}`, the pre-1.8 way), or the preset's usual one while there is no key. */
+  function keyEnvOffer(p, key) {
+    const ref = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(String(key || '').trim());
+    if (ref) { return { env: ref[1], move: true }; }
+    const pr = presetOf(p);
+    return !key && pr && pr.env ? { env: pr.env, move: false } : null;
+  }
+  /** "Move into secret store" / "Copy $VAR into the secret store": the host reads the variable and stores it; the page never sees the value. */
+  function keyEnvButton(p, key) {
+    const o = keyEnvOffer(p, key);
+    const envSet = (state.data && state.data.secrets && state.data.secrets.envSet) || {};
+    if (!o || (!o.move && !envSet[o.env])) { return null; }
+    const b = el('button', 'btn sm', `${I.key}${o.move ? 'Move into secret store' : `Copy $${esc(o.env)} into the secret store`}`);
+    b.title = envSet[o.env] ? `Copies $${o.env} (as VS Code sees it) into the encrypted secret store once; the variable is not read again` : `$${o.env} is not set for VS Code: paste the key instead`;
+    b.onclick = () => { b.disabled = true; post({ type: 'keyFromEnv', id: p.id, env: o.env }); };
+    return b;
+  }
   function orgProviderCard(p) {
     const probe = state.tests[p.id] || (state.probe || []).find((r) => r.id === p.id);
     const open = state.expanded === p.id;
@@ -1431,7 +1449,7 @@
     const keyIn = el('input'); keyIn.type = /^\$\{env:/.test(key || '') ? 'text' : 'password';
     const stored = isSecretRef(key);
     keyIn.value = stored ? '' : key || '';
-    keyIn.placeholder = stored ? '•••••••• saved in secret storage — type to replace' : 'paste your key, or ${env:API_KEY}';
+    keyIn.placeholder = stored ? '•••••••• saved in the secret store — type to replace' : 'paste your key';
     const saveKey = (v) => {
       const next = providersList(); const i = next.findIndex((x) => x.id === p.id);
       if (i >= 0) { next[i] = { ...next[i], apiKey: v || undefined }; } else if (v) { next.push({ id: p.id, type: p.type, baseUrl: p.baseUrl, apiKey: v }); }
@@ -1441,7 +1459,8 @@
     keyIn.onchange = commitKey; keyIn.onblur = commitKey;
     const keyCtl = el('div', 'btnrow'); keyCtl.style.margin = '0'; keyCtl.appendChild(keyIn);
     if (key) { const forget = el('button', 'btn sm', 'Remove'); forget.title = 'Remove your API key for this provider'; forget.onclick = () => saveKey(''); keyCtl.appendChild(forget); }
-    const keyRow = el('div', 'field'); keyRow.innerHTML = `<div><div class="lbl">Your API key</div><div class="desc">${ks.note ? `<b>${ks.note}</b> ` : ''}Kept in VS Code secret storage (your OS keychain). Or write <code>\${env:NAME}</code> to read it from an environment variable.</div></div>`;
+    const envBtn = keyEnvButton(p, key); if (envBtn) { keyCtl.appendChild(envBtn); }
+    const keyRow = el('div', 'field'); keyRow.innerHTML = `<div><div class="lbl">Your API key</div><div class="desc">${ks.note ? `<b>${ks.note}</b> ` : ''}Kept in LocalPilot's encrypted secret store, which the <code>localpilot</code> CLI shares (Data &amp; system → Secrets).</div></div>`;
     const kc = el('div', 'ctl'); kc.appendChild(keyCtl); keyRow.appendChild(kc);
     body.appendChild(keyRow);
     body.appendChild(row('Base URL', 'Set by your organization.', ro(p.baseUrl)));
@@ -1500,18 +1519,19 @@
     if (lm) { body.appendChild(el('div', 'desc', 'Uses the chat models VS Code offers (GitHub Copilot and other extensions). VS Code asks for consent on the first request; no URL or key needed.')); }
     const urlIn = text('baseUrl', 'http://localhost:11434', 'url', (v) => /^https?:\/\/.+/.test(v));
     if (!lm) { body.appendChild(row('Base URL', isRemoteUrl(p.baseUrl) ? 'The provider\'s API endpoint; change it only for a regional or proxy endpoint.' : p.type === 'ollama' ? 'e.g. <code>http://localhost:11434</code> or <code>https://ollama.com</code>' : p.type === 'anthropic' ? 'e.g. <code>https://api.anthropic.com/v1</code>' : 'Include <code>/v1</code>, e.g. <code>http://localhost:1234/v1</code>', urlIn)); }
-    // A pasted key is moved to VS Code secret storage by the extension; the field then stays empty and says so.
+    // A pasted key is moved into the encrypted secret store by the extension; the field then stays empty and says so.
     const keyIn = el('input'); keyIn.type = /^\$\{env:/.test(p.apiKey || '') ? 'text' : 'password';
     const stored = isSecretRef(p.apiKey);
     keyIn.value = stored ? '' : p.apiKey || '';
-    keyIn.placeholder = stored ? '•••••••• saved in secret storage — type to replace' : isCloud(p) ? 'paste the key, or ${env:API_KEY}' : 'not required for local servers';
+    keyIn.placeholder = stored ? '•••••••• saved in the secret store — type to replace' : isCloud(p) ? 'paste the key' : 'not required for local servers';
     const commitKey = () => { const v = keyIn.value.trim(); if (stored && !v) { return; } if ((p.apiKey || '') !== v) { upd({ apiKey: v || undefined }); } };
     keyIn.onchange = commitKey; keyIn.onblur = commitKey;
     const keyCtl = el('div', 'btnrow'); keyCtl.style.margin = '0'; keyCtl.appendChild(keyIn);
     if (p.apiKey) { const forget = el('button', 'btn sm', 'Remove'); forget.title = 'Remove this provider\'s API key'; forget.onclick = () => upd({ apiKey: undefined }); keyCtl.appendChild(forget); }
+    if (!lm) { const envBtn = keyEnvButton(p, p.apiKey); if (envBtn) { keyCtl.appendChild(envBtn); } }
     const pr = presetOf(p);
     const getKey = pr && pr.keyUrl ? ` <a data-url="${esc(pr.keyUrl)}">${pr.group === 'gateway' ? 'Setup guide' : 'Get an API key'} ↗</a>` : '';
-    const keyRow = lm ? null : body.appendChild(row('API key', `${ks.note ? `<b>${ks.note}</b> ` : ''}${isCloud(p) && isRemoteUrl(p.baseUrl) ? 'Required.' : 'Optional for local servers.'} A pasted key is kept in VS Code secret storage (your OS keychain), not in settings.json. Or write <code>\${env:NAME}</code> to read it from an environment variable.${getKey}`, keyCtl));
+    const keyRow = lm ? null : body.appendChild(row('API key', `${ks.note ? `<b>${ks.note}</b> ` : ''}${isCloud(p) && isRemoteUrl(p.baseUrl) ? 'Required.' : 'Optional for local servers.'} A pasted key is kept in LocalPilot's encrypted secret store (shared with the <code>localpilot</code> CLI), never in settings.json.${getKey}`, keyCtl));
     // For a cloud API the key is the one field that matters: right under the name, before ID / API type / URL.
     if (keyRow && isCloud(p) && isRemoteUrl(p.baseUrl)) { body.insertBefore(keyRow, body.children[1]); }
     // Mirrors bedrockRegion / withRegion in src/providers/presets.ts: the region is part of a Bedrock endpoint URL.
@@ -2569,7 +2589,7 @@
       box.appendChild(card(
         field('webSearch.provider', 'Search provider', '<b>DuckDuckGo</b> needs no key. <b>SearXNG</b> is self-hosted and fully private. <b>Brave</b> and <b>Tavily</b> need an API key.', 'select', { off, options: [['duckduckgo', 'DuckDuckGo'], ['searxng', 'SearXNG (self-hosted)'], ['brave', 'Brave Search'], ['tavily', 'Tavily']] }),
         prov === 'searxng' ? field('webSearch.searxngUrl', 'SearXNG URL', 'Your instance, e.g. <code>http://localhost:8888</code>.', 'text', { off, placeholder: 'http://localhost:8888', validate: (v) => /^https?:\/\/.+/.test(v) }) : null,
-        prov === 'brave' || prov === 'tavily' ? field('webSearch.apiKey', 'API key', 'Kept in VS Code secret storage (your OS keychain), not in settings.json. Or write <code>${env:NAME}</code> to read it from an environment variable.', 'password', { off, secret: true }) : null,
+        prov === 'brave' || prov === 'tavily' ? field('webSearch.apiKey', 'API key', 'Kept in LocalPilot\'s encrypted secret store (shared with the <code>localpilot</code> CLI), never in settings.json.', 'password', { off, secret: true }) : null,
         field('webSearch.maxResults', 'Max results', '', 'number', { off, min: 1, max: 20 })
       ));
       box.appendChild(el('h2', 'sub', 'Browser'));
@@ -2616,6 +2636,57 @@
   // ------------------------------------------------------------------ memory & skills
   function fmtBytes(b) { return b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((b || 0) / 1024))} KB`; }
   function fmtAgo(ts) { const d = Date.now() - ts; if (d < 60e3) { return 'just now'; } if (d < 3600e3) { return `${Math.floor(d / 60e3)} min ago`; } if (d < 86400e3) { return `${Math.floor(d / 3600e3)} h ago`; } return `${Math.floor(d / 86400e3)} d ago`; }
+  // ------------------------------------------------------------------ secrets
+  /** Settings → Secrets: the encrypted store VS Code and the CLI share. The page only ever gets names and metadata;
+   *  Replace… asks for the new value in a VS Code password box and Delete confirms in a VS Code dialog. */
+  function secSecrets(sec) {
+    head(sec, 'Secrets', 'API keys, MCP sign-in tokens and sync credentials. VS Code and the <code>localpilot</code> CLI share one encrypted store, so a key entered in either works in both. Values are never shown.');
+    const v = (state.data && state.data.secrets) || { ok: false, opening: true, rows: [], envSet: {} };
+    const st = el('div', 'card');
+    const kv = el('div', 'field wide');
+    if (v.ok) {
+      kv.innerHTML = `<dl class="kv store"><dt>File</dt><dd class="mono" title="${esc(v.file)}">${esc(v.file)}</dd><dt>Encryption</dt><dd>${esc(v.cipher)}, the whole file: names and values</dd><dt>Unlocked by</dt><dd>${v.mode === 'passphrase' ? 'a passphrase (<code>LOCALPILOT_SECRETS_PASSPHRASE</code>)' : esc(v.unlockedBy)}</dd><dt>Holds</dt><dd><b>${v.count}</b> secret${v.count === 1 ? '' : 's'} · ${fmtBytes(v.bytes)}</dd></dl>`;
+    } else if (v.opening) {
+      kv.innerHTML = '<p class="muted"><span class="spinner"></span> Opening the secret store…</p>';
+    } else {
+      const hint = v.platform === 'linux'
+        ? 'On Linux the key lives in the Secret Service: install <code>libsecret-tools</code> (for <code>secret-tool</code>) with GNOME Keyring or KWallet running, or set <code>LOCALPILOT_SECRETS_PASSPHRASE</code> before starting VS Code.'
+        : 'Set <code>LOCALPILOT_SECRETS_PASSPHRASE</code> before starting VS Code to protect the store with a passphrase instead of the system keychain.';
+      kv.innerHTML = `<div class="policy err-note" role="alert">${I.warn}<div><b>The secret store could not be opened.</b> ${esc(v.error || '')}<br>Keys entered now go to VS Code's own secret storage instead, which the CLI cannot read. ${hint}</div></div>`;
+    }
+    st.appendChild(kv);
+    sec.appendChild(st);
+    // Providers still reading a key from an environment variable: one click copies it in.
+    const envProviders = providersList().filter((p) => /^\$\{env:[A-Za-z_][A-Za-z0-9_]*\}$/.test(String(p.apiKey || '').trim()));
+    if (v.ok && envProviders.length) {
+      sec.appendChild(el('h2', 'sub', 'Keys read from environment variables'));
+      const c = el('div', 'card');
+      c.appendChild(el('p', 'muted small sec-env-lead', 'These still work, but the key is outside the store and the CLI only sees it in shells where the variable is set. Moving copies the current value in once.'));
+      for (const p of envProviders) {
+        const env = /\{env:([^}]+)\}/.exec(p.apiKey)[1];
+        const row = el('div', 'btnrow sec-env', `<span><b>${esc(p.displayName || p.id)}</b> <span class="muted small">reads <code>$${esc(env)}</code>${(v.envSet || {})[env] ? '' : ' (not set for VS Code)'}</span></span><span class="spacer"></span>`);
+        const b = keyEnvButton(p, p.apiKey); if (b) { row.appendChild(b); }
+        c.appendChild(row);
+      }
+      sec.appendChild(c);
+    }
+    if (!v.ok) { return; }
+    sec.appendChild(el('h2', 'sub', `Stored <span class="count">${v.rows.length}</span>`));
+    if (!v.rows.length) {
+      sec.appendChild(el('p', 'empty', 'Nothing stored yet. Paste an API key into a provider (Providers), or run <code>localpilot providers key &lt;id&gt;</code>.'));
+      return;
+    }
+    const SRC = { vscode: 'VS Code', cli: 'CLI', 'migrated:vscode': 'moved from VS Code', 'migrated:keys.json': 'moved from keys.json', 'migrated:secrets.json': 'moved from secrets.json' };
+    const srcText = (x) => SRC[x] || (/^env:/.test(x || '') ? `copied from $${x.slice(4)}` : x || '—');
+    const t = el('table', 'tbl secrets-tbl', `<thead><tr><th>Name</th><th>Used by</th><th>Source</th><th>Changed</th><th>Last used</th><th class="act"><span class="sr-only">Actions</span></th></tr></thead><tbody>${v.rows.map((r) => `<tr data-name="${esc(r.name)}"><td class="mono" title="${esc(r.name)}">${esc(r.name)}</td><td>${r.usedBy.length ? r.usedBy.map((u) => esc(u)).join('<br>') : '<span class="muted">not referenced</span>'}</td><td class="muted small">${esc(srcText(r.source))}</td><td class="muted small">${r.updatedAt ? fmtAgo(r.updatedAt) : ''}</td><td class="muted small">${r.lastUsedAt ? fmtAgo(r.lastUsedAt) : 'never'}</td><td class="act"><button class="btn sm ghost" data-sact="replace" title="Enter a new value for ${esc(r.name)}">${I.edit}Replace…</button><button class="btn sm ghost danger" data-sact="delete" title="Delete ${esc(r.name)}">${I.trash}Delete</button></td></tr>`).join('')}</tbody>`);
+    t.onclick = (e) => {
+      const b = e.target.closest('[data-sact]'); const tr = e.target.closest('tr[data-name]'); if (!b || !tr) { return; }
+      post({ type: b.dataset.sact === 'replace' ? 'secretReplace' : 'secretDelete', name: tr.dataset.name });
+    };
+    const wrap = el('div', 'card tblwrap'); wrap.appendChild(t); sec.appendChild(wrap);
+    sec.appendChild(el('p', 'muted small', 'Settings reference a secret as <code>${secret:name}</code>. In a terminal: <code>localpilot secrets list</code>, <code>set</code>, <code>delete</code> and <code>import-env</code>.'));
+  }
+
   function secMemory(sec) {
     const d = state.data;
     head(sec, 'Memory & history', 'What LocalPilot keeps on this machine: chat history for this workspace and durable notes the agent writes.');

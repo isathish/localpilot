@@ -21,6 +21,9 @@ import { installCatalogServer, installedMessage, McpCatalogService } from './mcp
 import { isRemoteUrl, keyStatus, KeyStatus, secretRefs } from '../providers/cloud';
 import { sanitizeProviderConfig } from '../providers/sanitize';
 import { ProviderSecrets } from '../providers/secrets';
+import { PROVIDER_PRESETS } from '../providers/presets';
+import { SharedSecretStorage } from '../secrets/vscodeStorage';
+import { secretUsage, usedBy } from '../secrets/usage';
 import { CatalogRow, catalogForSystem, InstallTarget, installId, lookupCatalog, modelFootprintGb, starterPlan } from '../providers/catalog';
 import { autoDetectProviders, endpointKey, KNOWN_ENDPOINTS, ProbeResult, probeProvider, recommendModel } from '../providers/discovery';
 import { ModelJob, ModelManager, RuntimeStatus } from '../providers/modelManager';
@@ -58,7 +61,25 @@ export { probeProvider, recommendModel };
 export type { ProbeResult };
 
 export type SettingsPage = 'settings' | 'setup';
-export type SettingsSection = 'providers' | 'models' | 'gallery' | 'marketplace' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'continuity' | 'mcp' | 'dashboard' | 'telemetry' | 'advanced' | 'customize' | 'documents' | 'shortcuts';
+export type SettingsSection = 'providers' | 'models' | 'gallery' | 'marketplace' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'continuity' | 'secrets' | 'mcp' | 'dashboard' | 'telemetry' | 'advanced' | 'customize' | 'documents' | 'shortcuts';
+
+/** Settings → Secrets: the encrypted store's status and what it holds. Names and metadata only, never a value. */
+export interface SecretsView {
+  /** The store is open; false while it opens or when it could not (VS Code's secret storage is used instead). */
+  ok: boolean;
+  opening?: boolean;
+  file?: string;
+  cipher?: string;
+  mode?: 'keychain' | 'passphrase';
+  unlockedBy?: string;
+  count: number;
+  bytes: number;
+  error?: string;
+  rows: { name: string; usedBy: string[]; source: string; createdAt: number; updatedAt: number; lastUsedAt?: number }[];
+  /** Which environment variables the preset and `${env:…}` keys name are set for VS Code (never their values). */
+  envSet: Record<string, boolean>;
+  platform: string;
+}
 
 /** One setting as shown in the UI: effective value plus where it comes from. */
 interface SettingEntry {
@@ -140,7 +161,7 @@ export interface ModelsState {
 }
 
 type ToSettings =
-  | { type: 'state'; page: SettingsPage; section?: SettingsSection; focusKey?: string; expand?: string; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string; usedBy?: string[] }[]; plugins: { name: string; scope: 'user' | 'workspace'; enabled: boolean; version?: string }[]; colibriDisk?: { dir: string; freeGb?: number; smallestGb: number }; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] }; policy?: PolicyLocks & { effective: Record<string, unknown> }; otlp?: OtlpStatus; terminalProfiles: string[]; autoRepos: { name: string; path: string; source: 'workspace' | 'repos.json' }[]; settingsMeta: { missingPaths: string[] }; healing?: HealingView; commandRules?: CommandRulesView; health: Record<string, ProviderHealth>; shortcuts: ShortcutGroup[]; isMac: boolean }
+  | { type: 'state'; page: SettingsPage; section?: SettingsSection; focusKey?: string; expand?: string; navigate?: boolean; version: string; hasWorkspace: boolean; settings: Record<string, SettingEntry>; models: ModelInfo[]; keys: Record<string, KeyStatus>; skills: SettingsSkill[]; learning: { recurring: SkillCreateSuggestion[] }; agents: { name: string; description: string; source: string; usedBy?: string[] }[]; plugins: { name: string; scope: 'user' | 'workspace'; enabled: boolean; version?: string }[]; colibriDisk?: { dir: string; freeGb?: number; smallestGb: number }; tools: { name: string; description: string; off: boolean }[]; mcp: McpServerStatus[]; memory: { project: number; global: number; notes: { name: string; scope: 'project' | 'global'; summary: string; updatedAt: number; chars: number }[] }; sessions: { count: number; bytes: number; messages: number; running: number; pinned: number; oldest?: number; checkpointBytes?: number }; welcomed: boolean; managed?: { source: string; message?: string; lines: string[] }; policy?: PolicyLocks & { effective: Record<string, unknown> }; otlp?: OtlpStatus; terminalProfiles: string[]; autoRepos: { name: string; path: string; source: 'workspace' | 'repos.json' }[]; settingsMeta: { missingPaths: string[] }; healing?: HealingView; commandRules?: CommandRulesView; health: Record<string, ProviderHealth>; shortcuts: ShortcutGroup[]; isMac: boolean; secrets: SecretsView }
   | { type: 'probe'; results: ProbeResult[]; dockerModelRunner?: string; runtimes?: RuntimeStatus[]; starter?: { agent: string; completion?: string; gb: number; platformNote: string } }
   | { type: 'testResult'; id: string; result: ProbeResult }
   | { type: 'models'; models: ModelsState }
@@ -242,6 +263,12 @@ type FromSettings =
   | { type: 'openRuleFile'; file: string }
   | { type: 'revokeWorkspaceGrant'; kind: string }
   | { type: 'openKeybindings'; query: string }
+  /** Settings → Secrets: a new value through a password box in the host (it never reaches the webview). */
+  | { type: 'secretReplace'; name: string }
+  /** Settings → Secrets: delete one, after a modal that names what still uses it. */
+  | { type: 'secretDelete'; name: string }
+  /** Copies an environment variable VS Code sees into the secret store as provider `id`'s key ("Move into secret store"). */
+  | { type: 'keyFromEnv'; id: string; env: string }
   /** Opens `.localpilot/checks.json`, created from a template when missing. */
   | { type: 'openChecksJson' }
   /** Re-reads the detected checks for the Agent → Self-healing block. */
@@ -409,7 +436,7 @@ export class SettingsPanel implements vscode.Disposable {
     private readonly running: () => string[] = () => [],
     /** Local metrics + log mirror behind the Dashboard page. */
     private readonly telemetry?: Telemetry,
-    /** Moves API keys typed into a provider card into VS Code secret storage. */
+    /** Moves API keys typed into a provider card into the encrypted secret store (Settings → Secrets lists it). */
     private readonly secrets?: ProviderSecrets,
     /** Registered built-in tools, for the Tools on/off list (MCP tools are managed per server). */
     private readonly toolCatalog: () => { name: string; description: string }[] = () => [],
@@ -438,6 +465,8 @@ export class SettingsPanel implements vscode.Disposable {
         }
       }),
       providers.onDidChange(() => this.panel && void this.pushState()),
+      // Settings → Secrets follows the store: a key written here, in another window or by the CLI, or the store opening.
+      ...(secrets?.storage instanceof SharedSecretStorage ? [secrets.storage.onDidChange(() => this.panel && void this.pushState()), secrets.storage.onDidChangeState(() => this.panel && void this.pushState())] : []),
       providers.onDidChangeHealth(() => this.panel && void this.pushState()),
       onDidChangeWorkspaceGrants(() => this.panel && void this.pushState()),
       mcp.onDidChange(() => this.panel && void this.pushState()),
@@ -939,6 +968,12 @@ export class SettingsPanel implements vscode.Disposable {
         // The Keyboard Shortcuts editor, filtered to one command (or to every LocalPilot binding).
         await vscode.commands.executeCommand('workbench.action.openGlobalKeybindings', /^[\w.@ -]{1,80}$/.test(m.query) ? m.query : 'localpilot.');
         return;
+      case 'secretReplace':
+        return this.replaceSecret(String(m.name ?? ''));
+      case 'secretDelete':
+        return this.deleteSecret(String(m.name ?? ''));
+      case 'keyFromEnv':
+        return this.keyFromEnv(String(m.id ?? ''), String(m.env ?? ''));
       case 'openTelemetryFolder':
         if (this.telemetry) {
           await fs.mkdir(this.telemetry.dir, { recursive: true });
@@ -1200,7 +1235,7 @@ export class SettingsPanel implements vscode.Disposable {
       clean = Array.isArray(clean) ? [...new Set(clean.filter((m): m is string => typeof m === 'string' && /^[^\s/]+\/\S+$/.test(m.trim())).map((m) => m.trim()))] : [];
     }
     if (key === 'providers' && Array.isArray(clean) && this.secrets) {
-      // A pasted key goes to the OS keychain; settings.json keeps a `${secret:<id>}` reference.
+      // A pasted key goes to the encrypted secret store; settings.json keeps a `${secret:<id>}` reference.
       clean = await this.secrets.protect(clean as ProviderConfig[], scope);
     }
     if (key === 'webSearch.apiKey' && typeof clean === 'string' && clean.trim() && !clean.includes('${') && this.secrets) {
@@ -1535,6 +1570,112 @@ export class SettingsPanel implements vscode.Disposable {
     }
   }
 
+  // ------------------------------------------------------------------ secrets
+
+  private get sharedSecrets(): SharedSecretStorage | undefined {
+    return this.secrets?.storage instanceof SharedSecretStorage ? this.secrets.storage : undefined;
+  }
+
+  /** Every `${secret:NAME}` reference in settings (all scopes), for "used by". */
+  private secretUsage(): Map<string, string[]> {
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const ip = cfg.inspect<ProviderConfig[]>('providers');
+    const iw = cfg.inspect<string>('webSearch.apiKey');
+    const providers = [...(ip?.globalValue ?? []), ...(ip?.workspaceValue ?? []), ...(ip?.workspaceFolderValue ?? [])].filter((p) => p && typeof p === 'object');
+    return secretUsage({ providers, webSearchApiKey: [iw?.globalValue, iw?.workspaceValue, iw?.workspaceFolderValue].filter((v) => typeof v === 'string').join(' '), mcpServers: getConfig().mcpServers });
+  }
+
+  private secretsView(): SecretsView {
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const envNames = new Set<string>(PROVIDER_PRESETS.flatMap((p) => (p.env ? [p.env] : [])));
+    for (const p of cfg.get<ProviderConfig[]>('providers', []) ?? []) {
+      const m = /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/.exec(p?.apiKey ?? '');
+      if (m) {
+        envNames.add(m[1]);
+      }
+    }
+    const envSet = Object.fromEntries([...envNames].map((n) => [n, !!process.env[n]?.trim()]));
+    const base = { count: 0, bytes: 0, rows: [], envSet, platform: process.platform };
+    const shared = this.sharedSecrets;
+    const store = shared?.secretStore;
+    if (!store) {
+      return { ...base, ok: false, opening: !!shared && !shared.error, error: shared ? shared.error : 'The secret store is not available in this window.' };
+    }
+    try {
+      const st = store.status();
+      const usage = this.secretUsage();
+      const rows = store.list().map((m) => ({ name: m.name, usedBy: usedBy(m.name, usage), source: m.source, createdAt: m.createdAt, updatedAt: m.updatedAt, ...(m.lastUsedAt ? { lastUsedAt: m.lastUsedAt } : {}) }));
+      return { ...base, ok: true, file: st.file, cipher: st.cipher, mode: st.mode, unlockedBy: st.unlockedBy, count: st.count, bytes: st.bytes, rows };
+    } catch (e) {
+      return { ...base, ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  private knownSecret(name: string): boolean {
+    return !!name && !!this.sharedSecrets?.secretStore?.list().some((m) => m.name === name);
+  }
+
+  private async replaceSecret(name: string): Promise<void> {
+    if (!this.secrets || !this.knownSecret(name)) {
+      return this.post({ type: 'toast', level: 'error', text: `No secret named ${name}` });
+    }
+    const value = await vscode.window.showInputBox({
+      title: `Replace ${name}`,
+      prompt: 'The new value. It is stored encrypted in the secret store and never shown again.',
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() ? undefined : 'Enter a value, or press Escape to keep the current one'),
+    });
+    if (!value?.trim()) {
+      return;
+    }
+    await this.secrets.replace(name, value.trim());
+    this.post({ type: 'toast', level: 'info', text: `Replaced ${name}` });
+    await this.pushState();
+  }
+
+  private async deleteSecret(name: string): Promise<void> {
+    if (!this.secrets || !this.knownSecret(name)) {
+      return this.post({ type: 'toast', level: 'error', text: `No secret named ${name}` });
+    }
+    const users = usedBy(name, this.secretUsage());
+    const pick = await vscode.window.showWarningMessage(
+      `Delete ${name} from the secret store?`,
+      { modal: true, detail: users.length ? `It is used by ${users.join(', ')}, which will stop working until you enter it again. VS Code and the CLI both lose it.` : 'Nothing in your settings references it. VS Code and the CLI both lose it.' },
+      'Delete'
+    );
+    if (pick !== 'Delete') {
+      return;
+    }
+    await this.secrets.remove(name);
+    this.post({ type: 'toast', level: 'info', text: `Deleted ${name}` });
+    await this.pushState();
+  }
+
+  /**
+   * Copies `$env` (as VS Code sees it) into the store as the provider's key: the provider is saved with the literal key
+   * through `update`, whose `protect()` stores it and writes a `${secret:…}` reference. The value never reaches the page.
+   */
+  private async keyFromEnv(id: string, env: string): Promise<void> {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(env)) {
+      return;
+    }
+    const value = process.env[env]?.trim();
+    if (!value) {
+      return this.post({ type: 'toast', level: 'warn', text: `$${env} is not set in the environment VS Code was started from. Paste the key into the provider instead.` });
+    }
+    const ip = vscode.workspace.getConfiguration('localpilot').inspect<ProviderConfig[]>('providers');
+    const scope: 'user' | 'workspace' = (ip?.workspaceValue ?? []).some((p) => p?.id === id) ? 'workspace' : 'user';
+    const list = ((scope === 'workspace' ? ip?.workspaceValue : ip?.globalValue) ?? []).map((p) => ({ ...p }));
+    const i = list.findIndex((p) => p.id === id);
+    if (i < 0) {
+      return this.post({ type: 'toast', level: 'error', text: `No provider ${id} in your ${scope} settings` });
+    }
+    list[i] = { ...list[i], apiKey: value };
+    await this.update('providers', list, scope);
+    this.post({ type: 'toast', level: 'info', text: `Copied $${env} into the secret store for ${list[i].displayName || id}. The variable is no longer read.` });
+  }
+
   /** Re-sends the panel state (when open), e.g. after chats were deleted outside the panel. */
   refresh(): void {
     void this.pushState();
@@ -1608,6 +1749,7 @@ export class SettingsPanel implements vscode.Disposable {
       health: this.providers.providerHealth(),
       shortcuts: shortcutGroups(this.ctx.extension.packageJSON as Parameters<typeof shortcutGroups>[0]),
       isMac: process.platform === 'darwin',
+      secrets: this.secretsView(),
       settingsMeta: { missingPaths },
       healing,
     });
