@@ -119,12 +119,12 @@ export async function runContinuityAction(c: Continuity | undefined, action: Con
     }
     case 'emptyTrash': {
       const counts = await c.index.counts().catch(() => undefined);
-      const pick = await vscode.window.showWarningMessage(`Delete ${counts?.trash ?? 'all'} conversation(s) and every other item in Trash permanently?`, { modal: true, detail: 'This cannot be undone. Backups made before now still contain them.' }, 'Empty Trash');
+      const pick = await vscode.window.showWarningMessage(counts ? `Delete ${counts.trash} conversation${counts.trash === 1 ? '' : 's'} and every other item in Trash permanently?` : 'Delete everything in Trash permanently?', { modal: true, detail: 'This cannot be undone. Backups made before now still contain them.' }, 'Empty Trash');
       if (pick !== 'Empty Trash') {
         return undefined;
       }
       const n = await c.data.emptyTrash();
-      const msg = n ? `Deleted ${n} item(s) permanently.` : 'Trash is already empty.';
+      const msg = n ? `Deleted ${n} item${n === 1 ? '' : 's'} permanently.` : 'Trash is already empty.';
       void vscode.window.showInformationMessage(msg);
       return msg;
     }

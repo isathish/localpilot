@@ -183,7 +183,8 @@ If conversation storage is off (see Where it is stored), deleting works as in 1.
   any with **LocalPilot: Export Conversations…**: **JSON** (complete: every branch, tags and states; can be imported again),
   **Markdown**, **HTML** or **PDF**. PDF writes a print-ready page and opens it in your browser; choose *Save as PDF* in
   its print dialog.
-- **Import** with **LocalPilot: Import Conversations…**: a LocalPilot JSON export, or a `.lpshare` file and its code. Chats
+- **Import** from a conversation's menu (**Import conversations…**), the import button at the bottom of the
+  conversation list, or **LocalPilot: Import Conversations…**: a LocalPilot JSON export, or a `.lpshare` file and its code. Chats
   from Claude Code and Codex import as in 1.6.
 - **Share securely…** looks for secrets (API keys, tokens) in the conversation and offers **Redact** (only the shared copy
   changes) or **Keep**, then saves an encrypted `.lpshare` file and shows a 52-character **share code** once. Send the file
@@ -302,8 +303,8 @@ interrupted when the process that ran it is gone; a run still going in another w
 the chat and the **Run interrupted** card shows:
 
 - **What ran**: the run's last steps, including the one that was running when it stopped.
-- **Changed files**: what the run changed (added, modified, deleted), with **Keep** for each file still waiting for review,
-  **Keep all** and **Review diff**, and the time of the checkpoint taken before the run.
+- **Changed files**: what the run changed (added, modified, deleted), with **Accept** for each file still waiting for review,
+  **Accept all** and **Review diff**, and the time of the checkpoint taken before the run.
 - **Resume**, **Restore checkpoint** (files and chat back to before your last message) or **Dismiss**.
 
 **If the laptop turns off (or LocalPilot closes) while an answer is being written**, the text written so far is saved
@@ -436,7 +437,7 @@ storage provider too (LocalPilot does not manage those credentials).
 
 | What happened | What LocalPilot does |
 |---|---|
-| VS Code crashed during an agent task | The chat shows **Run interrupted** with what ran, the files it changed (**Keep**, **Review diff**), and **Resume**, **Restore checkpoint** or **Dismiss** |
+| VS Code crashed during an agent task | The chat shows **Run interrupted** with what ran, the files it changed (**Accept**, **Review diff**), and **Resume**, **Restore checkpoint** or **Dismiss** |
 | The laptop turned off during an answer | The text written so far comes back as a **Partial answer** with **Continue**, **Regenerate** and **Discard** |
 | The network dropped during sync | Nothing is lost; the status says **Offline** with how many changes wait, and sync retries on its own (5 s up to every 15 min) |
 | The model provider is down | Switch model and retry from the same point; the conversation keeps its history, and the switch is recorded with its reason |
@@ -449,7 +450,7 @@ storage provider too (LocalPilot does not manage those credentials).
 | You deleted something by accident | **Undo**, or restore it from Trash; older items from a backup |
 | The storage provider is down or your credentials expired | Sync pauses with the reason and the fix (**Update credentials…**, **Sync settings…**); everything works locally |
 | You forgot the sync passphrase | Nothing can decrypt the synced copies; your local data is intact. **Start over…** uploads this device's data under a new passphrase |
-| An agent left code changes half done | The interrupted run lists its changed files with **Keep** / **Review diff**, and **Restore checkpoint** puts the files back as they were before the run |
+| An agent left code changes half done | The interrupted run lists its changed files with **Accept** / **Review diff**, and **Restore checkpoint** puts the files back as they were before the run |
 | You want an earlier version of a conversation | **Versions → Restore** brings it back as a branch |
 
 ## Data management

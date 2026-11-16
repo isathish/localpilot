@@ -210,7 +210,7 @@ The line above the message box reads **Auto-approve:** followed by the categorie
 
 While the chat view is hidden or VS Code is not focused, LocalPilot shows a notification with **Open chat** when:
 
-- a run that took longer than 20 seconds finishes (the notice says how long it took; with changed files it offers **Review** and **Keep All**);
+- a run that took longer than 20 seconds finishes (the notice says how long it took; with changed files it offers **Review** and **Accept All**);
 - a run of any length ends with an error (**Retry**) or needs your attention;
 - a run waits for your approval or for an answer to its question (once per run);
 - a command that was approved automatically is still running after 30 seconds (also a status-bar item, once per command).

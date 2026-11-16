@@ -219,7 +219,7 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
   };
   if (m.type === 'syncLoad') setTimeout(() => send({ type: 'sync', view: syncView() }), 120);
   if (m.type === 'syncAction') setTimeout(() => send({ type: 'sync', view: syncView() }), 600);
-  if (m.type === 'continuityAction') setTimeout(() => send({ type: 'continuity', view: contView(), message: { rebuildIndex: 'Conversation index rebuilt: 412,880 events, 17.9 MB.', backupNow: 'Backup written: 20261107-101500.lpbackup (32.4 MB, 412,880 events).', emptyTrash: 'Deleted 7 item(s) permanently.', retryMigration: 'Every file was imported.' }[m.action] }), 900);
+  if (m.type === 'continuityAction') setTimeout(() => send({ type: 'continuity', view: contView(), message: { rebuildIndex: 'Conversation index rebuilt: 412,880 events, 17.9 MB.', backupNow: 'Backup written: 20261107-101500.lpbackup (32.4 MB, 412,880 events).', emptyTrash: 'Deleted 7 items permanently.', retryMigration: 'Every file was imported.' }[m.action] }), 900);
   if (m.type === 'removeModel') {
     // Host side of a delete: a running job (spinner on the row), then the model disappears from the list and the
     // models view is pushed again. The confirmation dialog and the native notification live in VS Code.

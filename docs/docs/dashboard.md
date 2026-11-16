@@ -25,7 +25,7 @@ Pick a range: **Today**, **7 days**, **30 days**, **90 days** or **All**. While 
 | **Throughput** | Completion tokens per second of generation across all calls in the range, and the fastest model. |
 | **Turn time** | Median and 95th-percentile duration of an agent turn, and the median number of model steps. |
 | **Cache hits** | Share of tool calls answered from the per-turn read cache (identical reads in one turn run once). |
-| **Edits kept** | Share of agent-edited lines you kept, with lines added and removed in the edits you kept and in the ones you undid (Keep / Undo in the Changes panel, the chat, the CLI or a Ctrl+I inline edit; unsaved edits count). |
+| **Edits kept** | Share of agent-edited lines you kept, with lines added and removed in the edits you kept and in the ones you undid (Accept / Reject in the Changes panel, the chat or a Ctrl+I inline edit, `/keep` / `/undo` in the CLI; unsaved edits count). |
 | **Hooks** | Hook commands run, how many failed or timed out, how many blocked an action, and their median duration. |
 
 Charts follow the cards. They are hidden for a single-day range, where the counters cover it. Hover any bar or point for the exact value. Colours come from your VS Code theme's chart palette.

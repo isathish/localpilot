@@ -11,6 +11,43 @@
   const skeleton = (text, rows = 3, kind = 'rows') => el('div', `skel ${kind}`, `<div class="loading short" role="status"><span class="spinner"></span>${text}</div>${kind === 'kpis'
     ? `<div class="kpis">${'<div class="kpi skel-card"><i class="skl skl-l"></i><i class="skl skl-v"></i><i class="skl skl-s"></i></div>'.repeat(rows)}</div>`
     : '<div class="skel-row"><i class="skl skl-ic"></i><span><i class="skl skl-t"></i><i class="skl skl-s"></i></span></div>'.repeat(rows)}`);
+  /** Where an arrow key, Home or End moves in a strip of `n` items from `i` (wrapping), or -1 for any other key. */
+  function rovingIndex(n, i, key) {
+    if (!n || i < 0) { return -1; }
+    if (key === 'ArrowRight' || key === 'ArrowDown') { return (i + 1) % n; }
+    if (key === 'ArrowLeft' || key === 'ArrowUp') { return (i - 1 + n) % n; }
+    return key === 'Home' ? 0 : key === 'End' ? n - 1 : -1;
+  }
+  /**
+   * A strip of one-of-many buttons with a roving tabindex, like the recovery tabs: only the selected one is in the Tab
+   * order, arrows / Home / End move and select (the click handler re-renders, so focus goes to the new button by id).
+   * `role: 'tab'` makes a tablist whose tabs control `panel` (role=tabpanel, labelled by the selected tab); 'radio' a
+   * radiogroup, for a strip that filters a list rather than switching views. Selected = class `on`.
+   */
+  function rovingStrip(list, o) {
+    const tab = o.role !== 'radio';
+    list.setAttribute('role', tab ? 'tablist' : 'radiogroup');
+    if (o.label) { list.setAttribute('aria-label', o.label); }
+    const items = [...list.children].filter((b) => b.tagName === 'BUTTON');
+    const sel = items.find((b) => b.classList.contains('on')) || items[0];
+    items.forEach((b, i) => {
+      b.id = `${o.id}-${b.dataset.k || i}`; b.setAttribute('role', tab ? 'tab' : 'radio');
+      b.removeAttribute(tab ? 'aria-checked' : 'aria-selected'); b.setAttribute(tab ? 'aria-selected' : 'aria-checked', String(b === sel));
+      b.tabIndex = b === sel ? 0 : -1;
+      if (tab && o.panel) { b.setAttribute('aria-controls', o.panel.id); }
+    });
+    if (tab && o.panel && sel) { o.panel.setAttribute('role', 'tabpanel'); o.panel.setAttribute('aria-labelledby', sel.id); }
+    // A redraw while one of these had focus (a state push from the host) puts focus back on the same item.
+    const was = document.activeElement; const wasId = was && was.id && was.id.startsWith(`${o.id}-`) ? was.id : '';
+    if (wasId) { setTimeout(() => { const a = document.activeElement; const n = document.getElementById(wasId); if (n && n !== a && (!a || a === document.body || !a.isConnected)) { n.focus({ preventScroll: true }); } }, 0); }
+    list.onkeydown = (e) => {
+      const i = items.indexOf(document.activeElement); const to = items[rovingIndex(items.length, i, e.key)];
+      if (!to) { return; }
+      e.preventDefault(); const id = to.id; to.click();
+      const n = document.getElementById(id); if (n) { n.focus({ preventScroll: true }); }
+    };
+    return list;
+  }
   const I = {
     server: '<svg viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="4.5" rx="1.2"/><rect x="2" y="9" width="12" height="4.5" rx="1.2"/><path d="M4.5 4.8h.01M4.5 11.3h.01"/></svg>',
     cpu: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><rect x="6.5" y="6.5" width="3" height="3"/><path d="M6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2"/></svg>',
@@ -1109,16 +1146,19 @@
     const add = el('div', 'add-prov');
     add.appendChild(el('h2', 'sub', 'Add a provider'));
     const tab = state.addTab || (list.some((p) => !isCloud(p)) ? 'cloud' : 'local');
+    // The category tabs and the filter share a row, but only the tabs are in the tablist.
     const chips = el('div', 'chips');
-    chips.setAttribute('role', 'tablist');
+    const kinds = el('div', 'chip-tabs');
     for (const [k, label] of PRESET_GROUPS) {
       const b = el('button', `chip ${tab === k ? 'on' : ''}`, `${esc(label)} <i>${PRESET_PROVIDERS.filter((pr) => pr.group === k).length}</i>`);
-      b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(tab === k));
+      b.dataset.k = k;
       b.onclick = () => { state.addTab = k; state.addQuery = ''; render(); };
-      chips.appendChild(b);
+      kinds.appendChild(b);
     }
     const q = el('input'); q.type = 'search'; q.placeholder = 'Find a provider…'; q.value = state.addQuery || ''; q.setAttribute('aria-label', 'Find a provider');
-    chips.appendChild(q);
+    const panel = el('div', 'add-panel'); panel.id = 'add-prov-panel';
+    rovingStrip(kinds, { id: 'add-prov-tab', label: 'Provider kind', panel });
+    chips.append(kinds, q);
     add.appendChild(chips);
     const blurb = el('p', 'muted small add-blurb');
     const presets = el('div', 'presets');
@@ -1182,8 +1222,8 @@
     };
     presets.onfocusin = (e) => { const i = tiles().indexOf(e.target); if (i >= 0) { cursor = i; } };
     fill();
-    add.appendChild(blurb);
-    add.appendChild(presets);
+    panel.append(blurb, presets);
+    add.appendChild(panel);
     const custom = el('div', 'btnrow add-custom');
     custom.innerHTML = `<span class="muted small">Not listed? Any server with an OpenAI-compatible <code>/v1</code> API works.</span><span class="spacer"></span><button class="btn sm" id="custom">${I.plug}Custom endpoint</button>`;
     custom.querySelector('#custom').onclick = () => addPreset(CUSTOM_PRESET);
@@ -1877,16 +1917,23 @@
     const g = galleryState(source);
 
     // --- source tabs (one per registry a detected runtime installs from)
-    const tabs = el('div', 'gal-tabs'); tabs.setAttribute('role', 'tablist');
+    // The note sits beside the tabs but outside the tablist; the rest of the section is the tab panel.
+    const tabRow = el('div', 'gal-tabs');
+    const tabs = el('div', 'gal-tablist');
     for (const s of sources) {
       const b = el('button', `gal-tab ${s === source ? 'on' : ''}`, `${s === 'huggingface' ? vendorMark('hugging face', 'HF') : brandMark(s, GALLERY_SOURCES[s].label)}<span>${esc(GALLERY_SOURCES[s].label)}</span><small>${esc(GALLERY_SOURCES[s].site)}</small>`);
-      b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(s === source));
+      b.dataset.k = s;
       b.onclick = () => { state.gallery.source = s; render(); };
       tabs.appendChild(b);
     }
+    tabRow.appendChild(tabs);
     const missing = Object.keys(GALLERY_SOURCES).filter((s) => !sources.includes(s));
-    if (missing.length) { tabs.appendChild(el('span', 'gal-tabs-note', `${missing.map((s) => esc(GALLERY_SOURCES[s].label)).join(' and ')} appear${missing.length === 1 ? 's' : ''} here once ${missing.includes('docker') ? 'Docker Model Runner' : 'LM Studio'} is installed.`)); }
-    sec.appendChild(tabs);
+    if (missing.length) { tabRow.appendChild(el('span', 'gal-tabs-note', `${missing.map((s) => esc(GALLERY_SOURCES[s].label)).join(' and ')} appear${missing.length === 1 ? 's' : ''} here once ${missing.includes('docker') ? 'Docker Model Runner' : 'LM Studio'} is installed.`)); }
+    const outer = sec;
+    const panel = el('div', 'gal-panel'); panel.id = 'gal-panel';
+    rovingStrip(tabs, { id: 'gal-tab', label: 'Model source', panel });
+    outer.append(tabRow, panel);
+    sec = panel;
 
     // --- install target (runtime) for this source
     const targets = galleryTargets(source);
@@ -1957,7 +2004,7 @@
     pull.appendChild(err);
     sec.appendChild(pull);
     sec.appendChild(el('p', 'muted small', 'Listings come from the registries’ public sites and are cached for a few minutes. “Cloud” models run on Ollama’s servers and cannot be downloaded; Hugging Face sizes are the sum of a quantisation’s files.'));
-    sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
+    outer.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
   }
   /** Rebuilds just the result list — search responses, tag lists and job updates must not disturb the search box. */
   function renderGalleryResults(container) {
@@ -3020,13 +3067,17 @@
     const d = c.data;
     const skills = (state.data && state.data.skills) || [];
     const count = { rule: d ? d.rules.length : 0, command: d ? d.commands.length : 0, hook: d ? d.hooks.length : 0, skill: skills.length, plugin: d && d.plugins ? d.plugins.length : 0 };
-    const tabs = el('div', 'chips cz-tabs'); tabs.setAttribute('role', 'tablist');
+    const tabs = el('div', 'chips cz-tabs');
     for (const [k, label] of CUSTOM_TABS) {
-      const b = el('button', `chip ${c.tab === k ? 'on' : ''}`, `${esc(label)} <i>${count[k]}</i>`); b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(c.tab === k));
+      const b = el('button', `chip ${c.tab === k ? 'on' : ''}`, `${esc(label)} <i>${count[k]}</i>`); b.dataset.k = k;
       b.onclick = () => { c.tab = k; render(); };
       tabs.appendChild(b);
     }
-    sec.appendChild(tabs);
+    // Everything under the tabs is the selected tab's panel.
+    const panel = el('div', 'cz-panel'); panel.id = 'cz-panel';
+    rovingStrip(tabs, { id: 'cz-tab', label: 'Kind', panel });
+    sec.append(tabs, panel);
+    sec = panel;
     const tab = CUSTOM_TABS.find(([k]) => k === c.tab) || CUSTOM_TABS[0];
     sec.appendChild(el('p', 'muted small', tab[2]));
     if (c.tab === 'skill') { customSkills(sec, skills); return; }
@@ -3207,7 +3258,8 @@
     const skillQ = debounce(() => { if (reg.q !== mk.q) { skillSearch(mk.q); renderMarket(); } }, 300);
     q.oninput = () => { mk.q = q.value.trim(); renderMarket(); skillQ(); };
     search.appendChild(q); tools.appendChild(search);
-    const chips = el('div', 'chips mk-kinds'); chips.setAttribute('role', 'tablist'); chips.setAttribute('aria-label', 'Kind');
+    // The kinds filter one result list (with the search and Show), so they are a radio group, not tabs.
+    const chips = el('div', 'chips mk-kinds');
     chips.id = 'mk-kinds';
     tools.appendChild(chips);
     const show = el('select'); show.setAttribute('aria-label', 'Show'); show.id = 'mk-show';
@@ -3222,7 +3274,8 @@
   function renderMarketKinds(rows) {
     const box = app.querySelector('#mk-kinds'); if (!box) { return; }
     const mk = mkState();
-    box.innerHTML = MK_KINDS.map(([k, l]) => { const n = k === 'all' ? '' : ` <i>${rows[k].length}</i>`; return `<button class="chip ${mk.kind === k ? 'on' : ''}" role="tab" aria-selected="${mk.kind === k}" data-k="${k}">${esc(l)}${n}</button>`; }).join('');
+    box.innerHTML = MK_KINDS.map(([k, l]) => { const n = k === 'all' ? '' : ` <i>${rows[k].length}</i>`; return `<button class="chip ${mk.kind === k ? 'on' : ''}" data-k="${k}">${esc(l)}${n}</button>`; }).join('');
+    rovingStrip(box, { role: 'radio', id: 'mk-kind', label: 'Kind' });
     box.onclick = (e) => { const b = e.target.closest('[data-k]'); if (!b) { return; } mk.kind = b.dataset.k; renderMarket(); };
   }
   /** Rebuilds only the result groups, so typing in the search box is never interrupted. */
@@ -3339,12 +3392,15 @@
   function secMcp(sec) {
     head(sec, 'MCP servers', 'Model Context Protocol servers whose tools become available to the agent: local ones started from a command, or remote ones at a URL (Streamable HTTP or SSE). Governed by the MCP tools approval policy.');
     const cat = mcpCatState();
-    const tabs = el('div', 'seg mcp-tabs'); tabs.setAttribute('role', 'tablist');
-    tabs.innerHTML = [['installed', 'Servers'], ['browse', 'Browse']].map(([k, l]) => `<button role="tab" aria-selected="${cat.view === k}" class="${cat.view === k ? 'on' : ''}" data-k="${k}">${l}</button>`).join('');
+    const tabs = el('div', 'seg mcp-tabs');
+    tabs.innerHTML = [['installed', 'Servers'], ['browse', 'Browse']].map(([k, l]) => `<button class="${cat.view === k ? 'on' : ''}" data-k="${k}">${l}</button>`).join('');
     tabs.onclick = (e) => { const b = e.target.closest('button'); if (b && b.dataset.k !== cat.view) { cat.view = b.dataset.k; render(); } };
     const editBtn = el('button', 'btn sm', `${I.external}Edit configuration…`); editBtn.title = 'Open your mcp.json, the workspace .mcp.json or settings.json'; editBtn.onclick = () => post({ type: 'command', id: 'localpilot.editMcpConfig' });
     const tabBar = el('div', 'btnrow'); tabBar.append(tabs, el('span', 'spacer'), editBtn);
-    sec.appendChild(tabBar);
+    const panel = el('div', 'mcp-panel'); panel.id = 'mcp-panel';
+    rovingStrip(tabs, { id: 'mcp-view', label: 'MCP servers', panel });
+    sec.append(tabBar, panel);
+    sec = panel;
     if (cat.view === 'browse') { mcpBrowse(sec); return; }
     const servers = val('mcpServers') && typeof val('mcpServers') === 'object' ? { ...val('mcpServers') } : {};
     // Shown merged; written from the selected scope's own map so the other scope's servers are never copied into it.
@@ -3494,10 +3550,14 @@
     const box = el('div', 'mcp-inspect');
     const tabs = [['tools', 'Tools', (st.toolList || []).length], ['resources', 'Resources', (st.resources || []).length + (st.resourceTemplates || []).length], ['prompts', 'Prompts', (st.prompts || []).length]];
     const cur = state.mcpTab && state.mcpTab[name] || 'tools';
-    const seg = el('div', 'seg'); seg.setAttribute('role', 'tablist');
-    seg.innerHTML = tabs.map(([k, l, n]) => `<button role="tab" aria-selected="${k === cur}" class="${k === cur ? 'on' : ''}" data-k="${k}">${l} <span class="muted">${n}</span></button>`).join('');
+    const seg = el('div', 'seg');
+    seg.innerHTML = tabs.map(([k, l, n]) => `<button class="${k === cur ? 'on' : ''}" data-k="${k}">${l} <span class="muted">${n}</span></button>`).join('');
     seg.onclick = (e) => { const b = e.target.closest('button'); if (!b) { return; } state.mcpTab = { ...(state.mcpTab || {}), [name]: b.dataset.k }; render(); };
     const body = el('div', 'mcp-list');
+    // Ids per server (several can be open at once).
+    const key = `mcp-${String(name).replace(/[^\w-]/g, '_')}`;
+    body.id = `${key}-panel`;
+    rovingStrip(seg, { id: `${key}-tab`, label: `What ${name} offers`, panel: body });
     const row = (title, sub, extra) => `<div class="mcp-item"><div><code>${esc(title)}</code>${extra || ''}</div>${sub ? `<div class="desc">${esc(sub)}</div>` : ''}</div>`;
     if (cur === 'tools') {
       // Per-tool approval (localpilot.mcp.toolApprovals, User only): Default follows MCP tools in Agent & approvals, or the

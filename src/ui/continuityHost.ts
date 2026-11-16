@@ -433,7 +433,7 @@ export class ContinuityHost implements vscode.Disposable {
           return;
         }
         const k = await this.c!.data.emptyTrash();
-        this.toast(k ? `Deleted ${k} item(s) permanently` : 'Trash is already empty');
+        this.toast(k ? `Deleted ${k} item${k === 1 ? '' : 's'} permanently` : 'Trash is already empty');
         break;
       }
       case 'duplicate': {

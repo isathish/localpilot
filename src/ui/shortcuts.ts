@@ -38,7 +38,7 @@ export function keyLabel(key: string, mac: boolean): string {
     .map((chord) => {
       const parts = chord.split('+');
       if (mac) {
-        const sym: Record<string, string> = { cmd: '⌘', ctrl: '⌃', shift: '⇧', alt: '⌥', enter: '↩', escape: 'Esc' };
+        const sym: Record<string, string> = { cmd: '⌘', ctrl: '⌃', shift: '⇧', alt: '⌥', enter: '↩', escape: 'Esc', backspace: '⌫' };
         const order = ['ctrl', 'alt', 'shift', 'cmd'];
         const mods = parts.slice(0, -1).sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((p) => sym[p] ?? p);
         const last = parts[parts.length - 1];

@@ -191,8 +191,8 @@ Return the replacement code in a single fenced code block and nothing else — n
   if (active?.document === doc) {
     active.selection = new vscode.Selection(inserted.start, inserted.end);
   }
-  const choice = await vscode.window.showInformationMessage(`Applied: ${instruction.slice(0, 60)}`, 'Keep', 'Undo');
-  if (choice === 'Undo') {
+  const choice = await vscode.window.showInformationMessage(`Applied: ${instruction.slice(0, 60)}`, 'Accept', 'Reject');
+  if (choice === 'Reject') {
     if (!doc.isClosed && doc.getText(inserted) === code) {
       const back = new vscode.WorkspaceEdit();
       back.replace(doc.uri, inserted, target);

@@ -1486,3 +1486,6 @@ li.rule-form { padding: 6px 8px; border: 1px solid var(--focus); border-radius: 
 body.vscode-high-contrast .sync-body .sdot, body.vscode-high-contrast-light .sync-body .sdot { outline: 1px solid var(--border); }
 /* In the two-column Sync layout each card is half width: labels sit above their controls. */
 @media (min-width: 1000px) { .sync-grid .field { grid-template-columns: minmax(0, 1fr); } }
+/* Tab strips that share a row with other controls: the tablist is its own flex group. */
+.chip-tabs, .gal-tablist { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.gal-tablist { gap: 8px; }

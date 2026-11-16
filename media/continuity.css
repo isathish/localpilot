@@ -298,3 +298,5 @@ body.vscode-high-contrast .sy-status, body.vscode-high-contrast-light .sy-status
 /* Conflict choices are labelled buttons ("Keep Office desktop's"): they keep their words at every width and wrap. */
 .sy-cf .mm-acts .btn { width: auto; height: auto; min-height: 24px; padding: 2px 8px; white-space: normal; text-align: left; line-height: 1.3; }
 @container (max-width: 359px) { .sy-cf .mm-acts .btn span { display: inline; } .sy-cf .mm-acts .btn { width: auto; padding: 2px 8px; } }
+/* A Trash row waiting for the host's answer (restore, delete): dimmed, its buttons disabled. */
+.cp-row[aria-busy="true"] { opacity: .6; }

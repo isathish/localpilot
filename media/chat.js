@@ -66,6 +66,7 @@
     fork: '<svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="1.5"/><circle cx="12" cy="4" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4 5.5v1A2.5 2.5 0 0 0 6.5 9h3A2.5 2.5 0 0 0 12 6.5v-1M8 9v2"/></svg>',
     trash: '<svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5v-1a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>',
     export: '<svg viewBox="0 0 16 16"><path d="M8 10V3M5 6l3-3 3 3M3 10v2.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10"/></svg>',
+    import: '<svg viewBox="0 0 16 16"><path d="M8 3v7M5 7l3 3 3-3M3 10v2.5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10"/></svg>',
     rename: '<svg viewBox="0 0 16 16"><path d="M10.5 3l2.5 2.5L6 12.5H3.5V10z"/><path d="M3 14h10"/></svg>',
     multidiff: '<svg viewBox="0 0 16 16"><path d="M6 4.5v-2h5.5l2 2V11h-2"/><path d="M2.5 4.5h6l2 2v7h-8z"/><path d="M4.5 9.5h4M4.5 11.5h2.5"/></svg>',
     layers: '<svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 3L8 8.5l-5.5-3z"/><path d="M2.5 8.5L8 11.5l5.5-3M2.5 11L8 14l5.5-3"/></svg>',
@@ -391,16 +392,51 @@
     }
     return out;
   }
+  /** Where Tab (or Shift+Tab) goes in a modal: wraps from the last control to the first and back, null = let the browser move. */
+  function trapTarget(f, active, back) {
+    if (!f.length) { return null; }
+    const i = f.indexOf(active);
+    if (back) { return i <= 0 ? f[f.length - 1] : null; }
+    return i < 0 || i === f.length - 1 ? f[0] : null;
+  }
+  /** Keeps Tab inside a modal (continuity pages, the lightbox): the visible, enabled controls in order. */
+  function trapTab(box, e) {
+    if (e.key !== 'Tab') { return false; }
+    const f = [...box.querySelectorAll('button, input, textarea, select, a[href], [tabindex]')].filter((x) => !x.disabled && x.getAttribute('tabindex') !== '-1' && !x.closest('.hidden') && (typeof x.getClientRects !== 'function' || x.getClientRects().length));
+    const to = trapTarget(f, document.activeElement, e.shiftKey);
+    if (!to) { return false; }
+    e.preventDefault(); to.focus(); return true;
+  }
+  /** Image thumbnails open full size by click, Enter or Space (they carry role=button and tabindex=0). */
+  const ENLARGE = 'tabindex="0" role="button" title="Open full size (Enter)"';
+  let lbOpener = null;
+  const THUMBS = '.imgs img, .md-img, .content.shot img, .content.inspect .shot-img';
+  function closeLightbox() {
+    const lb = document.getElementById('lightbox'); if (!lb || lb.classList.contains('hidden')) { return; }
+    lb.classList.add('hidden');
+    const o = lbOpener; lbOpener = null;
+    if (o && o.isConnected) { o.focus(); } else { els.input.focus(); }
+  }
   function openLightbox(src, alt) {
     let lb = document.getElementById('lightbox');
     if (!lb) {
       lb = el('div', 'lightbox hidden'); lb.id = 'lightbox';
-      lb.innerHTML = `<img alt=""><div class="lb-bar"><span class="lb-cap"></span><button class="lb-copy" title="Copy image">${I.copy}</button><button class="lb-close" title="Close (Esc)">${I.x}</button></div>`;
+      lb.setAttribute('role', 'dialog'); lb.setAttribute('aria-modal', 'true');
+      lb.innerHTML = `<img alt=""><div class="lb-bar"><span class="lb-cap"></span><button class="lb-copy" title="Copy image" aria-label="Copy image">${I.copy}</button><button class="lb-close" title="Close (Esc)" aria-label="Close image">${I.x}</button></div>`;
       document.body.appendChild(lb);
-      lb.onclick = (e) => { if (e.target.closest('.lb-copy')) { fetch(lb.querySelector('img').src).then((r) => r.blob()).then((b) => navigator.clipboard.write([new ClipboardItem({ [b.type]: b })])).then(() => toast('Image copied')).catch(() => toast('Copy failed', 'error')); return; } lb.classList.add('hidden'); };
-      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !lb.classList.contains('hidden')) { lb.classList.add('hidden'); } });
+      lb.onclick = (e) => { if (e.target.closest('.lb-copy')) { fetch(lb.querySelector('img').src).then((r) => r.blob()).then((b) => navigator.clipboard.write([new ClipboardItem({ [b.type]: b })])).then(() => toast('Image copied')).catch(() => toast('Copy failed', 'error')); return; } closeLightbox(); };
+      lb.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLightbox(); return; }
+        trapTab(lb, e);
+      });
+      // Focus can leave the bar (a click on the picture): Esc still closes.
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !lb.classList.contains('hidden')) { closeLightbox(); } });
     }
-    lb.querySelector('img').src = src; lb.querySelector('img').alt = alt || ''; lb.querySelector('.lb-cap').textContent = alt || ''; lb.classList.remove('hidden');
+    const a = document.activeElement; if (lb.classList.contains('hidden')) { lbOpener = a && a !== document.body ? a : null; }
+    lb.querySelector('img').src = src; lb.querySelector('img').alt = alt || ''; lb.querySelector('.lb-cap').textContent = alt || '';
+    lb.setAttribute('aria-label', alt ? `Image: ${alt}` : 'Image');
+    lb.classList.remove('hidden');
+    lb.querySelector('.lb-close').focus();
   }
 
   // ------------------------------------------------------------------ markdown
@@ -410,7 +446,7 @@
     let s = esc(md);
     s = s.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`));
     // Only inline data images render; a remote one would load (and leak) without a click, so it becomes a link.
-    s = s.replace(/!\[([^\]]*)\]\(((?:https?:|data:image\/)[^)\s]+)\)/g, (_, alt, src) => hold(src.startsWith('data:') ? `<img class="md-img" src="${src}" alt="${alt}" title="${alt}">` : `<a href="${src}" title="${src}">Image: ${(/^https?:\/\/([^/?#]+)/.exec(src) || [])[1] || src}</a>`));
+    s = s.replace(/!\[([^\]]*)\]\(((?:https?:|data:image\/)[^)\s]+)\)/g, (_, alt, src) => hold(src.startsWith('data:') ? `<img class="md-img" src="${src}" alt="${alt}" title="${alt}" tabindex="0" role="button">` : `<a href="${src}" title="${src}">Image: ${(/^https?:\/\/([^/?#]+)/.exec(src) || [])[1] || src}</a>`));
     s = s.replace(/\[([^\]]+)\]\(((?:https?:|vscode:|command:)[^)\s]+)\)/g, (_, t, u) => hold(`<a href="${u}" title="${u}">${t}</a>`));
     s = s.replace(/(^|[\s(])(https?:\/\/[^\s<>"')\]]+?)(?=[.,;:!?]?(?:[\s)]|$))/g, (m, pre, u) => `${pre}${hold(`<a href="${u}">${u}</a>`)}`);
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, '$1<em>$2</em>').replace(/(^|\W)_([^_\n]+)_(?=\W|$)/g, '$1<em>$2</em>');
@@ -550,7 +586,7 @@
     // Images are placed eagerly (the row opens itself to show them); text bodies wait until the row is expanded.
     if (tool === 'browser_inspect' && !pending) {
       c.classList.add('inspect');
-      c.innerHTML = `${img && img.data ? `<img class="shot-img" src="data:${img.mime || 'image/png'};base64,${img.data}" alt="${esc((args && args.url) || 'screenshot')}" title="Click to enlarge">` : ''}${inspectReport(String(content || ''))}`;
+      c.innerHTML = `${img && img.data ? `<img class="shot-img" src="data:${img.mime || 'image/png'};base64,${img.data}" alt="${esc((args && args.url) || 'screenshot')}" ${ENLARGE}>` : ''}${inspectReport(String(content || ''))}`;
       return;
     }
     // MCP results: inline images from the server, then the text rendered as Markdown.
@@ -558,14 +594,14 @@
     if (/^mcp_/.test(tool) && !pending && (mcpImgs.length || !img)) {
       const text = String(content || '').replace(/^\[image [^\n]*\]$/gm, '').trim();
       c.classList.add('doc');
-      c.innerHTML = `${mcpImgs.length ? `<div class="imgs">${mcpImgs.map((m) => `<img src="data:${esc(m.mime || 'image/png')};base64,${esc(m.data || '')}" alt="${esc(m.name || 'image')}" title="Click to enlarge">`).join('')}</div>` : ''}<div class="doc-body"></div>`;
+      c.innerHTML = `${mcpImgs.length ? `<div class="imgs">${mcpImgs.map((m) => `<img src="data:${esc(m.mime || 'image/png')};base64,${esc(m.data || '')}" alt="${esc(m.name || 'image')}" ${ENLARGE}>`).join('')}</div>` : ''}<div class="doc-body"></div>`;
       lazyFill(node, () => { c.querySelector('.doc-body').innerHTML = renderMarkdown(text); });
       return;
     }
     if (img && img.data) {
       const src = `data:${img.mime || 'image/png'};base64,${img.data}`;
       const cap = (extra.data && extra.data.caption) || (args && args.url) || tool;
-      c.classList.add('shot'); c.innerHTML = `<img src="${src}" alt="${esc(cap)}" title="Click to enlarge"><div class="shot-cap">${linkify(String(content || cap))}</div>`;
+      c.classList.add('shot'); c.innerHTML = `<img src="${src}" alt="${esc(cap)}" ${ENLARGE}><div class="shot-cap">${linkify(String(content || cap))}</div>`;
       return;
     }
     if (pending) {
@@ -1341,7 +1377,7 @@
     d.appendChild(act);
     syncRestoreButton(d, state.session && state.session.id);
     if (atts.length) { d.appendChild(el('div', 'att', atts.map(attChip).join(''))); }
-    if (m.images && m.images.length) { d.appendChild(el('div', 'imgs', m.images.map((b64, k) => `<img src="data:image/png;base64,${b64}" alt="Image ${k + 1} of ${m.images.length}" title="Click to enlarge">`).join(''))); }
+    if (m.images && m.images.length) { d.appendChild(el('div', 'imgs', m.images.map((b64, k) => `<img src="data:image/png;base64,${b64}" alt="Image ${k + 1} of ${m.images.length}" ${ENLARGE}>`).join(''))); }
     const ut = el('div', 'utext', inline(text)); d.appendChild(ut);
     // Clicking the text of a sent message edits it (links, paths and a text selection keep their own meaning).
     if (index !== undefined) { ut.classList.add('editable'); ut.onclick = (e) => { if (e.target.closest('a, .path-link, code') || String(window.getSelection() || '')) { return; } inlineEdit(d, m, index, text); }; }
@@ -1744,7 +1780,7 @@
     if (work) { work.after(bar); } else { turn.appendChild(bar); }
   }
   /** "Run interrupted": a run that never ended (VS Code reloaded or closed mid-run). Resume, Restore checkpoint, Dismiss.
-   *  With continuity it also lists What ran and the files the run changed (Keep / Review diff), and when the chat's last
+   *  With continuity it also lists What ran and the files the run changed (Accept / Review diff), and when the chat's last
    *  answer is a partial one kept from its draft it becomes "Interrupted — partial answer" (Continue / Regenerate / Discard). */
   const RAN_ICON = { ok: 'check', error: 'x', denied: 'x', cancelled: 'stop', running: 'pause' };
   function ranList(st) {
@@ -1764,9 +1800,9 @@
     const changed = Array.isArray(run.changed) && run.changed.length ? run.changed : pending.length ? pending.map((f) => ({ path: f.path || f.fsPath, fsPath: f.fsPath })) : (Array.isArray(run.files) ? run.files : []).map((p) => ({ path: p }));
     const pendingOf = (p) => pending.find((f) => f.fsPath === p || (f.path || '') === p || (f.fsPath || '').replace(/\\/g, '/').endsWith(`/${p}`));
     const facts = [partial ? 'Stopped while answering' : run.steps ? `Stopped during step ${run.steps + 1}` : 'Stopped before it finished', run.tasksTotal ? `Tasks ${run.tasksDone || 0}/${run.tasksTotal}` : '', changed.length ? `${changed.length} file${changed.length === 1 ? '' : 's'} changed` : ''].filter(Boolean).join(' · ');
-    const shown = changed.slice(0, 6).map((f) => { const p = pendingOf(f.path); return `<li title="${esc(f.path)}">${f.status ? `<b class="st st-${esc(f.status)}" title="${f.status === 'A' ? 'Added' : f.status === 'D' ? 'Deleted' : 'Modified'}">${esc(f.status)}</b>` : ''}<span class="f">${esc(f.path)}</span>${p ? `<button class="btn sm ghost" data-keep="${esc(p.fsPath)}" title="Keep the changes to ${esc(f.path)}" aria-label="Keep ${esc(f.path)}">${I.check}<span>Keep</span></button>` : ''}</li>`; }).join('') + (changed.length > 6 ? `<li class="more">+${changed.length - 6} more</li>` : '');
+    const shown = changed.slice(0, 6).map((f) => { const p = pendingOf(f.path); return `<li title="${esc(f.path)}">${f.status ? `<b class="st st-${esc(f.status)}" title="${f.status === 'A' ? 'Added' : f.status === 'D' ? 'Deleted' : 'Modified'}">${esc(f.status)}</b>` : ''}<span class="f">${esc(f.path)}</span>${p ? `<button class="btn sm ghost" data-keep="${esc(p.fsPath)}" title="Accept the changes to ${esc(f.path)}" aria-label="Accept ${esc(f.path)}">${I.check}<span>Accept</span></button>` : ''}</li>`; }).join('') + (changed.length > 6 ? `<li class="more">+${changed.length - 6} more</li>` : '');
     const cp = run.checkpoint && run.checkpoint.createdAt ? `<span class="rec-vh">Checkpoint before the run · ${esc(new Date(run.checkpoint.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span>` : '';
-    const filesBlock = changed.length ? `<div class="rec-changed"><div class="rec-vh">Changed files${cp ? ' · ' : ''}${cp}</div><ul class="rec-files">${shown}</ul><div class="rec-fileacts">${pending.length ? `<button class="btn sm ghost" data-keepall="1" title="Keep every change this chat made">${I.check}<span>Keep all</span></button>` : ''}<button class="btn sm ghost" data-run="review" title="Open the changes in the diff review">${I.diff}<span>Review diff</span></button></div></div>` : '';
+    const filesBlock = changed.length ? `<div class="rec-changed"><div class="rec-vh">Changed files${cp ? ' · ' : ''}${cp}</div><ul class="rec-files">${shown}</ul><div class="rec-fileacts">${pending.length ? `<button class="btn sm ghost" data-keepall="1" title="Accept every change this chat made">${I.check}<span>Accept all</span></button>` : ''}<button class="btn sm ghost" data-run="review" title="Open the changes in the diff review">${I.diff}<span>Review diff</span></button></div></div>` : '';
     const when = run.startedAt ? new Date(run.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const head = partial ? 'Interrupted — partial answer' : 'Run interrupted';
     const cause = partial ? 'LocalPilot closed while this answer was being written. The text written so far is kept above.' : 'VS Code closed or reloaded while LocalPilot was working. Nothing ran since.';
@@ -3703,7 +3739,7 @@
     const selRow = list.querySelector('.hist-row.sel'); if (selRow && hist.reveal) { selRow.scrollIntoView({ block: 'nearest' }); } hist.reveal = false;
     const idle = state.sessions.filter((s) => !state.running.has(s.id) && (s.messageCount > 0 || s.pinned || s.plan));
     // Wide enough (≥320 px), the tidy-up buttons carry a short label; narrower they are icons with the same aria-label.
-    foot.innerHTML = `<div class="hist-acts"><button data-a="multi" title="Several agents at once">${I.layers}<span>Multitask</span></button>${state.running.size > 1 ? `<button data-a="stopall" title="Stop every running agent; tabs stay open">${I.stop}<span>Stop all ${state.running.size}</span></button>` : ''}</div><div class="hist-acts tidy"><button data-a="closeothers" title="Close idle tabs — the chats stay here" aria-label="Close idle tabs">${I.closeOthers}<span class="lbl">Close idle tabs</span></button><button data-a="clear" class="danger" title="Clear chat history… (${idle.length} idle chat${idle.length === 1 ? '' : 's'} in this workspace, ${fmtBytes(idle.reduce((n, s) => n + (s.bytes || 0), 0))})" aria-label="Clear chat history" ${idle.length ? '' : 'disabled'}>${I.trash}<span class="lbl">Clear…</span></button><button data-a="settings" title="Memory & history settings" aria-label="Memory and history settings">${I.memory}</button></div>`;
+    foot.innerHTML = `<div class="hist-acts"><button data-a="multi" title="Several agents at once">${I.layers}<span>Multitask</span></button>${state.running.size > 1 ? `<button data-a="stopall" title="Stop every running agent; tabs stay open">${I.stop}<span>Stop all ${state.running.size}</span></button>` : ''}</div><div class="hist-acts tidy"><button data-a="closeothers" title="Close idle tabs — the chats stay here" aria-label="Close idle tabs">${I.closeOthers}<span class="lbl">Close idle tabs</span></button><button data-a="clear" class="danger" title="Clear chat history… (${idle.length} idle chat${idle.length === 1 ? '' : 's'} in this workspace, ${fmtBytes(idle.reduce((n, s) => n + (s.bytes || 0), 0))})" aria-label="Clear chat history" ${idle.length ? '' : 'disabled'}>${I.trash}<span class="lbl">Clear…</span></button>${navReady() ? `<button data-a="import" title="Import conversations from a LocalPilot JSON export" aria-label="Import conversations">${I.import}</button>` : ''}<button data-a="settings" title="Memory & history settings" aria-label="Memory and history settings">${I.memory}</button></div>`;
     foot.onmousedown = (e) => { const b = e.target.closest('[data-a]'); if (b && !b.disabled) { e.preventDefault(); holdHistory(); } };
     foot.onclick = (e) => {
       const b = e.target.closest('[data-a]'); if (!b || b.disabled) { return; }
@@ -3713,6 +3749,7 @@
       else if (a === 'stopall') { for (const id of state.running) { post({ type: 'stop', sessionId: id }); } }
       else if (a === 'closeothers') { closeOtherTabs(); hist.sig = ''; renderHistory(); }
       else if (a === 'clear') { confirmClearHistory(); }
+      else if (a === 'import') { closeMenu(); post({ type: 'importConversations' }); }
       else if (a === 'settings') { closeMenu(); post({ type: 'openSettings', section: 'memory' }); }
     };
     if (refocus) { restoreHistoryFocus(refocus); }
@@ -3855,6 +3892,7 @@
           { label: 'Versions', desc: 'Titles, flags and branches over time', icon: I.history, onPick: () => openContinuityPage('versions', { id: s.id }) },
           { hr: true },
           { label: 'Delete permanently…', desc: 'Messages, archive, traces and checkpoints', icon: I.trash, onPick: () => post({ type: 'convAction', ids: [s.id], action: 'purge' }) },
+          { label: 'Import conversations…', desc: 'From a LocalPilot JSON export', icon: I.import, onPick: () => post({ type: 'importConversations' }) },
           { hr: true },
           { label: 'Back to Trash', icon: I.reply, onPick: back },
         ]);
@@ -3872,10 +3910,11 @@
           { label: 'Duplicate', desc: 'A copy to take somewhere else', icon: I.fork, onPick: () => post({ type: 'convAction', ids: [s.id], action: 'duplicate' }) },
         ] : [{ label: 'Fork', desc: 'Branch into a new chat from here', icon: I.fork, onPick: () => post({ type: 'forkSession', id: s.id }) }]),
         ...(nav ? [
-          { label: 'Export as JSON', desc: 'Complete, can be imported again', icon: I.export, group: 'Export', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'json' }) },
-          { label: 'Export as Markdown', icon: I.export, group: 'Export', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'markdown' }) },
-          { label: 'Export as HTML', desc: 'A standalone page', icon: I.export, group: 'Export', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'html' }) },
-          { label: 'Export as PDF', desc: 'Print-ready page: Print → Save as PDF', icon: I.export, group: 'Export', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'pdf' }) },
+          { label: 'Export as JSON', desc: 'Complete, can be imported again', icon: I.export, group: 'Export & import', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'json' }) },
+          { label: 'Export as Markdown', icon: I.export, group: 'Export & import', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'markdown' }) },
+          { label: 'Export as HTML', desc: 'A standalone page', icon: I.export, group: 'Export & import', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'html' }) },
+          { label: 'Export as PDF', desc: 'Print-ready page: Print → Save as PDF', icon: I.export, group: 'Export & import', onPick: () => post({ type: 'exportConversations', ids: [s.id], format: 'pdf' }) },
+          { label: 'Import conversations…', desc: 'From a LocalPilot JSON export', icon: I.import, group: 'Export & import', onPick: () => post({ type: 'importConversations' }) },
           { label: 'Share securely…', desc: 'An encrypted file and a one-time code', icon: I.share, group: 'More', onPick: () => post({ type: 'shareConversation', id: s.id }) },
           { label: 'Merge with…', desc: 'A new chat: this one plus a summary of another', icon: I.merge, group: 'More', onPick: () => post({ type: 'convAction', ids: [s.id], action: 'merge' }) },
           { label: 'Versions', desc: 'Earlier titles, flags and branches', icon: I.history, group: 'More', onPick: () => openContinuityPage('versions', { id: s.id }) },
@@ -4101,7 +4140,7 @@
     els.tasksLabel.textContent = `Tasks ${done}/${todos.length}`;
     // Open while the agent works; folded to one line (the current step) when idle — unless the user chose otherwise.
     const open = tasksUserOpen.has(state.session.id) ? tasksUserOpen.get(state.session.id) : state.running.has(state.session.id);
-    els.tasks.classList.toggle('open', open); els.tasksList.classList.toggle('hidden', !open);
+    els.tasks.classList.toggle('open', open); els.tasksList.classList.toggle('hidden', !open); els.tasksToggle.setAttribute('aria-expanded', String(open));
     const now = todos.find((t) => t.status === 'in_progress') || todos.find((t) => t.status === 'pending');
     let nowEl = els.tasksToggle.querySelector('.now-task');
     if (!nowEl) { nowEl = el('span', 'now-task', ''); els.tasksLabel.after(nowEl); }
@@ -5215,7 +5254,7 @@
   function openRejectConfirm() {
     const s = state.session; const n = (state.changes.get(s.id) || []).length; if (!n) { return; }
     const head = els.changes.querySelector('.panel-head:not(.confirm)');
-    const row = el('div', 'panel-head confirm', `<span class="q">Reject ${n} file${n === 1 ? '' : 's'}? <span class="why">Their edits are removed from disk.</span></span><span class="acts"><button class="btn ghost" data-c="keep">Keep</button><button class="btn danger" data-c="reject">${I.undo}Reject</button></span>`);
+    const row = el('div', 'panel-head confirm', `<span class="q">Reject ${n} file${n === 1 ? '' : 's'}? <span class="why">Their edits are removed from disk.</span></span><span class="acts"><button class="btn ghost" data-c="keep">Cancel</button><button class="btn danger" data-c="reject">${I.undo}Reject</button></span>`);
     row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Confirm reject all'); row.dataset.sid = s.id;
     row.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) { return; } const sid = row.dataset.sid; closeRejectConfirm(b.dataset.c === 'keep'); if (b.dataset.c === 'reject') { post({ type: 'undoChanges', sessionId: sid }); } };
     row.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeRejectConfirm(true); } };
@@ -5253,8 +5292,13 @@
     if (code) { const pre = code.closest('.code').querySelector('pre'); const text = pre ? pre.textContent : ''; const act = code.dataset.code; if (act === 'copy') { copyTo(code, text); } if (act === 'insert') { post({ type: 'insertCode', code: text }); } if (act === 'apply' || act === 'create') { const blk = code.closest('.code'); const lang = blk.dataset.lang && blk.dataset.lang !== 'text' ? blk.dataset.lang : undefined; post({ type: 'applyCodeToFile', code: text, path: code.dataset.target || undefined, create: act === 'create', lang, sessionId: state.session ? state.session.id : undefined }); } return; }
     const link = e.target.closest('.path-link'); if (link) { e.preventDefault(); post({ type: 'openFile', path: link.dataset.path, line: link.dataset.line ? Number(link.dataset.line) : undefined, sessionId: state.session && state.session.id }); return; }
     const uchip = e.target.closest('.fchip[data-url]'); if (uchip) { e.preventDefault(); post({ type: 'openExternal', url: uchip.dataset.url }); return; }
-    const img = e.target.closest('.imgs img, .md-img, .content.shot img, .content.inspect .shot-img'); if (img) { openLightbox(img.src, img.alt); return; }
+    const img = e.target.closest(THUMBS); if (img) { openLightbox(img.src, img.alt); return; }
     const a = e.target.closest('a[href]'); if (a) { e.preventDefault(); post({ type: 'openExternal', url: a.getAttribute('href') }); }
+  });
+  // A thumbnail is a button: Enter or Space opens it full size.
+  els.messages.addEventListener('keydown', (e) => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || e.altKey || e.metaKey || e.ctrlKey || !e.target.matches || !e.target.matches(THUMBS)) { return; }
+    e.preventDefault(); openLightbox(e.target.src, e.target.alt);
   });
   document.addEventListener('keydown', (e) => {
     const mod = e.metaKey || e.ctrlKey;
@@ -6447,6 +6491,6 @@
 
   updateSendEnabled();
   // media/continuity.js (Trash, Versions, Compare, Knowledge pages) runs on these helpers; it loads right after.
-  window.LPChat = { post, esc, el, I, timeAgo, md: renderMarkdown, toast };
+  window.LPChat = { post, esc, el, I, timeAgo, md: renderMarkdown, toast, trapTab };
   requestInit();
 })();
