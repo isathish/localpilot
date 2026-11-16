@@ -56,7 +56,7 @@ export class SessionManager {
   private scanning?: Promise<AgentSessionRow[]>;
 
   constructor(private readonly o: SessionManagerOptions) {
-    this.drafts = new DraftStore({ root: o.root, stream: o.log.stream, now: o.now, intervalMs: o.draftIntervalMs, warn: o.warn });
+    this.drafts = new DraftStore({ root: o.root, stream: () => o.log.stream, pid: (o.log as { writerPid?: number }).writerPid, now: o.now, intervalMs: o.draftIntervalMs, warn: o.warn });
     this.bridge = new RunBridge({
       log: o.log,
       blobs: o.blobs,

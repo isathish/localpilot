@@ -320,7 +320,7 @@ Conversations, memory, attachments and backups are kept in one data folder per c
 | `localpilot.continuity.backup.enabled` | `true` | Back up conversations, memory and attachments automatically to the data folder's `backups` folder |
 | `localpilot.continuity.backup.intervalDays` | `7` | Days between automatic backups |
 | `localpilot.continuity.backup.keep` | `4` | Automatic backups kept |
-| `localpilot.continuity.relatedConversations` | `true` | While you write the first message of a new chat, offer up to three related earlier conversations of the project (**Related: … · Add**). Nothing is added until you click **Add** |
+| `localpilot.continuity.relatedConversations` | `true` | While you write the first message of a new chat, offer up to three related earlier conversations of the project (**Related: … · Add**). Nothing is added until you click **Add**. Off also takes the agent's `history_search` / `history_read` tools away |
 | `localpilot.continuity.captureToolOutput` | `summary` | How much of each tool call's output an agent run's history keeps (**What ran** on the Run interrupted card, `localpilot history show --runs`): `errors` (only the error text of failed steps), `summary` (the first 2 KB of every step) or `full` (everything; over 2 KB as an attachment) |
 
 ### Sync
@@ -346,7 +346,7 @@ never settings (they live in the OS keychain, or `~/.localpilot/keys.json` for t
 | `localpilot.sync.webdav.url` | `""` | WebDAV folder URL (HTTPS; plain HTTP only for localhost) |
 | `localpilot.sync.webdav.username` | `""` | WebDAV user; the password is kept in the keychain |
 | `localpilot.sync.intervalMinutes` | `5` | Minutes between automatic syncs (also 15 s after a change, on focus, and on Sync now) |
-| `localpilot.sync.categories` | all on except `checkpointContents` | `conversations`, `memory`, `attachments`, `agentState`, `checkpointContents`, `prompts`, `preferences`. A category turned off stays on this device; turning it on later sends what it held back |
+| `localpilot.sync.categories` | all on except `checkpointContents` and `approvals` | `conversations`, `memory`, `attachments`, `agentState`, `checkpointContents`, `prompts`, `preferences`, `approvals` (approval levels: opt-in, because loosening them on one device loosens them on every device). A category turned off stays on this device; turning it on later sends what it held back |
 | `localpilot.sync.maxAttachmentMB` | `20` | Largest attachment synced (with Git, over 5 MB stays local) |
 | `localpilot.sync.deviceName` | `""` | This device's name on your other devices (empty: the computer's name) |
 

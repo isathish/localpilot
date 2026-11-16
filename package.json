@@ -2121,7 +2121,7 @@
         "localpilot.continuity.relatedConversations": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "While you write the first message of a new chat, offer up to three earlier conversations of the same project that look related (**Related: … · Add**). Nothing is added to the chat until you click **Add**."
+          "markdownDescription": "While you write the first message of a new chat, offer up to three earlier conversations of the same project that look related (**Related: … · Add**). Nothing is added to the chat until you click **Add**. Off also takes the agent's `history_search` / `history_read` tools away."
         },
         "localpilot.continuity.captureToolOutput": {
           "type": "string",
@@ -2274,7 +2274,12 @@
             "preferences": {
               "type": "boolean",
               "default": true,
-              "description": "A short list of preferences: favorite models, default model per mode, thinking level, approval level. Never API keys."
+              "description": "A short list of preferences: favorite models, default model per mode, thinking level, Auto mode. Never API keys. Approval levels are a separate category."
+            },
+            "approvals": {
+              "type": "boolean",
+              "default": false,
+              "description": "Approval levels (terminal, write, delete, network, MCP). Off by default: with it on, loosening an approval level on one device loosens it on every device."
             }
           },
           "default": {
@@ -2284,7 +2289,8 @@
             "agentState": true,
             "checkpointContents": false,
             "prompts": true,
-            "preferences": true
+            "preferences": true,
+            "approvals": false
           },
           "additionalProperties": false,
           "scope": "machine",

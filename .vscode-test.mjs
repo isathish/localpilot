@@ -15,6 +15,7 @@ const worktreesDir = path.join(path.dirname(telemetryDir), 'worktrees');
 export default defineConfig({
 	files: 'out/test/**/*.test.js',
 	workspaceFolder,
-	env: { LOCALPILOT_TELEMETRY_DIR: telemetryDir, LOCALPILOT_SKILL_CATALOG: skillCatalog, LOCALPILOT_WORKTREES_DIR: worktreesDir },
+	// The continuity machine id (device binding) stays out of the real ~/.localpilot too.
+	env: { LOCALPILOT_TELEMETRY_DIR: telemetryDir, LOCALPILOT_SKILL_CATALOG: skillCatalog, LOCALPILOT_WORKTREES_DIR: worktreesDir, LOCALPILOT_MACHINE_ID_FILE: path.join(path.dirname(telemetryDir), 'machine-id') },
 	mocha: { timeout: 20_000 },
 });

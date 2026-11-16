@@ -89,6 +89,7 @@ export async function syncSmoke(check: Check): Promise<void> {
   await scheduler(check);
   await backends(check);
   await everyBackendEndToEnd(check);
+  await hardeningSync(check);
 }
 
 /** A backend whose calls fail like a lost network while `down` is set (the offline queue over a real backend). */
@@ -728,5 +729,171 @@ async function backends(check: Check): Promise<void> {
     }
   } finally {
     await dav.close();
+  }
+}
+
+/**
+ * Hardening of sync (design §26): a removed device is not pulled past its removal and cannot list itself again; one
+ * bad stream does not stop the others; Pause / Turn off from another process survive a running cycle; approval levels
+ * are opt-in; the withheld list stays small; a copied data folder uploading as the same device is detected instead of
+ * overwriting; a purge made on another device is redacted from the local copies here.
+ */
+async function hardeningSync(check: Check): Promise<void> {
+  console.log('\n[continuity: sync hardening — removed devices, isolation, control, approvals, clones, purges]');
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const remote = new MemoryBackend('hardening');
+  const A = await side('ha', remote);
+  const B = await side('hb', remote);
+  let B2: Side | undefined;
+  let A2: Side | undefined;
+  try {
+    await A.sync.create(PASS);
+    await B.sync.join(PASS);
+    newConv(B, 'conv_b_early', 'Written by B before its removal');
+    await round(B, A);
+    check('sync hardening: B syncs normally before its removal', !!(await A.c.index.conversation('conv_b_early')));
+    // ---- a removed device
+    A.sync.devices.revoke(B.c.device.deviceId);
+    await settle(A);
+    await pause(10);
+    newConv(B, 'conv_b_late', 'Written by B after its removal');
+    B.c.log.append('device', B.c.device.deviceId, 'patch', { revokedAt: null }, { durable: true }); // B tries to list itself again
+    await round(B, A);
+    const rows = await A.c.index.query<{ kind: string; error: string | null }>('syncEvents', {});
+    check('sync hardening: nothing a removed device wrote after its removal is applied', !(await A.c.index.conversation('conv_b_late')) && !!(await A.c.index.conversation('conv_b_early')));
+    check('sync hardening: … and it cannot list itself again', !!(await A.sync.listDevices()).find((d) => d.id === B.c.device.deviceId)?.revokedAt);
+    check('sync hardening: the skip is in the activity log', rows.some((r) => r.kind === 'skipped' && /removed from sync/.test(r.error ?? '')), rows.slice(0, 3));
+    A.sync.devices.reinstate(B.c.device.deviceId);
+    await settle(A);
+    await round(A);
+    check('sync hardening: "List again" on a device lets its changes in again', !!(await A.c.index.conversation('conv_b_late')));
+
+    // ---- one bad stream does not stop the others
+    B2 = await side('hb2', remote, { root: B.root, secrets: B.secrets });
+    check('sync hardening: a second process of B writes its own stream', B2.c.log.stream !== B.c.log.stream);
+    newConv(B, 'conv_b_s1', 'From B stream 1');
+    newConv(B2, 'conv_b_s2', 'From B stream 2');
+    await settle(B, B2);
+    await B.sync.cycle('now');
+    const bad = B.c.log.stream;
+    const real = A.c.log.importRemote.bind(A.c.log);
+    A.c.log.importRemote = async (stream, events) => {
+      if (stream === bad) {
+        throw new Error('stream written by a newer LocalPilot');
+      }
+      return real(stream, events);
+    };
+    const okCycle = await A.sync.cycle('now');
+    await settle(A);
+    A.c.log.importRemote = real;
+    check('sync hardening: a stream that cannot be imported is skipped; the cycle and the other streams go on', okCycle && !!(await A.c.index.conversation('conv_b_s2')) && !(await A.c.index.conversation('conv_b_s1')) && A.sync.status().state === 'idle', A.sync.status());
+    check('sync hardening: the skipped stream is reported', (await A.sync.conflicts.list()).some((c) => c.kind === 'remote-damaged' && c.entityId.includes(bad)), (await A.sync.conflicts.list()).map((c) => c.entityId));
+    await round(A);
+    check('sync hardening: the next cycle picks the skipped stream up', !!(await A.c.index.conversation('conv_b_s1')));
+    const future = 'dev_FUTURE1.1';
+    const fut = await A.c.log.importRemote(future, [{ v: 1, id: `${future}:1`, stream: future, seq: 1, hlc: '000000000001-0000-dev_FUTURE1', dev: 'dev_FUTURE1', ent: 'conversation', eid: 'conv_f', op: 'rate' as never, sv: 1, p: { stars: 5 } }]);
+    check('sync hardening: an event with an op from a newer version is kept, not refused', fut.imported === 1);
+
+    // ---- Pause and Turn off from another process survive a running cycle
+    A2 = await side('ha2', remote, { root: A.root, secrets: A.secrets });
+    newConv(A, 'conv_ctl', 'control');
+    await settle(A);
+    const running = A.sync.cycle('now');
+    A2.sync.pause();
+    await running;
+    const disk = JSON.parse(fs.readFileSync(path.join(A.root, 'sync', 'state.json'), 'utf8')) as { paused?: { reason: string }; remoteId?: string };
+    check('sync hardening: Pause from another process during a cycle is not undone by it', disk.paused?.reason === 'user' && A.sync.state.paused?.reason === 'user', disk.paused);
+    A2.sync.resume();
+    const running2 = A.sync.cycle('now');
+    await A2.sync.turnOff();
+    await running2;
+    const disk2 = JSON.parse(fs.readFileSync(path.join(A.root, 'sync', 'state.json'), 'utf8')) as { remoteId?: string };
+    check('sync hardening: Turn off from another process during a cycle stays off', !disk2.remoteId && !A.sync.configured, disk2);
+    await A2.c.dispose();
+    A2 = undefined;
+    await A.sync.join(PASS);
+    await round(A);
+
+    // ---- the withheld list stays small
+    A.settings.categories = { ...A.settings.categories, conversations: false };
+    newConv(A, 'conv_held', 'Held back');
+    await round(A);
+    (A.sync as unknown as { noteWithheld(c: string, ids: string[]): void }).noteWithheld('conversations', Array.from({ length: 6000 }, (_, i) => `conv_fake_${i}`));
+    const held = A.sync.state.withheld.conversations ?? [];
+    check('sync hardening: past the cap the withheld list becomes "everything of the category"', held.length === 1 && held[0] === '*', held.length);
+    A.settings.categories = { ...A.settings.categories, conversations: true };
+    await round(A, B);
+    check('sync hardening: … and turning the category on still sends what was held back', !!(await B.c.index.conversation('conv_held')) && !A.sync.state.withheld.conversations);
+
+    // ---- a purge made on A is redacted from B's local copy of A's stream
+    const SECRET = 'GONE-FOR-GOOD-5d1e';
+    newConv(A, 'conv_purge', 'To be deleted');
+    msg(A, 'conv_purge', 'm_purge', undefined, `the secret is ${SECRET}`);
+    await round(A, B);
+    const textOf = (root: string) => fs.readdirSync(path.join(root, 'streams')).flatMap((s) => fs.readdirSync(path.join(root, 'streams', s)).filter((f) => f.endsWith('.jsonl')).map((f) => fs.readFileSync(path.join(root, 'streams', s, f), 'utf8'))).join('');
+    check('sync hardening: B has A\'s message in its copy of A\'s stream', textOf(B.root).includes(SECRET));
+    await A.c.retention.purge([{ ent: 'conversation', id: 'conv_purge' }]);
+    await round(A, B);
+    check('sync hardening: a purge from another device is redacted from every local stream copy here', !textOf(B.root).includes(SECRET) && !textOf(A.root).includes(SECRET));
+  } finally {
+    await A2?.c.dispose();
+    await B2?.c.dispose();
+    await A.c.dispose();
+    await B.c.dispose();
+  }
+
+  // ---- approvals are opt-in
+  {
+    const r2 = new MemoryBackend('approvals');
+    const prefsA = new Map<string, unknown>([['thinking', 'high'], ['approvals.write', 'auto']]);
+    const prefsB = new Map<string, unknown>();
+    const PA = await side('pa', r2, { prefs: prefsA });
+    const PB = await side('pb', r2, { prefs: prefsB });
+    try {
+      check('sync: approval levels are off by default (their own category)', DEFAULT_CATEGORIES.approvals === false && DEFAULT_CATEGORIES.preferences === true);
+      await PA.sync.create(PASS);
+      await PB.sync.join(PASS);
+      await round(PA, PB, PB);
+      check('sync: preferences sync, approval levels do not (loosening on A does not loosen B)', prefsB.get('thinking') === 'high' && prefsB.get('approvals.write') === undefined, Object.fromEntries(prefsB));
+      PA.settings.categories = { ...PA.settings.categories, approvals: true };
+      PB.settings.categories = { ...PB.settings.categories, approvals: true };
+      await round(PA, PB, PB);
+      check('sync: with Approval levels turned on on both, they sync', prefsB.get('approvals.write') === 'auto', Object.fromEntries(prefsB));
+    } finally {
+      await PA.c.dispose();
+      await PB.c.dispose();
+    }
+  }
+
+  // ---- a copied data folder that uploads as this device is detected, never overwrites
+  {
+    const r3 = new MemoryBackend('clone');
+    const O = await side('orig', r3);
+    await O.sync.create(PASS);
+    newConv(O, 'conv_o1', 'Before the copy');
+    await round(O);
+    const secrets = O.secrets;
+    const origRoot = O.root;
+    await O.c.dispose();
+    const copyRoot = tmp('copy');
+    fs.cpSync(origRoot, copyRoot, { recursive: true });
+    const O1 = await side('orig2', r3, { root: origRoot, secrets });
+    const O2 = await side('copy', r3, { root: copyRoot, secrets });
+    try {
+      check('sync clone: the copy (same machine, pre-binding copy) writes as the same device and stream', O1.c.device.deviceId === O2.c.device.deviceId && O1.c.log.stream === O2.c.log.stream);
+      newConv(O1, 'conv_o_orig', 'Written on the original');
+      await pause(5);
+      newConv(O2, 'conv_o_copy', 'Written on the copy');
+      await round(O1);
+      const keys = [...r3.objects.keys()].filter((k) => k.startsWith(`streams/${O1.c.log.stream}/`));
+      const bodies = new Map(keys.map((k) => [k, Buffer.from(r3.objects.get(k)!.body)]));
+      await settle(O2);
+      await O2.sync.cycle('now');
+      const st = O2.sync.status();
+      check('sync clone: the copy\'s upload is refused (sync paused: device-clone), nothing of the original overwritten', st.state === 'paused' && st.reason === 'device-clone' && keys.every((k) => Buffer.from(r3.objects.get(k)!.body).equals(bodies.get(k)!)), st);
+    } finally {
+      await O1.c.dispose();
+      await O2.c.dispose();
+    }
   }
 }

@@ -11,6 +11,7 @@ import * as path from 'path';
 import { memoryItemId, memoryNoteFields } from '../conversation/payloads';
 import type { FileEventLog } from '../data/eventLog';
 import { Emitter } from '../data/eventLog';
+import { withFileLock } from '../data/lease';
 import type { IndexClient } from '../data/index/indexClient';
 import type { MemoryRow } from '../data/index/queries';
 import { stableId } from '../ids';
@@ -487,22 +488,25 @@ export class MemoryBridge implements Disposable {
       return;
     }
     try {
-      let disk: Record<string, Seen> = {};
-      try {
-        disk = (JSON.parse(fs.readFileSync(this.seenFile, 'utf8')) as { files?: Record<string, Seen> }).files ?? {};
-      } catch {
-        disk = {};
-      }
-      for (const k of this.dirty) {
-        if (this.seen[k]) {
-          disk[k] = this.seen[k];
-        } else {
-          delete disk[k];
+      // Read, merge, write under a lock file: two processes saving at once would otherwise drop each other's entries.
+      withFileLock(this.seenFile, () => {
+        let disk: Record<string, Seen> = {};
+        try {
+          disk = (JSON.parse(fs.readFileSync(this.seenFile, 'utf8')) as { files?: Record<string, Seen> }).files ?? {};
+        } catch {
+          disk = {};
         }
-      }
-      this.dirty.clear();
-      this.seen = { ...disk, ...this.seen };
-      writeAtomic(this.seenFile, JSON.stringify({ v: 1, files: disk }));
+        for (const k of this.dirty) {
+          if (this.seen[k]) {
+            disk[k] = this.seen[k];
+          } else {
+            delete disk[k];
+          }
+        }
+        this.dirty.clear();
+        this.seen = { ...disk, ...this.seen };
+        writeAtomic(this.seenFile, JSON.stringify({ v: 1, files: disk }));
+      });
     } catch (e) {
       this.o.warn?.(`memory: could not save ${this.seenFile}: ${String(e)}`);
     }

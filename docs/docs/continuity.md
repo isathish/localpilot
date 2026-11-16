@@ -263,7 +263,8 @@ from cloud models. Sets have versions, and a deleted set waits in Trash.
   answer, about 1,500 tokens at most. Typing `#chat:` suggests recent conversations.
 - The agent has two read-only tools, offered when your request refers to earlier work: `history_search` finds messages
   of earlier conversations (this project, or all projects when it asks) and `history_read` reads up to 20 messages and
-  12,000 characters of one conversation at a time.
+  12,000 characters of one conversation at a time (of this project, unless it asks for all projects). Neither ever
+  reaches Trash, and both are offered only while `localpilot.continuity.relatedConversations` is on.
 
 **What did the model see?** Every answer records what its request held: the parts of the window (system prompt, rules,
 memory, tools, conversation, files, tool output, summaries), the items with their tokens (each attached file, set,
@@ -375,7 +376,7 @@ tags, device names, or tell which attachments are the same as files it knows.
 
 ### What is synced
 
-**What syncs** (Sync settings or the Sync manager) has seven switches:
+**What syncs** (Sync settings or the Sync manager) has eight switches:
 
 | Category | What it carries |
 |---|---|
@@ -385,7 +386,8 @@ tags, device names, or tell which attachments are the same as files it knows.
 | Agent runs and checkpoints | Agent runs, what they did, and the list of checkpoints |
 | Checkpoint contents | Off by default. A git bundle of each git checkpoint (up to 50 MB), so a checkpoint taken on another device can be viewed and restored here |
 | Custom commands | Your own custom commands (`~/.localpilot/commands`) |
-| Preferences | Default model, plan-mode model, thinking level, approval levels, Auto mode and your starred models; never API keys, endpoints or credentials |
+| Preferences | Default model, plan-mode model, thinking level, Auto mode and your starred models; never API keys, endpoints or credentials |
+| Approval levels | Off by default. The terminal, write, delete, network and MCP approval levels. With it on, loosening an approval level on one device loosens it on every device that has it on too; a device with it off neither sends nor takes them |
 
 A category you turn off stays on this device (the Sync manager says how many items it held back); turning it on later
 sends them. Attachments are downloaded in the background after the conversations that use them.
@@ -430,7 +432,21 @@ A resolution made on one device clears the conflict everywhere. In the terminal:
 
 **Remove…** in the Sync manager (or `localpilot sync remove-device <id> --rotate`) stops listing the device; what it synced
 stays. Choose **Remove and Rotate Key** so it cannot read anything synced afterwards, and revoke its access at your
-storage provider too (LocalPilot does not manage those credentials).
+storage provider too (LocalPilot does not manage those credentials). From the moment it is removed, nothing the removed
+device writes is taken in by the other devices (they keep what it synced before, and its attempt to list itself again is
+ignored); **Recent activity** says how many of its changes were skipped. **List again** lets its changes in again.
+
+If one device's data on the storage cannot be read here (damaged, or written by a newer LocalPilot in a way this one
+cannot store), that device's stream is skipped and listed as a conflict; everything else keeps syncing.
+
+A data folder copied to another computer (or restored there from a disk image) is recognised: the copy gets a device
+identity of its own the first time it opens, and the original's history stays as that device's. Should two computers
+still upload as the same device (a copy made before this check existed), sync pauses on the second one with
+**Another computer is syncing as this device** instead of overwriting the first one's data: move `device.json` out of
+that computer's data folder and restart LocalPilot, and it syncs as a new device.
+
+**Pause**, **Resume** and **Turn off sync** take effect at once in every window and the CLI, even while another window is
+in the middle of a sync.
 
 ## When things go wrong
 
@@ -461,11 +477,18 @@ attachments and backups use, and lets you:
   Restore Conversations from Backup…**). A backup holds every change, memory note and attachment. Automatic backups
   run every 7 days into the data folder's `backups` folder (`localpilot.continuity.backup.enabled`,
   `backup.intervalDays`, `backup.keep`, 4 kept). A backup you make yourself can be encrypted with a passphrase
-  (AES-256-GCM, key derived with scrypt); without the passphrase it cannot be read. Restoring merges: it adds what is
+  (AES-256-GCM, key derived with scrypt, sealed in parts so a backup cut short is detected); without the passphrase it
+  cannot be read. Backups are written and restored as a stream, so a large one does not need its size in memory.
+  Only one window or CLI process writes the automatic backup at a time. Restoring merges: it adds what is
   missing and never removes newer data, and restoring the same backup twice changes nothing.
 - **Empty Trash**, and set how long items stay in Trash (`localpilot.continuity.trashRetentionDays`, 30 days) and how
   much version history is kept (`localpilot.continuity.historyDays`, 90 days). Removing an item for good also removes
-  its text from this computer's log and the attachments nothing else uses.
+  its text from every log on this computer (every window's and the CLI's, and the copies of other devices' logs; a
+  window that is open at the time removes it from its own log within a day, at its next clean-up) and from backups made
+  afterwards, and the attachments nothing else uses. A conversation removed for good on another device goes from this
+  computer the same way once it syncs (if it is open here, when it is no longer in use). The details of agent runs
+  (each step, the context snapshots and which model answered) are kept for the same `historyDays` window; the runs
+  themselves, their checkpoints and the conversations stay.
 - **Rebuild index**, **Open folder**, **Remove migration backup** (with its size), and **Retry** for files the import
   could not read.
 - `localpilot.continuity.indexMaxMB` (256 MB) caps the search index: past it, archived and deleted conversations older
@@ -523,13 +546,13 @@ WebDAV password at set-up) instead of typing them. See
 | `localpilot.continuity.historyDays` | `90` | Days of version history kept |
 | `localpilot.continuity.indexMaxMB` | `256` | Largest search index; past it, old archived chats are searchable by title only |
 | `localpilot.continuity.captureToolOutput` | `summary` | How much of each tool call's output a run's history keeps: `errors`, `summary` (first 2 KB), `full` |
-| `localpilot.continuity.relatedConversations` | `true` | Offer related earlier conversations while you write the first message of a new chat |
+| `localpilot.continuity.relatedConversations` | `true` | Offer related earlier conversations while you write the first message of a new chat (off also removes the agent's history tools) |
 | `localpilot.continuity.backup.enabled` / `.intervalDays` / `.keep` | `true` / `7` / `4` | Automatic local backups |
 | `localpilot.memory.taskExpiryDays` | `14` | Days task memory is kept after its task is done |
 | `localpilot.sync.enabled` | `false` | Turn sync on |
 | `localpilot.sync.backend` | `folder` | `folder`, `git`, `s3` or `webdav`, with the settings of that backend: `sync.folder.path`; `sync.git.url`, `sync.git.branch`; `sync.s3.endpoint`, `.region`, `.bucket`, `.prefix`, `.accessKeyId`, `.pathStyle`; `sync.webdav.url`, `.username` |
 | `localpilot.sync.intervalMinutes` | `5` | How often to sync |
-| `localpilot.sync.categories` | all except checkpoint contents | What to sync |
+| `localpilot.sync.categories` | all except checkpoint contents and approval levels | What to sync |
 | `localpilot.sync.maxAttachmentMB` | `20` | Largest attachment that is synced |
 | `localpilot.sync.deviceName` | host name | How this device appears on your other devices |
 

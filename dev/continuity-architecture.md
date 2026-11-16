@@ -392,6 +392,8 @@ Stream allocation: a process takes the lowest `n` whose `lease.json` is absent, 
 dead pid on this host (`isPidAlive` from recoveryStore). Lease is created with `O_EXCL` on `lease.json.tmp-<pid>` then
 renamed; after rename it re-reads and checks it owns it (same pattern as `RecoveryStore.claimLock`). Streams are never
 deleted while they hold unsynced events. Two VS Code windows plus a CLI = three streams; that is expected.
+(Hardened in 1.7.x, §26.1–26.2: a live pid on this host is never stale by age, takeover goes through an exclusive
+claim, the log verifies its lease before each write, and `device.json` is bound to the machine.)
 
 ### 5.3 Append, durability, crash repair
 
@@ -454,7 +456,8 @@ touched in those segments, one `create` event with its reduced fields **as of** 
 in `p.__clocks`), plus tombstones for purged entities, then delete the covered segments. Version history older than the
 window is therefore lost by design (setting documented). Purged entities: compaction drops their payloads even inside the
 window; payloads of purged entities in other devices' streams are dropped by those devices when they compact. Remote
-copies follow (§14.6).
+copies follow (§14.6). (1.7.x, §26.3–26.4: streams nobody writes are compacted too, under their lease, and purges are
+redacted in every local stream nobody else writes.)
 
 ### 5.7 Blobs
 
@@ -1717,3 +1720,140 @@ navigator page). Settings messages `syncLoad`, `syncAction` → `sync { view }`.
 ever typed into VS Code input boxes (or the CLI's hidden prompt), never into a webview. Commands `localpilot.sync.setup`,
 `.now`, `.openManager`, `.showConflicts`, `.changePassphrase`, `.rotateKey`, `.turnOff`; the `localpilot-version:` content
 provider is registered with them.
+
+## 26. Hardening (1.7.x)
+
+An audit of the 1.7.0 continuity system found gaps in multi-process and multi-device safety. What changed, by area;
+every item has a regression check in `scripts/smokeContinuity.ts` (`hardening`), `scripts/smokeSync.ts`
+(`hardeningSync`), `scripts/smokeSession.ts`, `scripts/smokeConversation.ts` or `scripts/smokeContext.ts`. No on-disk
+format of 1.7.0 changed incompatibly: 1.7.0 data opens as before, 1.7.0 backups restore, and a 1.7.0 process can still
+read what a 1.7.x process writes (new fields are optional; the new backup framing has its own magic).
+
+### 26.1 Leases (`data/lease.ts`)
+
+- **Free** = absent, a dead pid on this host, or (another host only, where a pid cannot be checked) not refreshed for
+  120 s. A live pid on this host keeps its lease however old `at` is (a debugger pause, a sleeping laptop).
+- **Takeover** of a stale lease happens only while holding `<lease>.claim`, created with `O_EXCL`; the claimer re-checks
+  staleness, removes the lease and creates its own (`O_EXCL`), then reads the token back. A claim older than 10 s
+  belonged to a taker that died and is cleared. Two takers can no longer both win.
+- The lease records `since` (claim time). `leaseHeldBy(file, pid, startedAt)` says whether the process that wrote
+  something still holds the stream: same pid and, when `since` is known, claimed before the thing started.
+- **The log checks its lease before every write** (`FileEventLog.ensureLease`, from `writeOut` and `flushSync`). A lease
+  that names another holder means two writers on one stream: the log claims a new stream, re-stamps the events it has
+  not written yet (stream, seq, id, location), warns, and fires `onRotate`. Events written before stay where they were.
+  `stream` is a getter now; `DraftStore` takes `stream` as a function for this reason.
+- `withFileLock(file, fn)`: an `O_EXCL` `<file>.lock` (stale after 10 s; waits up to 2 s, then runs anyway) for small
+  shared read-merge-write files (`memory/seen.json`).
+- `withStreamLease(dir, kind, fn)` (`eventLog.ts`): imports, restores, compaction and redaction of a stream this process
+  does not write hold that stream's lease meanwhile, so they exclude its writer and each other.
+
+### 26.2 Device identity (`readOrCreateDevice`)
+
+- `device.json` gains `host` (the machine fingerprint) and `others` (`fingerprint → identity`). The fingerprint is
+  `sha256(machine id ‖ OS user ‖ platform)`; the machine id is a random value in `~/.localpilot/machine-id`
+  (`LOCALPILOT_MACHINE_ID_FILE` overrides it; tests point it at a temp file). It lives outside every data folder, so
+  copying a data folder does not copy it. The host name is left out (macOS changes it with the network).
+- A file without `host` (1.7.0) is bound to the first machine that opens it. A file bound to another machine gives this
+  machine a new identity, kept in `others` (a data folder on a shared drive keeps one id per machine instead of minting
+  one at every open), under `withFileLock`, with a warning. The other identity's streams stay readable as that device's
+  history.
+- Sync uploads of own streams use `put(ifAbsent)`. An existing object is replaced only when it holds our own events
+  (same id → same HLC; for a base, same entity → same HLC), which covers retries, key rotation and category changes.
+  Before new chunks go up, one remote chunk of the stream that overlaps them under another name is checked the same way.
+  Other events under our names pause sync with reason `device-clone` (a copy made before the binding existed); the
+  message says to move `device.json` aside on one of the computers.
+
+### 26.3 Purge and redaction (`data/compaction.ts`, `data/retention.ts`, `data/backup.ts`)
+
+- `Retention.purge` → `redactEverywhere(log, ids)`: this process's own stream, then every other local stream under its
+  lease (streams of processes that ended, other devices' copies; compacted bases included). A stream a live process
+  writes is left to that process (single writer: no process rewrites bytes of a stream someone else appends to) and is
+  logged as deferred.
+- Every retention pass (start-up + daily) redacts the process's own stream for every purge the index knows
+  (`purgedEntities`: `entity_clocks` rows whose state has `purged`), so a purge made by another process or device
+  reaches every live stream within a day or at that process's next start. Compaction also drops purged entities and
+  their conversations' children whatever stream the purge came from (`CompactOptions.purged`).
+- A purge pulled by sync calls `SyncEngineOptions.onRemotePurge` → `Retention.redactRemote`: the purge hooks (files) and
+  `redactEverywhere`.
+- `writeBackup` writes the events of purged entities redacted (`p = { redacted: true }`), from the index's
+  `purgedEntities` (DataManager) or a scan of the purge events (no index): a backup made after a purge never holds its
+  content, whether or not every stream has been redacted yet.
+- A conversation purged elsewhere while in use here: `ConversationManager.cleanupPurgedWhenIdle` queues it
+  (`purgeWaiting`); `reloadIfIdle` removes its files once the chat is idle. The retention purge hook uses the same path.
+
+### 26.4 Compaction of other streams, bases, overlap
+
+- `compactStreamDir(dir, stream, device, o)` generalises own-stream compaction. `compactOtherStreams` runs it, newest
+  segment included, on every local stream without a live lease, holding its lease. Retention rebuilds the index when
+  anything was compacted.
+- Housekeeping (daily) installs other devices' newer compacted bases over the local copies of their streams
+  (`importBase(..., { replace: true })`) when the copy already reaches the cut, the device was not removed before the
+  base, and the base keeps every entity the covered local events have (other than purged ones and pruned run details);
+  a base made after its owner turned a category off would otherwise delete data here. The index is rebuilt after.
+- `importBase` no longer requires an empty copy: segments the base covers entirely are removed, one it covers in part
+  stays. Readers (`readStreamDir`) skip events of a non-base segment at or below the base's cut, and `streamLastSeq` is
+  the larger of the last event and the cut, so a base and the segments it covers both on disk (a crash in between, or a
+  partly covered segment) never yield an event twice.
+- Unknown events (an op, kind or schema version this build does not know) are carried into a base as they are.
+
+### 26.5 Sync engine (`sync/syncEngine.ts`)
+
+- **Removed devices.** `revocations()` = the index's `revokedDevices` (`sync_devices.revoked_at`) and the remote device
+  files' `revokedAt`. Pulling a removed device imports its events only up to the first one stamped after the removal
+  (the copy stays gapless) and never one where it lists itself again (a `device` patch of its own id with
+  `revokedAt: null`); a base made after the removal is not taken. Skips are logged once as a `skipped` activity row and a
+  warning; the stream is not downloaded again by that process. **List again** (`reinstate`) lifts it.
+- **Isolation.** Each remote stream is pulled inside its own try/catch: a stream whose import throws (an invalid event,
+  a gap, a newer format) is reported (`remote-damaged`, key `streams/<id>/*`) and skipped; the cycle and the other
+  streams go on, and the next cycle tries it again. `validateEnvelope` accepts any op matching `[a-z][a-z_]*`; `isKnown`
+  (reducer, index) applies only the five known ops, so a newer version's op is kept in the log and not applied.
+- **Control changes from other processes.** The cycle remembers the control fields it read (`remoteId`, `keyIds`,
+  `current`, `paused`, `needsPassphrase`); every save during the cycle re-reads `state.json` and, when another process
+  changed them, keeps theirs (Pause/Resume win; `keyIds` are merged). A different `remoteId` (Turn off, a join
+  elsewhere) ends the cycle's writes altogether. `pause` / `resume` read the file before changing it; `turnOff` writes
+  the empty state outside the merge.
+- **Withheld ids** are a de-duplicated set per category, capped at 5,000; past the cap the category's list becomes
+  `['*']` and turning the category on re-sends every entity of that category this device wrote.
+- **Approval levels** are their own category `approvals` (default off): `categoryOfEvent` puts a `preference` whose
+  `key` starts with `approvals.` there. `PreferencesExtra` neither logs nor applies approval keys while the category is
+  off on this device, so a device that loosens its approvals cannot loosen another's unless both opted in.
+
+### 26.6 Crash recovery and adoption
+
+- Agent sessions record `writerPid` (the stream lease's pid). `writerGone` and `DraftStore.live` use `leaseHeldBy`: a
+  stream reused by a new process (live lease, another pid, or claimed after the run or draft started) no longer keeps a
+  dead writer's run `running` or its draft hidden. `runningAgentSessions` / `agentSessions` join `entity_clocks` to read
+  it (no index schema change).
+- `adoptRemote` / `applyRemote` also adopt a chat of this project last written by another process of this device (the
+  CLI, another window): the index's `conversationWriters` gives the stream of the conversation's newest event, and only
+  chats this process's own stream wrote are excluded.
+
+### 26.7 Backups, blobs, automatic backup
+
+- Backups are streamed: plain = a gzip stream of the same JSONL; encrypted = `LPBK2\n<kdf>\n` + frames
+  `<u32 BE length><LPE1 object>` of ≤ 4 MiB of lines, AAD `localpilot-backup/2/<n>`, the last frame `…/<n>/end` (a file
+  cut short is detected). `LPBK1` (1.7.0) is still read. `backupLines` yields one parsed line at a time; restore imports
+  per stream in batches of 5,000.
+- `BlobStore.put` of an existing blob touches it (mtime = now); `gc` re-stats a blob before removing it, and Retention
+  catches the index up first, so an attachment re-used just before a GC is never removed.
+- `autoBackup` re-checks that a backup is due after taking the lease and refreshes the lease every 15 s while writing.
+
+### 26.8 Unbounded growth
+
+- Run details (`execution_event`, `context_snapshot`, `model_session`) whose last change is older than `historyDays` are
+  left out of compacted bases (their agent session, checkpoints and the conversation stay), so they leave the index at
+  the rebuild that follows compaction.
+- `sync/state.json` `withheld` is capped (26.5).
+
+### 26.9 Agent history tools
+
+- `history_search` strips `is:trashed` / `-is:trashed` from the model's query, passes `includeTrash: false`, and drops
+  hits of trashed conversations. `history_read` finds conversations of the chat's project only unless `all_projects` is
+  true. `attachContext` registers the two tools only while `localpilot.continuity.relatedConversations` is on and
+  follows the setting (`onSettingsChanged`).
+
+### 26.10 Folder backend compare-and-swap
+
+- `put(ifMatch)` on a folder runs check → rename → read-back under an `O_EXCL` `.<name>.lock` next to the object (dot
+  files are never listed; stale after 60 s; `precondition` after waiting 10 s), so two devices changing `keyring.json`
+  at once cannot both pass the check.

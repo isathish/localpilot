@@ -272,9 +272,15 @@ export async function sessionSmoke(check: Check): Promise<void> {
     const liveRow = (await mB.runs(crashed.id))[0];
     check('while A is alive, B sees the run as running and does not mark it', liveRow?.outcome === 'running' && !writerGone(liveRow, { root: shared, deviceId: B.device.deviceId, ownStream: B.log.stream, isActive: () => false }));
     check('while A streams, B does not take its draft', mB.takePartial(crashed) === undefined && !!mA.drafts.read(crashed.id));
-    // A dies: its lease names a pid that is gone (no clean end, nothing more written).
     const leaseFile = path.join(shared, 'streams', A.log.stream, 'lease.json');
     const lease = JSON.parse(fs.readFileSync(leaseFile, 'utf8')) as { pid: number };
+    // A died and a new process took its stream id (the lease is live, but it is not A's): A's run and draft are orphans.
+    fs.writeFileSync(leaseFile, JSON.stringify({ ...lease, pid: process.ppid, since: Date.now() + 1, token: 'next-process' }));
+    const reusedDraft = mA.drafts.read(crashed.id)!;
+    check('crash recovery: a stream id reused by a new live process does not keep the dead writer\'s run or draft alive', liveRow?.writerPid === A.log.writerPid && writerGone(liveRow, { root: shared, deviceId: B.device.deviceId, ownStream: B.log.stream, isActive: () => false }) && !mB.drafts.live(reusedDraft, () => false), { writerPid: liveRow?.writerPid });
+    fs.writeFileSync(leaseFile, JSON.stringify(lease));
+    check('…while the run\'s own writer still holds it, it stays running', !writerGone(liveRow, { root: shared, deviceId: B.device.deviceId, ownStream: B.log.stream, isActive: () => false }) && mB.drafts.live(reusedDraft, () => false));
+    // A dies: its lease names a pid that is gone (no clean end, nothing more written).
     fs.writeFileSync(leaseFile, JSON.stringify({ ...lease, pid: deadPid() }));
     const marked = await mB.recoverInterrupted();
     await B.index.catchUp();

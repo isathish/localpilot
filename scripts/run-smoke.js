@@ -37,4 +37,6 @@ esbuild.buildSync({
 process.env.LOCALPILOT_CONTINUITY_WORKER ??= workerOut;
 process.env.LOCALPILOT_SQLJS_WASM ??= path.resolve(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
 process.env.LOCALPILOT_PDFJS_DIR ??= path.resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build');
+// The continuity machine id (device binding) lives outside every data folder: a temp file here, never ~/.localpilot.
+process.env.LOCALPILOT_MACHINE_ID_FILE ??= path.join(require('fs').mkdtempSync(path.join(require('os').tmpdir(), 'lp-smoke-machine-')), 'machine-id');
 require(outfile);

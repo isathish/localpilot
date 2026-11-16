@@ -40,6 +40,14 @@ export function keywords(text: string, max = 8): string[] {
   return uniq.sort((a, b) => weight(b) - weight(a)).slice(0, max);
 }
 
+/** A model's search text without Trash filters (`is:trashed`, `-is:trashed`, quoted or not). */
+export function stripTrashFilters(query: string): string {
+  return query
+    .replace(/(^|\s)-?is:"?trash(ed)?"?(?=\s|$)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export interface TermHit {
   term: string;
   id: string;
@@ -155,14 +163,18 @@ export class RelatedContext {
     return items;
   }
 
-  /** Finds a conversation by id, id prefix, `#chat:` slug or title (this project's first, then the newest). */
-  async find(ref: string, projectId?: string): Promise<ConversationRow | undefined> {
+  /**
+   * Finds a conversation by id, id prefix, `#chat:` slug or title (this project's first, then the newest). With
+   * `strict` (the agent's history_read), only this project's conversations are found.
+   */
+  async find(ref: string, projectId?: string, o: { strict?: boolean } = {}): Promise<ConversationRow | undefined> {
     const r = ref.trim();
     if (!r) {
       return undefined;
     }
+    const inScope = (c: ConversationRow) => !o.strict || !projectId || c.projectId === projectId;
     const byId = await this.d.index.conversation(r).catch(() => undefined);
-    if (byId && !byId.trashedAt) {
+    if (byId && !byId.trashedAt && inScope(byId)) {
       return byId;
     }
     const slug = chatSlug(r);
@@ -172,7 +184,7 @@ export class RelatedContext {
     const q = idLike ? undefined : words.split(/\s+/)[0];
     const page = await this.d.index.history({ view: 'all', projectId: 'all', query: q, limit: idLike ? 500 : 200 });
     const archived = await this.d.index.history({ view: 'archived', projectId: 'all', query: q, limit: 100 });
-    const rows = [...page.rows, ...archived.rows];
+    const rows = [...page.rows, ...archived.rows].filter((c) => !c.trashedAt && inScope(c));
     const hits = rows.filter((c) => c.id.startsWith(r) || chatSlug(c.title) === slug || c.title.toLowerCase() === r.toLowerCase());
     const pool = hits.length ? hits : rows.filter((c) => chatSlug(c.title).includes(slug));
     pool.sort((a, b) => Number(b.projectId === projectId) - Number(a.projectId === projectId) || b.updatedAt - a.updatedAt);
@@ -202,7 +214,12 @@ export class RelatedContext {
   /** history_search: snippets of matching messages (this project by default), one line per hit. */
   async search(query: string, o: { projectId?: string; allProjects?: boolean; currentId?: string; limit?: number }): Promise<string> {
     const projectId = o.allProjects ? 'all' : o.projectId ?? 'all';
-    const hits = await this.d.index.search({ text: query, projectId, limit: Math.min(50, (o.limit ?? SEARCH_MAX_HITS) * 3) });
+    // The model never searches Trash: what the user deleted stays out of its context.
+    const text = stripTrashFilters(query);
+    if (!text) {
+      return 'history_search needs words to look for (Trash is not searchable).';
+    }
+    const hits = (await this.d.index.search({ text, projectId, includeTrash: false, limit: Math.min(50, (o.limit ?? SEARCH_MAX_HITS) * 3) })).filter((h) => h.conversationId);
     if (!hits.length) {
       return `No earlier conversation matches "${query}"${o.allProjects ? '' : ' in this project (all_projects: true widens the search)'}.`;
     }
@@ -219,6 +236,9 @@ export class RelatedContext {
       }
       seen.add(key);
       const row = rows.get(h.conversationId);
+      if (row?.trashedAt) {
+        continue;
+      }
       const title = row?.title ?? h.title ?? h.conversationId;
       const line = `- ${h.conversationId}${h.conversationId === o.currentId ? ' (this chat)' : ''} "${title}" ${new Date(h.at).toISOString().slice(0, 10)}${h.messageId ? ` message ${h.messageId}` : ''} [${h.field}${h.role ? `, ${h.role}` : ''}]: ${strip(h.snippet).replace(/\s+/g, ' ').slice(0, 240)}`;
       lines.push(isLocalOnlyConversation(row?.tags) ? `<chat_hit id="${h.conversationId}" title="${esc(title)}"${localOnlyAttr(true)}>${line}</chat_hit>` : line);
@@ -230,10 +250,10 @@ export class RelatedContext {
    * history_read: messages of one conversation (requests and answers; tool output left out), `from`..`to`
    * (1-based, inclusive; default the last 10), or the messages around `messageId`. Capped per message and per call.
    */
-  async read(id: string, o: { from?: number; to?: number; messageId?: string; projectId?: string }): Promise<string> {
-    const row = await this.find(id, o.projectId);
+  async read(id: string, o: { from?: number; to?: number; messageId?: string; projectId?: string; allProjects?: boolean }): Promise<string> {
+    const row = await this.find(id, o.projectId, { strict: !o.allProjects });
     if (!row) {
-      return `No conversation "${id}". history_search returns conversation ids.`;
+      return `No conversation "${id}"${o.allProjects || !o.projectId ? '' : ' in this project (all_projects: true reads another project\'s)'}. history_search returns conversation ids.`;
     }
     const s = await this.d.load(row.id).catch(() => undefined);
     const msgs = (s?.messages ?? []).filter((m) => !m.meta?.hidden && (m.role === 'user' || m.role === 'assistant') && plainText(m));
@@ -308,7 +328,7 @@ export function historyTools(get: () => RelatedContext | undefined, projectOf: (
       description: `Read messages of an earlier conversation by id (from history_search) or title: requests and answers, tool output left out. Default the last 10; "from"/"to" pick a range (1-based), "message_id" the messages around one hit. At most ${READ_MAX_MESSAGES} messages and ${READ_TOTAL_CHARS.toLocaleString('en')} characters per call.`,
       parameters: {
         type: 'object',
-        properties: { conversation_id: { type: 'string' }, from: { type: 'number' }, to: { type: 'number' }, message_id: { type: 'string' } },
+        properties: { conversation_id: { type: 'string' }, from: { type: 'number' }, to: { type: 'number' }, message_id: { type: 'string' }, all_projects: { type: 'boolean', description: 'Read a conversation of another project (default: this project only)' } },
         required: ['conversation_id'],
       },
     },
@@ -322,7 +342,7 @@ export function historyTools(get: () => RelatedContext | undefined, projectOf: (
         return { content: 'history_read needs a conversation_id.', isError: true };
       }
       const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : undefined);
-      return { content: await r.read(id, { from: num(args.from), to: num(args.to), messageId: typeof args.message_id === 'string' ? args.message_id : undefined, projectId: await projectOf(ctx.sessionId) }) };
+      return { content: await r.read(id, { from: num(args.from), to: num(args.to), messageId: typeof args.message_id === 'string' ? args.message_id : undefined, projectId: await projectOf(ctx.sessionId), allProjects: args.all_projects === true }) };
     },
   };
   return [search, read];

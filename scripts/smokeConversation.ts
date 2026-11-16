@@ -377,6 +377,15 @@ export async function conversationSmoke(check: Check): Promise<void> {
     await new Promise((res) => setTimeout(res, 50));
   }
   check('a chat continued by another process is reloaded here (not in use)', remoteSeen.includes(`${c2.id}:true`) && store.get(c2.id)!.messages.at(-1)?.content === 'continued in the CLI', remoteSeen);
+  // A chat the CLI started on this machine (same device, another process, its own store) joins this window's list.
+  const cliChat = other.store.create('ollama/qwen', 'agent');
+  cliChat.messages.push(say('user', 'Started in the CLI on this machine'));
+  other.store.save(cliChat);
+  await other.settle(cliChat);
+  await c.index.catchUp();
+  await mgr.adoptRemote();
+  const cliRow = await c.index.conversation(cliChat.id);
+  check('a chat another process of this device started is adopted into this store', cliRow?.lastDevice === c.device.deviceId && store.has(cliChat.id) && store.get(cliChat.id)!.messages[0]?.content === 'Started in the CLI on this machine', cliRow);
   await other.dispose();
   await r.dispose();
   await crossDevice(check);
@@ -446,10 +455,15 @@ async function crossDevice(check: Check): Promise<void> {
     check('Restore there brings it back to that chat list', b.store.has(s.id) && b.store.get(s.id)!.messages.length === 4);
     await ship(b, a);
     check('and to this one', a.store.has(s.id) && a.store.get(s.id)!.messages.length === 4);
+    // Open (in use) on b when a deletes it for good: its files stay until the chat is idle, then go.
+    b.store.inUse = (id) => id === s.id;
     await a.c.conversations!.purge([s.id]);
     await a.settle();
     await ship(a, b);
-    check('Delete for good on one device removes it from the other', !b.store.has(s.id) && !(await b.c.index.conversation(s.id)));
+    check('Delete for good elsewhere while the chat is open here: its files wait until it is idle', b.store.has(s.id) && !(await b.c.index.conversation(s.id)));
+    b.store.inUse = () => false;
+    const cleaned = await b.c.conversations!.reloadIfIdle(s.id);
+    check('Delete for good on one device removes it from the other (once idle)', cleaned && !b.store.has(s.id) && !(await b.c.index.conversation(s.id)));
     const fresh = b.store.create('ollama/qwen', 'ask');
     fresh.messages.push(say('user', 'not indexed yet'));
     b.store.save(fresh);

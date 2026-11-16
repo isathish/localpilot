@@ -21,6 +21,8 @@ export type ModelSwitchReason = 'user' | 'auto' | 'fallback' | 'provider-down';
 
 export interface RunLog {
   readonly stream: string;
+  /** The writing process (its stream lease's pid). */
+  readonly writerPid?: number;
   append(ent: EntityKind, eid: string, op: Op, p: object, o?: AppendOptions): unknown;
 }
 
@@ -148,6 +150,7 @@ export class RunBridge implements SessionRunHooks {
         startedAt: at,
         outcome: 'running',
         writer: this.o.log.stream,
+        writerPid: this.o.log.writerPid ?? process.pid,
         ...(r.session.worktree ? { worktree: r.session.worktree } : {}),
         ...(title ? { title } : {}),
       },

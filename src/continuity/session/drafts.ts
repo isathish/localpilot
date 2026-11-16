@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ChatMessage, Session } from '../../types';
-import { leaseIsFree } from '../data/lease';
+import { leaseHeldBy } from '../data/lease';
 
 export const DRAFT_INTERVAL_MS = 2000;
 /** A draft keeps at most this much text (an answer this long is rare; the rest would only cost disk writes). */
@@ -32,7 +32,10 @@ export interface Draft {
 
 export interface DraftStoreOptions {
   root: string;
-  stream: string;
+  /** This process's stream (a function when it may change: the log moved to another stream). */
+  stream: string | (() => string);
+  /** This process's pid as its stream lease names it (default process.pid). */
+  pid?: number;
   now?: () => number;
   intervalMs?: number;
   warn?: (m: string) => void;
@@ -55,6 +58,14 @@ export class DraftStore {
     this.now = o.now ?? Date.now;
   }
 
+  private get stream(): string {
+    return typeof this.o.stream === 'function' ? this.o.stream() : this.o.stream;
+  }
+
+  private get pid(): number {
+    return this.o.pid ?? process.pid;
+  }
+
   file(conversationId: string): string {
     return path.join(this.dir, `${conversationId.replace(/[^\w.-]/g, '_')}.json`);
   }
@@ -72,7 +83,7 @@ export class DraftStore {
     const at = this.now();
     this.pending.set(conversationId, {
       dirty: false,
-      draft: { v: 1, conversationId, text: '', stream: this.o.stream, pid: process.pid, startedAt: at, updatedAt: at, afterCount: o.afterCount, ...(o.model ? { model: o.model } : {}), ...(o.agentSessionId ? { agentSessionId: o.agentSessionId } : {}), ...(o.afterMessageId ? { afterMessageId: o.afterMessageId } : {}) },
+      draft: { v: 1, conversationId, text: '', stream: this.stream, pid: this.pid, startedAt: at, updatedAt: at, afterCount: o.afterCount, ...(o.model ? { model: o.model } : {}), ...(o.agentSessionId ? { agentSessionId: o.agentSessionId } : {}), ...(o.afterMessageId ? { afterMessageId: o.afterMessageId } : {}) },
     });
   }
 
@@ -177,10 +188,12 @@ export class DraftStore {
 
   /** True while the run that writes this draft is still streaming somewhere (this process, or another live writer). */
   live(d: Draft, activeHere: (conversationId: string) => boolean): boolean {
-    if (d.stream === this.o.stream) {
-      return d.pid === process.pid && activeHere(d.conversationId);
+    if (d.stream === this.stream) {
+      return d.pid === this.pid && activeHere(d.conversationId);
     }
-    return !leaseIsFree(path.join(this.o.root, 'streams', d.stream, 'lease.json'));
+    // Another stream: it must still be held by the process that wrote the draft (a stream id is reused by the next
+    // process once its writer died).
+    return leaseHeldBy(path.join(this.o.root, 'streams', d.stream, 'lease.json'), d.pid, d.startedAt);
   }
 
   dispose(): void {
