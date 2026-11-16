@@ -2340,6 +2340,20 @@
           "default": 24000,
           "description": "Tool outputs longer than this are truncated (head + tail) before being sent to the model."
         },
+        "localpilot.maxIterations": {
+          "type": "integer",
+          "default": 40,
+          "minimum": 5,
+          "maximum": 500,
+          "markdownDescription": "Most model steps in one run: each step is one answer from the model, which may call tools. When the limit is reached the run stops and reports where it got to; your next message continues. Subagents keep their own, lower limit (25, or this value when it is lower). Self-healing may add up to `#localpilot.healing.extraSteps#` for recovery."
+        },
+        "localpilot.agent.modelRetries": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 8,
+          "markdownDescription": "How often a model request that failed for a passing reason (a dropped connection, a timeout, an overloaded server, `429`/`5xx`) is retried, waiting longer each time (0.8 s, 1.6 s, 3.2 s… up to 20 s, or as long as the server's `Retry-After` asks). An answer whose connection dropped halfway is resumed once from where it stopped instead of starting over. With `#localpilot.healing.enabled#` on, the self-healing retry policies decide how often; `0` turns retries off either way."
+        },
         "localpilot.maxConsecutiveMistakes": {
           "type": "integer",
           "default": 6,
@@ -3947,6 +3961,11 @@
           },
           "default": [],
           "markdownDescription": "`provider/model` ids hidden from the model picker, routing and the status bar. Toggle models in **Settings → Models** instead of editing this by hand."
+        },
+        "localpilot.models.localOnly": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Keep every **automatic** model pick on this machine: Auto, the routing roles (`#localpilot.routing.fast#` and the others when empty), the fallback when a model is unavailable (cloud entries of `#localpilot.routing.fallbackModels#` are skipped), image turns, inline completions and subagents only ever choose local models. A cloud model you pick yourself (for a chat, as `#localpilot.defaultModel#` or in a role setting) still works. Even with this off, a chat on a local model is never switched to a cloud model to read images: you are told to install a local vision model or pick the cloud one."
         },
         "localpilot.routing.enabled": {
           "type": "boolean",

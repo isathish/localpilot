@@ -357,6 +357,9 @@ function assertWritable(file: string): void {
 
 /** Defaults the CLI applies when no settings file sets a key and the caller passes none (package.json's defaults in VS Code). */
 export const SETTING_DEFAULTS: Readonly<Record<string, unknown>> = {
+  maxIterations: 40,
+  'agent.modelRetries': 3,
+  'models.localOnly': false,
   'healing.enabled': true,
   'healing.autoDetect': true,
   'healing.autoRetry': true,

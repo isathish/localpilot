@@ -7,11 +7,11 @@
 import './healing/repoRoot';
 import * as http from 'http';
 import { OllamaProvider } from '../src/providers/ollama';
-import { OpenAICompatProvider } from '../src/providers/openaiCompat';
+import { jsonArguments, OpenAICompatProvider } from '../src/providers/openaiCompat';
 import { AnthropicProvider, thinkingStyle, toAnthropicMessages } from '../src/providers/anthropic';
 import { completeViaChat, isCloudProvider, isRemoteUrl, resolveApiKey, setSecretValues, stripFences } from '../src/providers/cloud';
 import { retryAfter } from '../src/providers/http';
-import { retryDelayMs } from '../src/agent/resilience';
+import { modelRetryDelayMs, retryDelayMs } from '../src/agent/resilience';
 import { pickForRole } from '../src/providers/registry';
 import { buildProfile } from '../src/providers/system';
 import { bedrockRegion, bedrockUrl, PROVIDER_PRESETS, withRegion } from '../src/providers/presets';
@@ -61,7 +61,7 @@ import { estimateMessagesTokens } from '../src/context/tokenizer';
 import { ParallelPool } from '../src/agent/parallel';
 import { htmlToText } from '../src/tools/web';
 import { parseFrontMatter } from '../src/agent/skills';
-import { parseArgs } from '../src/tools/registry';
+import { parseArgs, parseToolArgs } from '../src/tools/registry';
 import { parseLinkTarget, preprocessFootnotes } from '../src/ui/markdown/render';
 import { ChatMessage, StreamEvent, Session, AgentEvent, Tool } from '../src/types';
 import { loopSafety } from './smokeLoopSafety';
@@ -78,7 +78,7 @@ import { toolsExtras } from './smokeToolsExtras';
 import { historySmoke } from './smokeHistory';
 import { continuitySmoke } from './smokeContinuity';
 import { conversationSmoke } from './smokeConversation';
-import { memorySmoke } from './smokeMemory';
+import { memorySmoke as continuityMemorySmoke } from './smokeMemory';
 import { contextSmoke } from './smokeContext';
 import { sessionSmoke } from './smokeSession';
 import { syncSmoke } from './smokeSync';
@@ -89,6 +89,7 @@ import { editorIntegration } from './smokeEditorIntegration';
 import { commandRuns } from './smokeCommandRun';
 import { mentions } from './smokeMentions';
 import { workspaceRoots } from './smokeWorkspaceRoots';
+import { webTools } from './smokeWeb';
 import { pricing } from './smokePricing';
 import { vscodeLm } from './smokeVscodeLm';
 import { cliSlash } from './smokeCliSlash';
@@ -515,6 +516,7 @@ async function cloudResilience() {
   const quota = new HttpError(429, '{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}', 'x');
   const credit = new HttpError(400, '{"type":"error","error":{"message":"Your credit balance is too low to access the Anthropic API."}}', 'x');
   check('classified: rate limit, quota (OpenAI and Anthropic), rejected key', classifyModelError(e429) === 'ratelimit' && classifyModelError(quota) === 'quota' && classifyModelError(credit) === 'quota' && classifyModelError(new HttpError(401, 'invalid x-api-key', 'x')) === 'auth');
+  check('model retries back off exponentially to 20 s and honour Retry-After', [1, 2, 3, 6].map((a) => modelRetryDelayMs('network', new Error('x'), a)).join() === '800,1600,3200,20000' && modelRetryDelayMs('server', e429, 1) === 7000 && modelRetryDelayMs('ratelimit', new HttpError(429, '', 'x'), 1) === 5000);
   check('rate-limit wait follows retry-after, defaults to 5 s, capped at 60 s', retryDelayMs('ratelimit', e429, 1, [800, 2500]) === 7000 && retryDelayMs('ratelimit', new HttpError(429, '', 'x'), 1, [800, 2500]) === 5000 && retryDelayMs('ratelimit', new HttpError(429, '', 'x', h({ 'retry-after': '600' })), 1, [800]) === 60000 && retryDelayMs('network', e429, 1, [800, 2500]) === 800);
   check('fences stripped from a fill-in-the-middle reply', stripFences('```ts\nreturn a + b;\n```') === 'return a + b;' && stripFences('a + b') === 'a + b');
 
@@ -839,6 +841,13 @@ async function pureLogic() {
   check('parses bare JSON tool call with nested braces in strings', bare.calls.length === 1 && JSON.parse(bare.calls[0].arguments).content === 'x = {"k": 1}\n' && bare.remainder === '', bare);
   check('known-tool filter rejects unknown names', extractTextToolCalls('{"name": "rm_rf", "arguments": {}}', new Set(['write_file'])).calls.length === 0);
   check('prose mentioning {"name": …} is left alone when not a real call', extractTextToolCalls('The schema is {"name": "x"} plus more text', new Set(['write_file'])).calls.length === 0);
+  {
+    const fixed = parseToolArgs("{'path': 'a.ts', recursive: true,}");
+    const broken = parseToolArgs('{"path": "a.ts" "x"');
+    check('tool args: broken JSON is repaired (and the repaired text kept) before giving up', fixed.args.path === 'a.ts' && fixed.args.recursive === true && JSON.parse(fixed.repaired ?? '').path === 'a.ts' && !fixed.invalid, fixed);
+    check('tool args: unrepairable JSON is reported as invalid, plain text stays a single argument', !!broken.invalid && Object.keys(broken.args).length === 0 && parseToolArgs('src/a.ts').args._raw === 'src/a.ts' && !parseToolArgs('src/a.ts').invalid, broken);
+    check('replayed tool-call arguments are always JSON for OpenAI-compatible servers', jsonArguments('{"a":1}') === '{"a":1}' && jsonArguments("{'a': 1,}") === '{"a":1}' && jsonArguments('{"a": ') === '{}' && jsonArguments('') === '{}' && jsonArguments('[1]') === '{}');
+  }
   check('parseArgs lenient', parseArgs('{"path": "a"} trailing').path === 'a' && Object.keys(parseArgs('')).length === 0);
   const broken = extractTextToolCalls('```tool_call\n{"name": "read_file", "arguments": {"path": "x.ts",}}\n```', new Set(['read_file']));
   check('explicit tool_call block with invalid JSON is reported, not swallowed', broken.calls.length === 0 && broken.malformed.length === 1 && /invalid JSON/.test(broken.malformed[0]), broken);
@@ -1352,6 +1361,18 @@ async function pureLogic() {
     let outside = '';
     try { resolveWorkspacePath('../elsewhere/x.js', rctx); } catch (e) { outside = String(e); }
     check('file paths reach registered repositories, not other folders', resolveWorkspacePath('../api/server.js', rctx).fsPath === nodePath.join(base, 'api', 'server.js') && /outside the workspace/.test(outside));
+    // Symbolic links inside the workspace that lead out of it: refused for existing files, new files and dangling links.
+    const outsideDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'lp-outside-'));
+    nodeFs.writeFileSync(nodePath.join(outsideDir, 'secret.txt'), 'x');
+    nodeFs.symlinkSync(outsideDir, nodePath.join(hub, 'escape'), 'dir');
+    nodeFs.symlinkSync(nodePath.join(outsideDir, 'gone.txt'), nodePath.join(hub, 'dangling.txt'));
+    nodeFs.symlinkSync(nodePath.join(base, 'api'), nodePath.join(hub, 'api-link'), 'dir');
+    const refused = (p: string) => { try { resolveWorkspacePath(p, rctx); return ''; } catch (e) { return String(e); } };
+    check('symlink escape: an existing file through a link to outside the workspace is refused', /outside the workspace/.test(refused('escape/secret.txt')), refused('escape/secret.txt'));
+    check('symlink escape: a new file through the link is refused too', /outside the workspace/.test(refused('escape/new/deep.txt')));
+    check('symlink escape: a dangling link pointing outside is refused', /outside the workspace/.test(refused('dangling.txt')));
+    check('symlink escape: a link into a registered repository and plain new files still resolve', refused('api-link/server.js') === '' && refused('brand/new.txt') === '');
+    nodeFs.rmSync(outsideDir, { recursive: true, force: true });
     const ro = await reposTool.execute({ action: 'exec', command: 'true' }, { ...rctx, readOnly: true } as never);
     check('exec refused in read-only modes', !!ro.isError);
     nodeFs.rmSync(base, { recursive: true, force: true });
@@ -2667,7 +2688,7 @@ async function healingSmokes() {
   historySmoke(check);
   await continuitySmoke(check);
   await conversationSmoke(check);
-  await memorySmoke(check);
+  await continuityMemorySmoke(check);
   await contextSmoke(check);
   await sessionSmoke(check);
   await syncSmoke(check);
@@ -2678,6 +2699,7 @@ async function healingSmokes() {
   await commandRuns(check);
   await mentions(check);
   await workspaceRoots(check);
+  await webTools(check);
   await pricing(check);
   vscodeLm(check);
   await cliSlash(check);

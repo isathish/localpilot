@@ -79,6 +79,28 @@ suite('Filesystem tools', () => {
     assert.strictEqual(displayPath(vscode.Uri.file('/somewhere/else.ts'), c), fsp('/somewhere/else.ts'), 'outside everything: absolute');
   });
 
+  test('resolveWorkspacePath refuses symbolic links that lead outside the workspace', async function () {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-outside-'));
+    try {
+      await fs.writeFile(path.join(outside, 'secret.txt'), 'x');
+      try {
+        await fs.symlink(outside, path.join(dir, 'escape'), 'dir');
+      } catch {
+        this.skip(); // Windows without the symlink privilege
+      }
+      const c = ctx();
+      assert.throws(() => resolveWorkspacePath(path.join(rel('escape'), 'secret.txt'), c), /outside the workspace/);
+      assert.throws(() => resolveWorkspacePath(path.join(rel('escape'), 'new.txt'), c), /outside the workspace/, 'files to create behind the link too');
+      // read_file refuses it (as a tool error, or by throwing, which the registry turns into one).
+      const read = await readFileTool.execute({ path: path.join(rel('escape'), 'secret.txt') }, c).then((r) => (r.isError ? r.content : `read: ${r.content}`), (e: Error) => e.message);
+      assert.match(read, /outside the workspace/);
+      assert.strictEqual(resolveWorkspacePath(rel('plain.txt'), c).fsPath, path.join(dir, 'plain.txt'), 'ordinary paths still resolve');
+    } finally {
+      await fs.rm(path.join(dir, 'escape'), { force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   test('write_file creates (with parents), overwrites, asks for approval and refuses directories', async () => {
     const c = ctx();
     let r = await writeFileTool.execute({ path: rel('deep/one/file.txt'), content: 'a\nb\nc' }, c);

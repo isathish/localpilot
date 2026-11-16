@@ -96,6 +96,23 @@ export function retryDelayMs(kind: ModelFailure, e: unknown, attempt: number, ba
   return Math.min(60_000, Math.max(base, asked ?? 5_000 * attempt));
 }
 
+/** Longest wait between two retries of a model request that we choose ourselves (a server's Retry-After may ask for more). */
+export const MODEL_RETRY_MAX_MS = 20_000;
+
+/**
+ * Wait before retry `attempt` (1-based) of a failed model request: exponential from 800 ms (0.8, 1.6, 3.2, 6.4, 12.8 s)
+ * up to {@link MODEL_RETRY_MAX_MS}. A server that says how long to wait (Retry-After on a 429 or 503) is honoured up
+ * to a minute; a rate limit without one waits at least 5 s per attempt.
+ */
+export function modelRetryDelayMs(kind: ModelFailure, e: unknown, attempt: number): number {
+  const base = Math.min(MODEL_RETRY_MAX_MS, 800 * 2 ** Math.max(0, attempt - 1));
+  const asked = e instanceof HttpError ? e.retryAfterMs : undefined;
+  if (asked !== undefined && asked > 0) {
+    return Math.min(60_000, Math.max(base, asked));
+  }
+  return kind === 'ratelimit' ? Math.min(MODEL_RETRY_MAX_MS, Math.max(base, 5_000 * attempt)) : base;
+}
+
 /** One-line, actionable wording for the chat; the raw message stays in the log. */
 export function describeModelError(kind: ModelFailure, raw: string, modelName: string): string {
   const detail = raw.replace(/^HTTP \d+ from \S+:\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 240);

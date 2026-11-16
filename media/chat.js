@@ -2920,7 +2920,7 @@
         let row = live.retryRow && live.retryRow.isConnected ? live.retryRow : null;
         if (!row) { rotateBody(live); row = el('div', 'note retry'); row.setAttribute('role', 'status'); live.root.insertBefore(row, live.body); live.retryRow = row; }
         row.className = 'note retry'; row.dataset.attempt = String(next);
-        row.innerHTML = `<span class="ico">${I.spin}</span><span>Retrying ${esc(next)}/${esc(total)}${esc(wait)}: ${esc(why)}${p.adjust ? ` (${esc(p.adjust)})` : ''}</span>`;
+        row.innerHTML = p.resume ? `<span class="ico">${I.spin}</span><span>Continuing the answer where it stopped${esc(wait)}: ${esc(why)}</span>` : `<span class="ico">${I.spin}</span><span>Retrying ${esc(next)}/${esc(total)}${esc(wait)}: ${esc(why)}${p.adjust ? ` (${esc(p.adjust)})` : ''}</span>`;
         row.title = String(p.message || '');
         noteStatus(sid, `Retrying (${p.attempt}/${p.max})…`); if (visible) { setStatus(`Retrying (${p.attempt}/${p.max})…`); }
         break;

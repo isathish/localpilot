@@ -173,13 +173,14 @@ A skill is preloaded when:
 - its name or a quoted trigger phrase appears in the request, or
 - it is pinned to the chat, or
 - you forced it with `/skill <name> …` or `/<name> …` (an enabled skill also runs as its own slash command and is listed under **Skills** in the `/` menu), or
-- the request is brief (24 words or fewer) and has exactly one looser match. This saves a model round trip; the note lets the model ignore the skill if it does not fit.
+- the request is brief (24 words or fewer) and has exactly one clear looser match: at least two specific words of the request in the skill's description and a minimum score. One shared word only gives a **May also apply** chip. This saves a model round trip; the note lets the model ignore the skill if it does not fit.
 
 Limits:
 
 - Preloaded text is capped at about a fifth of the model's context window (at most 24,000 characters), so a long playbook cannot crowd out the code.
 - A skill already in the conversation is not loaded twice.
 - Requests that name a tool directly ("use write_file to…") get no skill.
+- Questions about the conversation itself (*what did you reply in your previous message?*, *repeat your last answer*) get no skill.
 
 The turn shows **Using skill: name** chips for preloaded skills and **May also apply** chips for looser matches. The model may load a looser match with `load_skill` or ignore it.
 

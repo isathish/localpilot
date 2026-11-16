@@ -20,6 +20,7 @@ import { applyModelOverrides, isOpenRouterUrl, mergeHeaders, OPENROUTER_HEADERS,
 import { effortOf, openRouterReasoning } from './thinkingParams';
 import { ThinkTagSplitter } from './thinkTags';
 import { pairToolCalls } from './toolPairing';
+import { repairJson } from '../agent/healing/jsonRepair';
 
 /** Default provider labels that say nothing about the server actually answering (vLLM's port is also colibri's). */
 const STOCK_NAMES = /^(vllm( \/ unsloth)?|vllm-\d+)$/i;
@@ -552,6 +553,24 @@ function mistralToolCallIds(messages: Record<string, unknown>[]): void {
   }
 }
 
+/**
+ * Tool-call arguments as they are sent back to the server: always a JSON object text. A model's broken arguments are
+ * repaired when they can be, else replaced by `{}` (as the Anthropic adapter does): many servers reject the whole
+ * request when a replayed call's arguments do not parse, which would fail every later turn of the chat.
+ */
+export function jsonArguments(raw: string | undefined): string {
+  if (!raw || !raw.trim()) {
+    return '{}';
+  }
+  try {
+    const v: unknown = JSON.parse(raw);
+    return v && typeof v === 'object' && !Array.isArray(v) ? raw : '{}';
+  } catch {
+    const fixed = repairJson(raw);
+    return fixed.ok && fixed.value && typeof fixed.value === 'object' && !Array.isArray(fixed.value) ? JSON.stringify(fixed.value) : '{}';
+  }
+}
+
 /** `gemini`: Gemini 3 rejects a replayed tool call without its thought signature; calls from elsewhere skip the check. */
 function toOpenAIMessage(m: ChatMessage, gemini = false): Record<string, unknown> {
   if (m.role === 'tool') {
@@ -569,7 +588,7 @@ function toOpenAIMessage(m: ChatMessage, gemini = false): Record<string, unknown
   if (m.toolCalls?.length) {
     out.tool_calls = m.toolCalls.map((tc) => {
       const extra = tc.extra ?? (gemini ? { google: { thought_signature: 'skip_thought_signature_validator' } } : undefined);
-      return { id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.arguments }, ...(extra ? { extra_content: extra } : {}) };
+      return { id: tc.id, type: 'function', function: { name: tc.name, arguments: jsonArguments(tc.arguments) }, ...(extra ? { extra_content: extra } : {}) };
     });
     if (!m.content) {
       out.content = null;

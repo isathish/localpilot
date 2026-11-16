@@ -3579,15 +3579,18 @@ export class ChatController implements vscode.Disposable {
     if (images?.length) {
       // Routing sends an image turn to a vision model when the chat's own cannot see; refuse only when none can.
       let blind: string | undefined;
+      let notice: string | undefined;
       try {
-        const { model } = await this.providers.route({ modelRef: opts.modelRef ?? session.model, role: session.mode === 'plan' ? 'reasoning' : 'agent', needsVision: true, signal: control.signal });
+        const { model, visionNotice } = await this.providers.route({ modelRef: opts.modelRef ?? session.model, role: session.mode === 'plan' ? 'reasoning' : 'agent', needsVision: true, signal: control.signal });
         blind = model.supportsVision ? undefined : model.name;
+        // Only a cloud model could see them: say so rather than sending the images off the machine unasked.
+        notice = visionNotice;
       } catch {
         /* routing errors surface in the run itself */
       }
       if (blind || control.aborted) {
         if (blind && !control.aborted) {
-          this.broadcast({ type: 'toast', level: 'error', text: `${blind} cannot read images — pick a vision model, set localpilot.routing.vision (with routing on) or install one (gemma4, qwen2.5vl, llava…)` });
+          this.broadcast({ type: 'toast', level: 'error', text: notice ?? `${blind} cannot read images — pick a vision model, set localpilot.routing.vision (with routing on) or install one (gemma4, qwen2.5vl, llava…)` });
         }
         endEarly();
         this.broadcast({ type: 'sendRejected', sessionId });

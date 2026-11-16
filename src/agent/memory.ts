@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { TodoItem, Tool } from '../types';
 import { MEMORY_TYPES, normalizeType, TYPE_INFO } from '../continuity/memory/memoryTypes';
+import { scanText } from '../security/scan';
 
 export type MemoryScope = 'project' | 'global';
 
@@ -63,6 +64,14 @@ export interface MemoryWriteResult {
   droppedBlocks: number;
   /** Notes removed from the scope to stay under `memory.maxNotes`. */
   pruned: string[];
+}
+
+/** The agent tried to add a note to a scope that is full of notes it may not remove (written or edited by the user). */
+export class MemoryFullError extends Error {}
+
+/** The credentials found in a note (masked titles), or none. Notes are plain files, often committed: keep secrets out. */
+export function memorySecrets(name: string, content: string): string[] {
+  return scanText('note.md', `${name}\n${content}`, { secrets: true, code: false }).map((f) => f.title);
 }
 
 const lineKey = (l: string) => l.trim().replace(/^(?:[-*+]|\d+[.)])\s+/, '').replace(/\s+/g, ' ').toLowerCase();
@@ -145,6 +154,11 @@ export class MemoryStore {
   onChange?: MemoryChangeListener;
   /** The 1.7 memory types (conversation, task, knowledge, agent); set by continuity when it is open. */
   typed?: TypedMemory;
+  /**
+   * Notes the agent created (file path -> modification time of its last write). Only these may be pruned, and only
+   * while untouched since: a note the user wrote, or edited by hand after the agent, has another time and is kept.
+   */
+  private agentNotes?: Record<string, number>;
 
   constructor(
     private readonly globalDir: vscode.Uri,
@@ -162,6 +176,45 @@ export class MemoryStore {
     } catch (e) {
       this.log.warn(`memory: change listener failed: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  private authorsUri(): vscode.Uri {
+    return vscode.Uri.joinPath(this.globalDir, 'memory-agent-notes.json');
+  }
+
+  private async loadAgentNotes(): Promise<Record<string, number>> {
+    if (!this.agentNotes) {
+      try {
+        const raw = JSON.parse(Buffer.from(await vscode.workspace.fs.readFile(this.authorsUri())).toString('utf8')) as unknown;
+        this.agentNotes = raw && typeof raw === 'object' && !Array.isArray(raw) ? Object.fromEntries(Object.entries(raw).filter(([, v]) => typeof v === 'number')) : {};
+      } catch {
+        this.agentNotes = {};
+      }
+    }
+    return this.agentNotes;
+  }
+
+  private async saveAgentNotes(): Promise<void> {
+    try {
+      await vscode.workspace.fs.createDirectory(this.globalDir);
+      await vscode.workspace.fs.writeFile(this.authorsUri(), Buffer.from(JSON.stringify(this.agentNotes ?? {}), 'utf8'));
+    } catch (e) {
+      this.log.warn(`memory: could not record which notes the agent wrote: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  private static async mtime(uri: vscode.Uri): Promise<number | undefined> {
+    try {
+      return (await vscode.workspace.fs.stat(uri)).mtime;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** True when the agent created the note at `fsPath` and nobody has edited it since (so pruning may remove it). */
+  private async agentOwned(fsPath: string, mtime: number | undefined): Promise<boolean> {
+    const at = (await this.loadAgentNotes())[fsPath];
+    return at !== undefined && mtime !== undefined && at === mtime;
   }
 
   /** The folder of a scope (undefined: no workspace folder for project memory). */
@@ -261,7 +314,9 @@ export class MemoryStore {
 
   /**
    * Saves a note. Appends skip lines the note already has, notes over `maxNoteChars` lose their oldest paragraphs,
-   * and when a scope holds more than `maxNotes` the least recently updated ones are removed (README is kept).
+   * and when a scope holds more than `maxNotes` the least recently updated notes the agent created are removed (README
+   * and notes the user wrote or edited are never removed). An agent save (`agent` / `auto`) that would add a note to a
+   * scope full of such notes is refused with a {@link MemoryFullError}.
    */
   async write(name: string, content: string, scope: MemoryScope, mode: 'replace' | 'append' = 'replace', source?: 'user' | 'agent' | 'auto'): Promise<MemoryWriteResult> {
     const dir = this.dir(scope);
@@ -271,6 +326,25 @@ export class MemoryStore {
     await vscode.workspace.fs.createDirectory(dir);
     const uri = mode === 'append' ? await this.resolve(dir, name) : vscode.Uri.joinPath(dir, `${this.safeName(name)}.md`);
     const lim = this.limits?.();
+    const byAgent = source === 'agent' || source === 'auto';
+    const before = await MemoryStore.mtime(uri);
+    if (byAgent && lim && before === undefined) {
+      const notes = (await this.list()).filter((n) => n.scope === scope);
+      const excess = notes.length + 1 - lim.maxNotes;
+      if (excess > 0) {
+        let removable = 0;
+        for (const n of notes) {
+          if (n.name.toLowerCase() !== 'readme' && (await this.agentOwned(vscode.Uri.joinPath(dir, `${n.name}.md`).fsPath, n.updatedAt))) {
+            removable++;
+          }
+        }
+        if (removable < excess) {
+          throw new MemoryFullError(
+            `Memory is full: ${scope} memory holds ${notes.length} notes (limit ${lim.maxNotes}) and the agent may only remove notes it wrote itself, never ones you wrote or edited. Add this to an existing note with mode "append", or ask the user to delete or merge notes or raise localpilot.memory.maxNotes.`
+          );
+        }
+      }
+    }
     // Appends are read-modify-write: serialise writes to the same note so concurrent ones do not lose lines.
     const r = await this.withLock(uri.toString(), async () => {
       let text = content.trim() + '\n';
@@ -295,11 +369,23 @@ export class MemoryStore {
       return { path: uri.fsPath, unchanged: true, duplicateLines: r.duplicateLines, droppedBlocks: 0, pruned: [] };
     }
     const { duplicateLines, fit } = r;
+    const owners = await this.loadAgentNotes();
+    const after = await MemoryStore.mtime(uri);
+    // The agent owns what it creates and keeps owning a note only while nobody else touched it in between.
+    if (byAgent && after !== undefined && (before === undefined || owners[uri.fsPath] === before)) {
+      owners[uri.fsPath] = after;
+    } else {
+      delete owners[uri.fsPath];
+    }
+    await this.saveAgentNotes();
     const pruned = lim ? await this.prune(scope, lim.maxNotes, path.basename(uri.path)) : [];
     return { path: uri.fsPath, unchanged: false, duplicateLines, droppedBlocks: fit.dropped, pruned };
   }
 
-  /** Removes the least recently updated notes beyond `max` in a scope; never README or the file `keep`. */
+  /**
+   * Removes the least recently updated notes beyond `max` in a scope, only among the notes the agent created and nobody
+   * edited since; never README, the file `keep` or a note the user wrote.
+   */
   private async prune(scope: MemoryScope, max: number, keep: string): Promise<string[]> {
     const dir = this.dir(scope);
     const notes = (await this.list()).filter((n) => n.scope === scope);
@@ -313,16 +399,21 @@ export class MemoryStore {
       if (removed.length >= notes.length - max) {
         break;
       }
+      if (!(await this.agentOwned(vscode.Uri.joinPath(dir, `${n.name}.md`).fsPath, n.updatedAt))) {
+        continue;
+      }
       try {
         await vscode.workspace.fs.delete(vscode.Uri.joinPath(dir, `${n.name}.md`));
         this.cache.delete(vscode.Uri.joinPath(dir, `${n.name}.md`).toString());
         this.changed(vscode.Uri.joinPath(dir, `${n.name}.md`), scope, 'delete');
         removed.push(n.name);
+        delete this.agentNotes?.[vscode.Uri.joinPath(dir, `${n.name}.md`).fsPath];
       } catch {
         /* try the next candidate */
       }
     }
     if (removed.length) {
+      await this.saveAgentNotes();
       this.log.info(`memory: ${scope} holds more than ${max} notes — removed the oldest: ${removed.join(', ')}`);
     }
     return removed;
@@ -339,6 +430,10 @@ export class MemoryStore {
       await vscode.workspace.fs.delete(uri);
       this.cache.delete(uri.toString());
       this.changed(uri, scope, 'delete');
+      if ((await this.loadAgentNotes())[uri.fsPath] !== undefined) {
+        delete this.agentNotes?.[uri.fsPath];
+        await this.saveAgentNotes();
+      }
       return true;
     } catch {
       return false;
@@ -515,6 +610,14 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
     async execute(args, ctx) {
       const type = toolType(args) ?? 'project';
       const mode = args.mode === 'append' ? 'append' : 'replace';
+      // The same credential scan automatic memory applies: notes are plain files, often committed and shared.
+      const secrets = memorySecrets(String(args.name ?? ''), String(args.content ?? ''));
+      if (secrets.length) {
+        return {
+          content: `Not saved: the note contains what looks like a secret (${secrets.join('; ')}). Memory is stored as plain text and may be committed or sent to other models; never save credentials. Describe where the secret lives instead (for example "the API key is in the OPENAI_API_KEY environment variable").`,
+          isError: true,
+        };
+      }
       if (LOG_ONLY(type)) {
         if (!memory.typed) {
           return { content: NO_TYPED(type), isError: true };
@@ -526,14 +629,22 @@ export function createMemoryTools(memory: MemoryStore): Tool[] {
         }
       }
       const scope = type === 'developer' ? 'global' : 'project';
-      const r = await memory.write(String(args.name), String(args.content ?? ''), scope, mode, 'agent');
+      let r: MemoryWriteResult;
+      try {
+        r = await memory.write(String(args.name), String(args.content ?? ''), scope, mode, 'agent');
+      } catch (e) {
+        if (e instanceof MemoryFullError) {
+          return { content: e.message, isError: true };
+        }
+        throw e;
+      }
       if (r.unchanged) {
         return { content: `Memory "${args.name}" (${scope}) already has all of this; nothing was added.` };
       }
       const notes = [
         r.duplicateLines ? `skipped ${r.duplicateLines} line(s) it already had` : '',
         r.droppedBlocks ? `dropped ${r.droppedBlocks} of its oldest paragraph(s) or line(s) to stay under the size limit — keep notes short` : '',
-        r.pruned.length ? `removed the oldest notes to stay under the note limit: ${r.pruned.join(', ')}` : '',
+        r.pruned.length ? `removed the oldest notes you saved earlier to stay under the note limit: ${r.pruned.join(', ')}` : '',
       ].filter(Boolean);
       return { content: `Saved memory "${args.name}" (${scope}) → ${vscode.workspace.asRelativePath(r.path)}${notes.length ? ` (${notes.join('; ')})` : ''}` };
     },

@@ -4,7 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { AutoReviewer, hardRisk, parseVerdict } from '../agent/autoReviewer';
-import { fitNote, MemoryStore, newLines } from '../agent/memory';
+import { createMemoryTools, fitNote, MemoryStore, newLines } from '../agent/memory';
+import type { ToolContext } from '../types';
 import { QueueTask, TaskQueue } from '../agent/taskQueue';
 import { backoffMs, MAX_FAILURES, ServiceSupervisor } from '../providers/supervisor';
 import type { ProviderRegistry } from '../providers/registry';
@@ -254,6 +255,66 @@ suite('Memory limits', () => {
     assert.ok(f.text.length <= 100);
     assert.ok(f.text.trimEnd().endsWith('last line'));
     assert.ok(f.dropped > 0);
+  });
+
+  test('memory_save refuses a note that contains a secret', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-mem-'));
+    try {
+      const log = { info: () => undefined, warn: () => undefined, error: () => undefined } as unknown as vscode.LogOutputChannel;
+      const memory = new MemoryStore(vscode.Uri.file(tmp), log);
+      const save = createMemoryTools(memory).find((t) => t.definition.name === 'memory_save')!;
+      const c = { sessionId: 's' } as unknown as ToolContext;
+      const token = 'gh' + 'p_' + 'x1Y2'.repeat(10);
+      const r = await save.execute({ name: 'deploy', scope: 'global', content: `- deploy with token ${token}` }, c);
+      assert.ok(r.isError && /looks like a secret/.test(r.content) && !r.content.includes(token), r.content);
+      assert.strictEqual(await memory.read('deploy', 'global'), undefined, 'nothing was written');
+      const typed = await save.execute({ name: 'k', type: 'knowledge', content: `password = "${'Zq8#' + 'r7Lp!m2Vw9'}"` }, c);
+      assert.ok(typed.isError && /looks like a secret/.test(typed.content), 'every memory type is scanned');
+      const ok = await save.execute({ name: 'deploy', scope: 'global', content: '- the token is in the GH_TOKEN environment variable' }, c);
+      assert.ok(!ok.isError, ok.content);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('agent saves prune only notes the agent wrote; user notes are never removed', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lp-mem-'));
+    try {
+      const dir = path.join(tmp, 'memory');
+      await fs.mkdir(dir);
+      const log = { info: () => undefined, warn: () => undefined, error: () => undefined } as unknown as vscode.LogOutputChannel;
+      const memory = new MemoryStore(vscode.Uri.file(tmp), log, () => ({ maxNoteChars: 4000, maxNotes: 5 }));
+      const later = async () => new Promise((r) => setTimeout(r, 20));
+      // Three notes the user wrote by hand (the oldest), two through the store as the user.
+      for (const n of ['hand-a', 'hand-b', 'hand-c']) {
+        await fs.writeFile(path.join(dir, `${n}.md`), `- ${n} written by the user\n`);
+        await later();
+      }
+      await memory.write('agent-1', '- first agent fact', 'global', 'replace', 'agent');
+      await later();
+      await memory.write('agent-2', '- second agent fact', 'global', 'replace', 'agent');
+      await later();
+      // The user edits agent-2 by hand: from now on it is theirs.
+      await fs.writeFile(path.join(dir, 'agent-2.md'), '- second agent fact, corrected by the user\n');
+      await later();
+      const r = await memory.write('agent-3', '- third agent fact', 'global', 'replace', 'agent');
+      assert.deepStrictEqual(r.pruned, ['agent-1'], 'only the untouched agent note goes, although the hand-written ones are older');
+      const names = (await memory.list()).map((n) => n.name).sort();
+      assert.deepStrictEqual(names, ['agent-2', 'agent-3', 'hand-a', 'hand-b', 'hand-c']);
+      // Replace agent-3's content as the user through the store (the Memory panel): no longer the agent's.
+      await memory.write('agent-3', '- third fact, rewritten by the user', 'global', 'replace', 'user');
+      await later();
+      await assert.rejects(memory.write('agent-4', '- fourth agent fact', 'global', 'replace', 'agent'), /Memory is full/);
+      const save = createMemoryTools(memory).find((t) => t.definition.name === 'memory_save')!;
+      const refused = await save.execute({ name: 'agent-5', scope: 'global', content: '- fifth' }, { sessionId: 's' } as unknown as ToolContext);
+      assert.ok(refused.isError && /Memory is full/.test(refused.content) && /never ones you wrote/.test(refused.content), refused.content);
+      assert.deepStrictEqual((await memory.list()).map((n) => n.name).sort(), names, 'nothing the user wrote was deleted');
+      // Updating an existing note is still fine when full.
+      const upd = await memory.write('agent-2', '- more', 'global', 'append', 'agent');
+      assert.ok(!upd.unchanged && upd.pruned.length === 0);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   test('hand-written notes with spaces and capitals can be read and deleted', async () => {

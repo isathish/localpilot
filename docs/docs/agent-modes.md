@@ -29,15 +29,17 @@ Pick **Auto** at the top of the mode picker (`/mode auto`, or `--auto` in the CL
 | asks a question (*Is this function pure?*) | Ask (a short question with nothing attached goes to a small, fast model) |
 | asks for an explanation (*How does the router work?*) | Explain |
 | is about the whole project (*Give me an overview of this repo*) | Project |
-| asks for a plan (*How should we add OAuth?*) | Plan |
+| asks for a plan (*How should we add OAuth?*, *Make a plan for the migration*) | Plan |
 | asks for a design (*Design the architecture for plugins*) | Architect |
 | asks for a review (*Review my changes*) | Review |
-| describes an error (*TypeError in checkout.ts*, *the login page is broken*) | Debug |
+| reports a failure (*TypeError in checkout.ts*, *the login page is broken*, *fix the failing test*) | Debug |
 | asks for tests (*Write tests for the parser*) | Test |
 | asks to restructure code (*Refactor the payment module*) | Refactor |
 | asks to run commands (*Run npm install and start the server*) | Terminal |
 | lists three or more independent tasks, or says *in parallel* | Multitask |
 | asks for any other change (*Add a dark mode toggle*) | Agent |
+
+The choice reads the message for intent. A message that opens with a build verb is a change, whatever nouns follow: *Implement the plan* and *Add a retry strategy* run in Agent, *Add error handling* too, and *Write tests for the error parser* in Test. Plan needs planning intent (*plan how*, *make a plan*, *what's the best approach*), not the word "plan" alone, and Debug needs a failure you report, not the word "error" as part of a feature's name.
 
 The choice is made on your machine from the message, its attachments and the errors in the Problems panel, with no model call. Slash commands, `/deep-planning` and resumed runs keep their own mode. Without a folder, choices that would edit files run in Ask.
 

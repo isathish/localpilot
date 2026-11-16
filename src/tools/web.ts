@@ -35,18 +35,26 @@ export const webSearchTool: Tool = {
       return { content: 'User declined the web search.', isError: true };
     }
     let hits: SearchHit[];
-    switch (cfg.provider) {
-      case 'searxng':
-        hits = await searxng(query, cfg.searxngUrl ?? 'http://localhost:8888', max, ctx.signal);
-        break;
-      case 'brave':
-        hits = await brave(query, resolveApiKey({ apiKey: cfg.apiKey }) ?? '', max, ctx.signal);
-        break;
-      case 'tavily':
-        hits = await tavily(query, resolveApiKey({ apiKey: cfg.apiKey }) ?? '', max, ctx.signal);
-        break;
-      default:
-        hits = await duckduckgo(query, max, ctx.signal);
+    try {
+      switch (cfg.provider) {
+        case 'searxng':
+          hits = await searxng(query, cfg.searxngUrl ?? 'http://localhost:8888', max, ctx.signal);
+          break;
+        case 'brave':
+          hits = await brave(query, resolveApiKey({ apiKey: cfg.apiKey }) ?? '', max, ctx.signal);
+          break;
+        case 'tavily':
+          hits = await tavily(query, resolveApiKey({ apiKey: cfg.apiKey }) ?? '', max, ctx.signal);
+          break;
+        default:
+          hits = await duckduckgo(query, max, ctx.signal);
+      }
+    } catch (e) {
+      if (ctx.signal.aborted) {
+        throw e;
+      }
+      // A blocked or failed search is not "no results": say what happened so the model does not conclude nothing exists.
+      return { content: `Web search failed: ${e instanceof Error ? e.message : String(e)}`, isError: true };
     }
     if (!hits.length) {
       return { content: `No results for "${query}".` };
@@ -84,24 +92,101 @@ export const webFetchTool: Tool = {
   },
 };
 
+/** Content types web_fetch reads as text; anything else that names a type is binary (images, archives, PDFs, media). */
+export function isTextContentType(ct: string): boolean {
+  const t = ct.split(';')[0].trim().toLowerCase();
+  return !t || t.startsWith('text/') || /^application\/(json|xml|xhtml\+xml|javascript|ecmascript|x-javascript|x-yaml|yaml|toml|x-toml|ld\+json|graphql|x-www-form-urlencoded|x-ndjson|ndjson|csv|x-sh|x-httpd-php|rtf)$/.test(t) || /\+(json|xml)$/.test(t);
+}
+
+/** Most bytes of a response body web_fetch reads: enough for `max` characters of text out of a heavy HTML page. */
+export function fetchByteCap(maxChars: number): number {
+  return Math.min(8 * 1024 * 1024, Math.max(1024 * 1024, maxChars * 16));
+}
+
+/** The body's first `cap` bytes as text (the rest is never downloaded), and whether it was cut. */
+async function readCapped(res: Response, cap: number): Promise<{ text: string; cut: boolean }> {
+  const charset = /charset=["']?([\w-]+)/i.exec(res.headers.get('content-type') ?? '')?.[1];
+  const decoder = (() => {
+    try {
+      return new TextDecoder(charset || 'utf-8');
+    } catch {
+      return new TextDecoder('utf-8'); // a label Node does not know
+    }
+  })();
+  if (!res.body) {
+    const all = await res.text();
+    return { text: all.slice(0, cap), cut: all.length > cap };
+  }
+  const reader = res.body.getReader();
+  const parts: string[] = [];
+  let read = 0;
+  let cut = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      const room = cap - read;
+      const chunk = value.byteLength > room ? value.subarray(0, room) : value;
+      parts.push(decoder.decode(chunk, { stream: true }));
+      read += chunk.byteLength;
+      if (read >= cap) {
+        cut = true;
+        break;
+      }
+    }
+  } finally {
+    if (cut) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+  parts.push(decoder.decode());
+  return { text: parts.join(''), cut };
+}
+
 /** A page as readable text (HTML converted), cut at `max` characters; also used for `@https://…` mentions. */
 export async function fetchReadable(url: string, max: number, signal?: AbortSignal): Promise<{ text: string; error?: string }> {
   const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'text/html,application/json,text/plain,*/*' }, signal: withTimeout(20_000, signal), redirect: 'follow' });
   if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
     return { text: '', error: `HTTP ${res.status} ${res.statusText}` };
   }
   const ct = res.headers.get('content-type') ?? '';
-  const raw = await res.text();
-  const text = ct.includes('html') ? htmlToText(raw) : raw;
-  return { text: text.length > max ? text.slice(0, max) + `\n\n[truncated ${text.length - max} chars]` : text };
+  if (!isTextContentType(ct)) {
+    await res.body?.cancel().catch(() => undefined);
+    const size = Number(res.headers.get('content-length'));
+    return { text: '', error: `${url} is not a text page (${ct.split(';')[0].trim()}${size > 0 ? `, ${(size / 1024).toFixed(0)} KB` : ''}), so it was not read. web_fetch reads HTML, text and JSON; download a file like this with a command instead${/pdf/i.test(ct) ? ' and read it with read_pdf' : ''}.` };
+  }
+  // Streamed with a byte cap: a huge page or an endless stream never fills memory before it is cut to `max`.
+  const body = await readCapped(res, fetchByteCap(max));
+  if (!ct && /\u0000/.test(body.text.slice(0, 4096))) {
+    return { text: '', error: `${url} returned binary data without a content type, so it was not read.` };
+  }
+  const text = ct.includes('html') ? htmlToText(body.text) : body.text;
+  if (text.length > max) {
+    return { text: text.slice(0, max) + `\n\n[truncated ${text.length - max}${body.cut ? '+' : ''} chars]` };
+  }
+  return { text: body.cut ? `${text}\n\n[truncated: the page is larger than ${(fetchByteCap(max) / 1024 / 1024).toFixed(0)} MB]` : text };
 }
 
-async function duckduckgo(q: string, max: number, signal: AbortSignal): Promise<SearchHit[]> {
-  const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
+/** DuckDuckGo's HTML results. A refusal (an HTTP error, or its bot check, served as 202) is an error, not "no results". */
+export async function duckduckgo(q: string, max: number, signal: AbortSignal, base = 'https://html.duckduckgo.com'): Promise<SearchHit[]> {
+  const res = await fetch(`${base.replace(/\/+$/, '')}/html/?q=${encodeURIComponent(q)}`, {
     headers: { 'user-agent': UA, accept: 'text/html' },
     signal: withTimeout(15_000, signal),
   });
+  const advice = 'try again in a minute, or set localpilot.webSearch.provider to searxng, brave or tavily';
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new Error(`DuckDuckGo answered HTTP ${res.status}${res.status === 429 || res.status === 403 ? ' (rate limited or blocked)' : ''} — ${advice}.`);
+  }
   const html = await res.text();
+  if (res.status === 202 || (/anomaly-modal|anomaly\.js|challenge-form/i.test(html) && !/class="result__a"/.test(html))) {
+    throw new Error(`DuckDuckGo blocked the search with a bot check (HTTP ${res.status}) — ${advice}.`);
+  }
   const hits: SearchHit[] = [];
   const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
   let m: RegExpExecArray | null;
@@ -118,6 +203,9 @@ async function duckduckgo(q: string, max: number, signal: AbortSignal): Promise<
 
 async function searxng(q: string, base: string, max: number, signal: AbortSignal): Promise<SearchHit[]> {
   const res = await fetch(`${base.replace(/\/+$/, '')}/search?q=${encodeURIComponent(q)}&format=json`, { headers: { 'user-agent': UA }, signal: withTimeout(15_000, signal) });
+  if (!res.ok) {
+    throw new Error(`SearXNG at ${base} answered HTTP ${res.status}${res.status === 403 ? ' (is the JSON format enabled in its settings.yml?)' : ''}.`);
+  }
   const json = (await res.json()) as { results?: { title: string; url: string; content?: string }[] };
   return (json.results ?? []).slice(0, max).map((r) => ({ title: r.title, url: r.url, snippet: r.content ?? '' }));
 }

@@ -127,6 +127,10 @@ export interface LocalPilotConfig {
   maxToolOutputChars: number;
   /** Tool steps in a row that may all fail before the run stops and asks for guidance; 0 = no limit. */
   maxConsecutiveMistakes: number;
+  /** Model steps (answers, each possibly calling tools) a top-level run may take before it stops; subagents keep a lower cap. */
+  maxIterations: number;
+  /** The agent loop's model requests: transient failures (dropped connection, 5xx, 429, stall) retried this often, 0-8. */
+  agent: { modelRetries: number };
   /** Self-healing: detect, classify, fix and re-check failures within budgets. */
   healing: HealingConfig;
   /** Tools never offered to the model: our names, Claude Code / Cline names, or globs (`mcp_*`, `browser_*`). */
@@ -214,6 +218,8 @@ export interface LocalPilotConfig {
   edit: { reportNewErrors: boolean };
   /** `provider/model` ids hidden from pickers and routing. */
   disabledModels: string[];
+  /** Automatic model picks (Auto, routing roles, fallback, vision, completions, subagents) only ever choose local models. */
+  localOnlyModels: boolean;
   /** Offer to install Ollama + a starter model when no local model is found. */
   autoSetupModels: boolean;
   /** Detect vague requests and give the agent a workspace snapshot to resolve them before acting. */
@@ -278,6 +284,8 @@ export function getConfig(): LocalPilotConfig {
     webEnabled: c.get<boolean>('webSearch.enabled', true) !== false,
     preferredLanguage: (c.get<string>('preferredLanguage', 'auto') ?? 'auto').trim() || 'auto',
     maxToolOutputChars: c.get<number>('maxToolOutputChars', 24000),
+    maxIterations: (() => { const n = Number(c.get<number>('maxIterations', 40)); return Number.isFinite(n) ? Math.max(5, Math.min(500, Math.floor(n))) : 40; })(),
+    agent: { modelRetries: (() => { const n = Number(c.get<number>('agent.modelRetries', 3)); return Number.isFinite(n) ? Math.max(0, Math.min(8, Math.floor(n))) : 3; })() },
     maxConsecutiveMistakes: (() => { const n = Number(c.get<number>('maxConsecutiveMistakes', 6)); return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 6; })(),
     healing: parseHealingConfig(<T>(key: string, def: T) => c.get<T>(key, def) as T),
     disabledTools: (c.get<string[]>('disabledTools', []) ?? []).filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim()),
@@ -416,6 +424,7 @@ export function getConfig(): LocalPilotConfig {
     },
     edit: { reportNewErrors: c.get<boolean>('edit.reportNewErrors', true) },
     disabledModels: (c.get<string[]>('models.disabled', []) ?? []).filter((s) => typeof s === 'string'),
+    localOnlyModels: c.get<boolean>('models.localOnly', false) === true,
     autoSetupModels: c.get<boolean>('models.autoSetup', true),
     autoClarify: c.get<boolean>('autoClarify', true),
     autoTune: (['auto', 'suggest', 'off'] as const).find((m) => m === c.get<string>('models.autoTune', 'auto')) ?? 'auto',

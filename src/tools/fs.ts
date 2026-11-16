@@ -122,6 +122,38 @@ export function excludedRefusal(p: unknown, ctx: ToolContext, resolved?: vscode.
   }
 }
 
+/**
+ * The real path of `p` with symbolic links resolved: of `p` itself when it exists, else of its nearest existing parent
+ * with the rest appended (a file about to be created). Undefined when nothing on the way exists or it cannot be read.
+ */
+export function realPathOf(p: string, hops = 0): string | undefined {
+  let dir = path.resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(nodeFs.realpathSync.native(dir), ...rest.reverse());
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        return undefined;
+      }
+      // A dangling link: where it points decides, so read it rather than walk past it.
+      try {
+        const target = nodeFs.readlinkSync(dir);
+        return hops > 32 ? undefined : realPathOf(path.join(path.resolve(path.dirname(dir), target), ...rest.reverse()), hops + 1);
+      } catch {
+        /* not a link */
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return undefined;
+    }
+    rest.push(path.basename(dir));
+    dir = parent;
+  }
+}
+
 export function resolveWorkspacePath(p: string, ctx: ToolContext): vscode.Uri {
   return resolveToolPath(p, ctx).uri;
 }
@@ -154,6 +186,11 @@ export function resolveToolPath(p: string, ctx: ToolContext, create = false): { 
   const inside = roots.some((r) => isWithin(normalized, r));
   if (!inside) {
     throw new Error(`Path is outside the workspace: ${p}`);
+  }
+  // The string check alone lets a symlink inside the workspace (`link -> /etc`) reach anything: compare real paths too.
+  const real = realPathOf(normalized);
+  if (real && !roots.some((r) => isWithin(real, realPathOf(r) ?? r))) {
+    throw new Error(`Path is outside the workspace (a symbolic link leads to ${real}): ${p}`);
   }
   return { uri: vscode.Uri.file(normalized), note: resolved.note };
 }

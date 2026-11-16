@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { clampSkillBody, createSkillPrompt, namesTool, recommendSkills, SkillLearner, skillHint, skillPreloadNote, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
+import { aboutConversation, clampSkillBody, createSkillPrompt, namesTool, recommendSkills, shouldPreload, SkillLearner, skillHint, skillPreloadNote, slugFor, tokenize, topicKey, triggers } from '../agent/skillRecommender';
 import { normalizeSkillName, SkillManager } from '../agent/skills';
 import { setSkillEnabled } from '../config';
 import * as vscode from 'vscode';
@@ -54,6 +54,31 @@ suite('Skill recommendation', () => {
     assert.strictEqual(recommendSkills('fix this bug', [...SKILLS, debugLike])[0]?.name, 'debug', 'task verbs are not stop words');
     assert.strictEqual(recommendSkills('set up CI/CD for this repo', [...SKILLS, ciLike])[0]?.name, 'deploy', 'verbatim phrase match works without content words');
     assert.ok(!recommendSkills('ship the relationship diagram to the docs folder', SKILLS).some((m) => m.name === 'deploy'), 'whole-word trigger match only');
+  });
+
+  test('preload: a strong match or a clear single match of a brief request; never a weak one or a question about the chat', () => {
+    // The "ship" skill a user's catalog had: one shared word ("code") was enough to preload it for a question about the chat.
+    const ship = { name: 'ship', description: 'Finish and hand off a change: tidy the diff, write the commit message and PR description, reply to review comments on the code. Use for "commit", "open a PR".' };
+    const skills = [...SKILLS, ship];
+    const chat = 'What exact code did you reply with in your previous message?';
+    assert.strictEqual(shouldPreload(chat, [{ name: 'ship', description: ship.description, score: 4, concepts: 2 }]), false, 'never for a question about the conversation itself');
+    assert.strictEqual(shouldPreload(chat, recommendSkills(chat, skills)), false);
+    for (const q of ['Repeat your last answer', 'What did you just say about the cache?', 'Summarize this conversation so far', 'Show the code from your earlier reply again']) {
+      assert.ok(aboutConversation(q), q);
+      assert.strictEqual(shouldPreload(q, [{ name: 'ship', description: '', score: 9, strong: true, concepts: 3 }]), false, `${q}: not even a strong match`);
+    }
+    assert.ok(!aboutConversation('Write a commit message for my changes'));
+    // A weak single match (one specific word, or a low score) is hinted, not preloaded.
+    assert.strictEqual(shouldPreload('tidy this', [{ name: 'ship', description: '', score: 2.6, concepts: 1 }]), false, 'one shared word');
+    assert.strictEqual(shouldPreload('clean the diff', [{ name: 'ship', description: '', score: 2.8, concepts: 2 }]), false, 'below the minimum score');
+    // Strong matches and clear brief matches still preload.
+    assert.strictEqual(shouldPreload('commit my changes', recommendSkills('commit my changes', skills)), true);
+    assert.strictEqual(shouldPreload('write tests for the parser module', recommendSkills('write tests for the parser module', skills)), true);
+    assert.strictEqual(shouldPreload('the spacing and typography look off', [{ name: 'ui-design', description: '', score: 4.2, concepts: 2 }]), true, 'a clear single match of a brief request');
+    assert.strictEqual(shouldPreload('x', [{ name: 'a', description: '', score: 5, concepts: 2 }, { name: 'b', description: '', score: 4, concepts: 2 }]), false, 'two candidates: hint, do not guess');
+    assert.strictEqual(shouldPreload('anything', []), false);
+    const m = recommendSkills('the spacing and typography on the settings page look off, improve the layout', SKILLS)[0];
+    assert.ok((m?.concepts ?? 0) >= 2, 'matches report how many specific words they shared');
   });
 
   test('keeps only runners-up in the same league as the best match', () => {

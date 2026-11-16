@@ -24,6 +24,8 @@ export interface SkillMatch {
   score: number;
   /** The skill's name or one of its quoted trigger phrases occurs in the request — not just shared description words. */
   strong?: boolean;
+  /** Distinct specific words of the request the skill matched (generic task words not counted). */
+  concepts?: number;
 }
 
 const STOP = new Set(
@@ -183,12 +185,51 @@ export function recommendSkills(request: string, skills: SkillLike[], max = 3, o
       evidence++;
     }
     if (evidence > 0 && score >= 2.5 && (opts.search || strong || concepts.size >= 2 || (concepts.size === 1 && !nameHits.length))) {
-      out.push({ name: s.name, description: s.description, score: Math.round(score * 10) / 10, strong });
+      out.push({ name: s.name, description: s.description, score: Math.round(score * 10) / 10, strong, concepts: concepts.size });
     }
   }
   // Only keep runners-up that are in the same league as the best match; weak tails are noise in the UI and the prompt.
   const ranked = out.sort((a, b) => b.score - a.score);
   return ranked.filter((m, i) => i === 0 || m.score >= ranked[0].score * 0.5).slice(0, max);
+}
+
+/** Requests of at most this many words count as brief: a single clear (not strong) match may be preloaded for them. */
+export const BRIEF_REQUEST_WORDS = 24;
+/** A brief request's only match is preloaded when it scores at least this and matched at least two specific words. */
+export const BRIEF_PRELOAD_MIN_SCORE = 3.5;
+export const BRIEF_PRELOAD_MIN_CONCEPTS = 2;
+
+/**
+ * A question about the conversation itself ("what did you reply in your previous message?", "repeat your last
+ * answer"): it is answered from the transcript, and a playbook preloaded on a stray word would only get in the way.
+ */
+export function aboutConversation(request: string): boolean {
+  const t = userText(request);
+  return (
+    /\b(you|your|i|my)\b[^.?!]{0,50}\b(previous|last|earlier|prior|above|first|second)\s+(message|reply|replies|answer|response|turn|question|prompt)s?\b/i.test(t) ||
+    /\b(previous|last|earlier|prior)\s+(message|reply|answer|response|turn)\b/i.test(t) ||
+    /\bwhat (did|have) (you|i) (just )?(say|said|write|written|wrote|reply|replied|answer|answered|ask|asked|suggest|suggested|tell|told)\b/i.test(t) ||
+    /\b(repeat|recap|summari[sz]e|quote|restate)\b[^.?!]{0,30}\b(that|this|what you|your|our|the|this) (conversation|chat|answer|reply|message|discussion)\b/i.test(t) ||
+    /\b(earlier|above|before) in (this|the|our) (chat|conversation|thread)\b/i.test(t) ||
+    /\b(in|of) (this|our) (chat|conversation) so far\b/i.test(t)
+  );
+}
+
+/**
+ * Whether to preload the top match's instructions before the model answers: a strong match (its name or a trigger
+ * phrase is in the request), or the single clear match of a brief request. Never for questions about the
+ * conversation itself, and never on one shared word.
+ */
+export function shouldPreload(request: string, matches: SkillMatch[]): boolean {
+  const top = matches[0];
+  if (!top || aboutConversation(request)) {
+    return false;
+  }
+  if (top.strong) {
+    return true;
+  }
+  const brief = userText(request).trim().split(/\s+/).length <= BRIEF_REQUEST_WORDS;
+  return brief && matches.length === 1 && top.score >= BRIEF_PRELOAD_MIN_SCORE && (top.concepts ?? 0) >= BRIEF_PRELOAD_MIN_CONCEPTS;
 }
 
 /** Coarse "kind of request" key: the main verb plus the two most specific nouns, e.g. "deploy|docker|staging". */

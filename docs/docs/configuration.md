@@ -80,6 +80,7 @@ In the Settings screen: **Web search → Browser**.
 | Setting | Default | Description |
 |---|---|---|
 | `localpilot.routing.enabled` | `true` | Pick a model per task: a vision model for image turns, the smallest FIM model for completions, a reasoning model in Plan mode, and the best available model when the default is offline or disabled |
+| `localpilot.models.localOnly` | `false` | Every automatic pick (Auto, routing roles left empty, fallback, image turns, completions, subagents) chooses only local models; cloud entries of the fallback order are skipped. A cloud model you pick yourself still works. Even when off, a chat on a local model is never switched to a cloud model to read images. See [Local models only]({{ '/docs/models/#local-models-only' | relative_url }}) |
 | `localpilot.routing.vision` | `""` (auto) | `provider/model` for turns with images when the session model cannot see |
 | `localpilot.routing.reasoning` | `""` (keep session model) | `provider/model` used in Plan mode |
 | `localpilot.routing.fast` | `""` (auto) | `provider/model` for read-only subagents (`explore`, `clarifier`, `researcher`). Empty = the smallest tool-capable model that fits; `session` = keep the session model |
@@ -109,6 +110,8 @@ See [Automatic routing]({{ '/docs/models/#automatic-routing' | relative_url }}).
 | `localpilot.markdownViewer.frontMatter` | `collapsed` | How YAML front matter shows above a document: `collapsed`, `expanded` or `hidden` |
 | `localpilot.markdownViewer.mermaid` | `true` | Draw ```` ```mermaid ```` blocks as diagrams (bundled, works offline) |
 | `localpilot.markdownViewer.exportTheme` | `light` | Colours of **Export HTML / PDF** from the reader: `light`, or `match` for the current VS Code theme |
+| `localpilot.maxIterations` | `40` | Most model steps in one run (5–500). Each step is one answer from the model, which may call tools; at the limit the run stops and reports where it got to. Subagents keep their own lower limit (25, or this value when lower). Self-healing may add `localpilot.healing.extraSteps` for recovery |
+| `localpilot.agent.modelRetries` | `3` | Retries of a model request that failed for a passing reason (dropped connection, timeout, overloaded server, `429`/`5xx`), 0–8, waiting 0.8 s, 1.6 s, 3.2 s… up to 20 s, or as long as the server's `Retry-After` asks. An answer whose connection dropped halfway is resumed once from where it stopped. With self-healing on its retry policies decide how often; `0` turns retries off either way |
 | `localpilot.maxConsecutiveMistakes` | `6` | Stop a run after this many steps in a row in which every tool call failed (or a tool call had to be repaired) and ask for guidance. Any successful tool call resets the count; `0` = no limit |
 | `localpilot.editTool` | `auto` | File-editing tool the agent gets. `auto`: GPT, Codex and gpt-oss models get `apply_patch` (one patch updates, adds, moves and deletes several files after a single approval), other models get `edit_file` and `write_file`. `edit_file` or `apply_patch` forces one of them |
 | `localpilot.diffPreview` | `onApproval` | Side-by-side diff (`Original ↔ LocalPilot (proposed)`) of what `edit_file`, `write_file` or `apply_patch` will write. `onApproval`: opens next to the approval card and closes when you approve or deny. `always`: also for edits approved automatically (including by *Allow for session*). `off`: never (edits happen in the background) |
@@ -301,7 +304,7 @@ None of the memory savings need Redis: transcripts are capped by `storage.sessio
 | `localpilot.memory.enabled` | `true` | Let the agent save and read durable notes (`.localpilot/memory/` and global storage). Manage notes in **Settings → Memory & history** |
 | `localpilot.memory.autoSave` | `true` | After a run with at least three tool calls in which the agent saved nothing itself, ask the same model whether the run revealed durable project facts (build and test commands, conventions, pitfalls) and append at most three short notes to project memory. Runs after the answer; anything that looks like a credential is dropped. Needs `localpilot.memory.enabled` |
 | `localpilot.memory.maxNoteChars` | `8000` | Largest memory note; longer notes lose their oldest paragraphs. Appending lines a note already has does nothing |
-| `localpilot.memory.maxNotes` | `200` | Notes kept per scope; past it the least recently updated are removed (`README` is kept) |
+| `localpilot.memory.maxNotes` | `200` | Notes kept per scope. Past it the least recently updated notes **the agent created** are removed; notes you wrote or edited by hand (and `README`) are never removed. When only your notes are left, a new agent note is refused with a message instead |
 | `localpilot.memory.taskExpiryDays` | `14` | Task memory (a plan's or todo list's checklist and notes) moves to Trash this many days after every todo is done |
 | `localpilot.showWelcomeOnStartup` | `true` | Open the **Setup** screen (*LocalPilot: Open Setup*) the first time LocalPilot starts without a reachable model server or default model |
 

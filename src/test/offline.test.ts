@@ -102,6 +102,57 @@ suite('Offline: connectivity checks, the offline route and run notifications', (
     }
   });
 
+  test('image turns never move a local chat to a cloud model; models.localOnly keeps every automatic pick local', async () => {
+    const cfg = vscode.workspace.getConfiguration('localpilot');
+    const prev = { providers: cfg.inspect('providers')?.globalValue, localOnly: cfg.inspect('models.localOnly')?.globalValue, vision: cfg.inspect('routing.vision')?.globalValue, fallbacks: cfg.inspect('routing.fallbackModels')?.globalValue };
+    await cfg.update('providers', [{ id: 'lm', type: 'openai', baseUrl: 'http://127.0.0.1:9' }, { id: 'cloud', type: 'openai', baseUrl: 'https://api.example.com/v1', apiKey: 'k' }], vscode.ConfigurationTarget.Global);
+    await cfg.update('routing.vision', '', vscode.ConfigurationTarget.Global);
+    const reg = new ProviderRegistry(log);
+    try {
+      const mk = (pid: string, id: string, o: Partial<ModelInfo> = {}): ModelInfo => ({ id: `${pid}/${id}`, providerId: pid, modelId: id, name: id, contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, ...o });
+      const models = [mk('lm', 'qwen-coder'), mk('cloud', 'big-vision', { remote: true, supportsVision: true }), mk('cloud', 'big-coder', { remote: true, supportsFim: true })];
+      (reg as unknown as { listModels: () => Promise<ModelInfo[]> }).listModels = async () => models;
+      // A local chat with an image and only a cloud model that can see: it stays local and says why.
+      const img = await reg.route({ modelRef: 'lm/qwen-coder', needsVision: true, start: false });
+      assert.strictEqual(img.model.id, 'lm/qwen-coder');
+      assert.match(img.visionNotice ?? '', /only vision model available is big-vision, a cloud model .* does not send your images to the cloud on its own/);
+      assert.match(img.visionNotice ?? '', /Install a local vision model .* or pick big-vision for this chat or set localpilot\.routing\.vision/);
+      // Auto with an image: also stays local.
+      const autoImg = await reg.route({ needsVision: true, start: false });
+      assert.strictEqual(autoImg.model.id, 'lm/qwen-coder');
+      assert.ok(autoImg.visionNotice);
+      // A cloud chat may move to another cloud model that can see, and an explicitly configured cloud vision model is used.
+      assert.strictEqual((await reg.route({ modelRef: 'cloud/big-coder', needsVision: true, start: false })).model.id, 'cloud/big-vision');
+      await cfg.update('routing.vision', 'cloud/big-vision', vscode.ConfigurationTarget.Global);
+      const chosen = await reg.route({ modelRef: 'lm/qwen-coder', needsVision: true, start: false });
+      assert.strictEqual(chosen.model.id, 'cloud/big-vision', 'the user picked it in localpilot.routing.vision');
+      assert.strictEqual(chosen.visionNotice, undefined);
+      await cfg.update('routing.vision', '', vscode.ConfigurationTarget.Global);
+      // Completions on a local model never move to a cloud FIM model on their own.
+      assert.strictEqual((await reg.route({ modelRef: 'lm/qwen-coder', role: 'completion', start: false })).model.id, 'lm/qwen-coder');
+
+      // localOnly: Auto, fallback (also the user's fallback order) and every role stay local; an explicit choice still works.
+      await cfg.update('routing.fallbackModels', ['cloud/big-coder'], vscode.ConfigurationTarget.Global);
+      await cfg.update('models.localOnly', true, vscode.ConfigurationTarget.Global);
+      for (const role of ['agent', 'fast', 'reasoning', 'completion', 'vision'] as const) {
+        assert.ok(!(await reg.route({ role, start: false })).model.remote, `${role} picks a local model`);
+      }
+      const gone = await reg.route({ modelRef: 'lm/missing', start: false });
+      assert.strictEqual(gone.model.id, 'lm/qwen-coder', 'the fallback order skips cloud entries');
+      assert.strictEqual((await reg.route({ modelRef: 'cloud/big-coder', start: false })).model.id, 'cloud/big-coder', 'an explicit cloud choice is honoured');
+      models.splice(0, 1);
+      await assert.rejects(reg.route({ start: false }), /localpilot\.models\.localOnly/);
+      await cfg.update('models.localOnly', false, vscode.ConfigurationTarget.Global);
+      assert.ok((await reg.route({ start: false })).model.remote, 'setting off: with nothing local, a cloud model is the last resort as before');
+    } finally {
+      reg.dispose();
+      await cfg.update('providers', prev.providers, vscode.ConfigurationTarget.Global);
+      await cfg.update('models.localOnly', prev.localOnly, vscode.ConfigurationTarget.Global);
+      await cfg.update('routing.vision', prev.vision, vscode.ConfigurationTarget.Global);
+      await cfg.update('routing.fallbackModels', prev.fallbacks, vscode.ConfigurationTarget.Global);
+    }
+  });
+
   test('a finished run notifies when hidden after a long run, or at once when it failed or needs you', () => {
     assert.strictEqual(shouldNotifyFinish('whenHidden', false, true, 5_000, 'ok'), false, 'a short run that went fine');
     assert.strictEqual(shouldNotifyFinish('whenHidden', false, true, LONG_RUN_MS, 'ok'), true);

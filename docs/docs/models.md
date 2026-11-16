@@ -139,13 +139,19 @@ With `localpilot.routing.enabled` on (the default), LocalPilot picks a model per
 | Task | Model used |
 |---|---|
 | Agent or chat turn | The session's model, else `localpilot.defaultModel`, else the best tool-capable coder model **that fits in memory** |
-| Turn with images | The session model if it can see. Otherwise `localpilot.routing.vision` or the best installed vision model, for that turn only; the session keeps its model |
+| Turn with images | The session model if it can see. Otherwise `localpilot.routing.vision` or the best installed vision model, for that turn only; the session keeps its model. A chat on a local model is never moved to a cloud model on its own: when only a cloud model can see, the chat says so and asks you to install a local vision model (gemma4, qwen2.5vl, llava…) or to pick the cloud model yourself (for the chat or in `localpilot.routing.vision`) |
 | Inline completions | `localpilot.inlineCompletion.model`, else the **smallest** FIM-capable model (latency matters more than size) |
 | Plan mode | `localpilot.routing.reasoning` when set (for example `ollama/qwen3:8b`), else the session model |
 | [Auto mode](agent-modes.md#auto) with the model on Auto | The task decides. Plans, designs and reviews: `localpilot.routing.reasoning`, else the best reasoning model when it clearly beats the default and is in memory or fits next to what is. A short question with nothing attached: `localpilot.routing.fast`, else the smallest tool-capable model. Everything else: as an agent turn. The reason shows at the top of the turn, for example *Auto: planning or review task — using gemma4:12b* |
 | Read-only subagents (`explore`, `clarifier`, `researcher`) | `localpilot.routing.fast` when set, else the **smallest** tool-capable instruct model that fits. These run many short tool calls, often in parallel. `session` pins the session model |
 | Implementing subagents (`coder`, `tester`, `debugger`, `docs`) | `localpilot.routing.coding` when set (for example a 32b coder while you chat with a 7b), else the session model |
 | Chosen model offline or disabled | The first available model of `localpilot.routing.fallbackModels` (**Settings → Models → Routing → Fallback order**), else the best available model. A note at the top of the turn explains the substitution. A local model never falls back to a cloud model unless that cloud model is in your fallback order |
+
+### Local models only
+
+Set `localpilot.models.localOnly` to `true` (**Settings → Models → Routing → Local models only for automatic picks**) and no automatic pick ever chooses a cloud model: Auto, the role pickers left on Auto, the fallback when a model is offline (cloud entries of `localpilot.routing.fallbackModels` are skipped), image turns, inline completions, subagents and the parallel spread all stay on this machine. A cloud model you pick yourself, for a chat, as `localpilot.defaultModel` or in a role setting, still works. With no local model at all, a run on Auto stops and says so instead of using a cloud model.
+
+Even with the setting off, automatic switches only move work from a local model to another local one: image turns, completions, Plan mode and subagent picks never leave the machine on their own.
 
 The ranking weighs capabilities (tools, FIM, vision), model family, parameter count and whether the model fits the machine's budget. A 32b model that spills out of memory loses to a 14b that fits. colibri models that stream from disk are ranked down for chat, agent and image turns and kept away from read-only subagents and inline completions; they get a small boost for Plan mode.
 

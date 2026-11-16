@@ -73,6 +73,16 @@ export interface Route {
   unavailable?: boolean;
   /** True when the model was chosen only because the intended one was busy: the next run should route again. */
   spread?: boolean;
+  /**
+   * The turn has images, the model cannot see them, and only a cloud model could: LocalPilot did not switch to it on its
+   * own. What to tell the user (install a local vision model, or pick the cloud one explicitly).
+   */
+  visionNotice?: string;
+}
+
+/** Why an image turn stays on a model that cannot see: the only vision model is a cloud one, which needs the user's say-so. */
+export function cloudVisionNotice(current: ModelInfo, cloud: ModelInfo): string {
+  return `${current.name} cannot see images, and the only vision model available is ${cloud.name}, a cloud model — LocalPilot does not send your images to the cloud on its own. Install a local vision model (gemma4, qwen2.5vl, llava…), or pick ${cloud.name} for this chat or set localpilot.routing.vision to use it.`;
 }
 
 /**
@@ -636,7 +646,11 @@ export class ProviderRegistry implements vscode.Disposable {
         models = await this.listModels(true);
       }
     }
-    const healthy = this.responsive(models);
+    // localpilot.models.localOnly: every automatic pick (Auto, routing roles, fallback, vision, completions, subagents)
+    // stays on this machine. A model the user names (session model, default, a role setting) is their choice.
+    const auto = (list: ModelInfo[]) => (cfg.localOnlyModels ? list.filter((m) => !m.remote) : list);
+    const autoModels = auto(models);
+    const healthy = auto(this.responsive(models));
     const [profile, resident] = await Promise.all([getSystemProfile().catch(() => undefined), cfg.routing.enabled ? this.residentModels() : Promise.resolve(new Set<string>() as ReadonlySet<string>)]);
     const usage = cfg.routing.enabled ? this.usageBonus : undefined;
     // Among comparable models an automatic pick takes one already in memory: no weight load before the first token.
@@ -647,6 +661,9 @@ export class ProviderRegistry implements vscode.Disposable {
     let reason: string | undefined;
     let fallback = false;
     let unavailable = false;
+    let visionNotice: string | undefined;
+    /** Automatic switches never move work off this machine: a local model is only replaced by another local one. */
+    const samePlace = (list: ModelInfo[], from: ModelInfo) => (from.remote ? list : list.filter((m) => !m.remote));
 
     if (!model && wanted && wanted.includes('/')) {
       // A provider that answered the last discovery but listed no models (an empty listing) may still serve the
@@ -674,14 +691,22 @@ export class ProviderRegistry implements vscode.Disposable {
     }
     if (model && cfg.routing.enabled) {
       if (req.needsVision && !model.supportsVision) {
-        const vision = find(cfg.routing.vision) ?? pickForRole(models, 'vision', profile, false, bonus);
+        // The configured image model is the user's choice; otherwise the best one in reach, never a cloud one for a
+        // local chat (that would send the user's screenshots off the machine without asking).
+        const configured = find(cfg.routing.vision);
+        const vision = configured?.supportsVision ? configured : pickForRole(samePlace(autoModels, model), 'vision', profile, false, bonus);
         if (vision?.supportsVision) {
           reason = `${model.name} cannot see images — using ${vision.name} for this turn`;
           model = vision;
+        } else if (!model.remote) {
+          const cloud = pickForRole(models.filter((m) => m.remote), 'vision', profile, false, bonus);
+          if (cloud?.supportsVision) {
+            visionNotice = cloudVisionNotice(model, cloud);
+          }
         }
       } else if (role === 'completion' && !req.modelRef && !roleOverride) {
         // No explicit completion model: prefer a small FIM model over the (usually larger) default.
-        const fim = pickForRole(models, 'completion', profile, false, bonus);
+        const fim = pickForRole(samePlace(autoModels, model), 'completion', profile, false, bonus);
         if (fim && fim.id !== model.id && (fim.supportsFim || !model.supportsFim)) {
           model = fim;
         }
@@ -694,8 +719,9 @@ export class ProviderRegistry implements vscode.Disposable {
       } else if (role === 'reasoning' && req.byTask && !req.modelRef) {
         // No reasoning model set: Auto takes the best one for the job when it beats the default by a clear margin and
         // does not mean swapping models out of memory (a weight load costs more than the better model saves).
-        const best = pickForRole(healthy, 'reasoning', profile, req.needsVision, bonus);
-        const pick = best && preferResident(best, healthy, 'reasoning', resident, profile, bonus, this.residentGb);
+        const pool = samePlace(healthy, model);
+        const best = pickForRole(pool, 'reasoning', profile, req.needsVision, bonus);
+        const pick = best && preferResident(best, pool, 'reasoning', resident, profile, bonus, this.residentGb);
         if (pick && pick.id !== model.id && scoreForRole(pick, 'reasoning', profile, bonus) >= scoreForRole(model, 'reasoning', profile, bonus) + 2) {
           reason = `Auto: planning or review task — using ${pick.name}`;
           model = pick;
@@ -703,8 +729,9 @@ export class ProviderRegistry implements vscode.Disposable {
       } else if (role === 'fast' && !req.modelRef && !roleOverride && cfg.routing.fast !== 'session') {
         // Read-only subagents: a small tool-capable model answers faster and leaves memory for the main model —
         // unless it is not loaded and would not fit next to what is, then the model in memory does the job.
-        const small = pickForRole(healthy, 'fast', profile, false, bonus);
-        const fast = small && preferResident(small, healthy, 'fast', resident, profile, bonus, this.residentGb);
+        const pool = samePlace(healthy, model);
+        const small = pickForRole(pool, 'fast', profile, false, bonus);
+        const fast = small && preferResident(small, pool, 'fast', resident, profile, bonus, this.residentGb);
         if (fast && fast.id !== model.id && fast.supportsTools) {
           const who = req.byTask ? 'Auto: quick question' : 'Read-only subagent';
           reason = fast === small ? `${who} — using ${fast.name}` : `${who} — using ${fast.name}, already in memory (${small.name} would not fit alongside)`;
@@ -727,11 +754,19 @@ export class ProviderRegistry implements vscode.Disposable {
       }
     }
     if (!model) {
-      model = pickForRole(healthy, role, profile, req.needsVision, bonus) ?? pickForRole(healthy, 'agent', profile, false, bonus) ?? pickForRole(models, 'agent', profile, false, bonus);
+      model = pickForRole(healthy, role, profile, req.needsVision, bonus) ?? pickForRole(healthy, 'agent', profile, false, bonus) ?? pickForRole(autoModels, 'agent', profile, false, bonus);
+      // An image turn on Auto: a cloud vision model does not replace the local models just because it can see.
+      const local = model?.remote && req.needsVision ? pickForRole(healthy.filter((m) => !m.remote), role, profile, false, bonus) ?? pickForRole(healthy.filter((m) => !m.remote), 'agent', profile, false, bonus) : undefined;
+      if (model && local) {
+        visionNotice = cloudVisionNotice(local, model);
+        model = local;
+      }
     }
     if (!model) {
       throw new Error(
-        'No local models found. Run "LocalPilot: Set up models automatically", start Ollama (`ollama serve`), LM Studio, llama.cpp or vLLM, or configure `localpilot.providers`.'
+        cfg.localOnlyModels && models.some((m) => m.remote)
+          ? 'No local models found, and localpilot.models.localOnly keeps automatic picks off cloud models. Start Ollama (`ollama serve`), LM Studio, llama.cpp or vLLM, pick a cloud model for this chat explicitly, or turn the setting off.'
+          : 'No local models found. Run "LocalPilot: Set up models automatically", start Ollama (`ollama serve`), LM Studio, llama.cpp or vLLM, or configure `localpilot.providers`.'
       );
     }
     // A model on this machine was asked for: when its server is down, falling back to a cloud model would send the
@@ -742,6 +777,9 @@ export class ProviderRegistry implements vscode.Disposable {
       throw new Error(
         `${wanted.startsWith(`${wantedCfg.id}/`) ? wanted.slice(wantedCfg.id.length + 1) : wanted} runs on ${wantedCfg.displayName ?? wantedCfg.id} (${wantedCfg.baseUrl}), which is not ${failed ? 'running and could not be started' : 'answering'}. Start it, or pick another model — LocalPilot does not switch a local model to a cloud one on its own.`
       );
+    }
+    if (visionNotice && !reason) {
+      reason = visionNotice;
     }
     // Ghost text asks on every pause in typing: a completion model that is gone never quietly becomes a cloud one.
     if (role === 'completion' && fallback && model.remote) {
@@ -754,7 +792,7 @@ export class ProviderRegistry implements vscode.Disposable {
     if (cfg.routing.enabled && cfg.routing.parallelModels !== false && req.spread && req.load) {
       // Models on a LAN or remote server take none of this machine's memory.
       const onThisMachine = (id: string) => !this.all.some((p) => id.startsWith(`${p.id}/`) && !isLoopbackUrl(p.baseUrl));
-      const alt = pickAlternative(healthy, model, role, req.load, profile, req.needsVision, bonus, resident, this.residentGb, onThisMachine);
+      const alt = pickAlternative(samePlace(healthy, model), model, role, req.load, profile, req.needsVision, bonus, resident, this.residentGb, onThisMachine);
       if (alt) {
         const n = req.load.assigned.get(model.id) ?? 0;
         reason = `${model.name} is busy with ${n} other request${n === 1 ? '' : 's'} — running this on ${alt.name} alongside`;
@@ -774,7 +812,7 @@ export class ProviderRegistry implements vscode.Disposable {
         this.noted.add(key);
       }
     }
-    return { provider, model, reason, fallback, unavailable, spread };
+    return { provider, model, reason, fallback, unavailable, spread, ...(visionNotice ? { visionNotice } : {}) };
   }
 
   /** Allow referencing a model not in discovery (e.g. provider with no /models endpoint). */

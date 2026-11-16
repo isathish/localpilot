@@ -273,12 +273,12 @@ const SETTING_KEYS = [
   'inlineCompletion.enabled', 'inlineCompletion.model', 'inlineCompletion.debounceMs', 'inlineCompletion.maxTokens',
   'mcpServers', 'skillsPaths', 'skills.builtin', 'skills.repositories', 'skills.autoInstall', 'skills.autoInstallScope', 'skills.disabled', 'memory.enabled', 'sessions.retention', 'systemPromptAppend', 'showWelcomeOnStartup', 'chat.location', 'terminal.runInIntegratedTerminal', 'terminal.reveal',
   'terminal.profile', 'terminal.shellIntegrationTimeout', 'terminal.autoDetachSeconds', 'memory.autoSave', 'history.includeCli', 'preferredLanguage', 'showTips', 'plugins.marketplaces', 'repos', 'mcp.watchServerFiles',
-  'models.disabled', 'models.autoSetup', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding', 'routing.parallelModels', 'routing.fallbackModels', 'firstTokenTimeoutSeconds', 'mcp.toolApprovals', 'models.autoTune', 'colibri.path', 'colibri.model', 'colibri.port', 'colibri.kvSlots', 'colibri.modelsDir', 'colibri.backend', 'telemetry.enabled', 'telemetry.retentionDays',
+  'models.disabled', 'models.autoSetup', 'models.localOnly', 'routing.enabled', 'routing.vision', 'routing.reasoning', 'routing.fast', 'routing.coding', 'routing.parallelModels', 'routing.fallbackModels', 'firstTokenTimeoutSeconds', 'mcp.toolApprovals', 'models.autoTune', 'colibri.path', 'colibri.model', 'colibri.port', 'colibri.kvSlots', 'colibri.modelsDir', 'colibri.backend', 'telemetry.enabled', 'telemetry.retentionDays',
   'storage.sessionsInMemory', 'storage.redis.enabled', 'storage.redis.url',
   'telemetry.otlp.enabled', 'telemetry.otlp.endpoint', 'telemetry.otlp.headers', 'telemetry.otlp.metricsInterval', 'telemetry.otlp.exporters', 'telemetry.otlp.traceSamplePercent', 'telemetry.otlp.recordContent',
   'pluginPaths', 'hooks.enabled', 'browser.chromePath',
   'memory.maxNoteChars', 'memory.maxNotes', 'memory.taskExpiryDays', 'autoMode.enabled', 'autoMode.model', 'queue.concurrency', 'supervisor.enabled', 'supervisor.intervalSeconds', 'supervisor.autoInstall', 'gateways.litellmConfig',
-  'maxConsecutiveMistakes', 'disabledTools',
+  'maxConsecutiveMistakes', 'maxIterations', 'agent.modelRetries', 'disabledTools',
   'markdownViewer.scrollSync', 'markdownViewer.outlineDepth', 'markdownViewer.frontMatter', 'markdownViewer.mermaid', 'markdownViewer.exportTheme',
   'pdfViewer.pageColors', 'pdfViewer.sidebar', 'pdfViewer.defaultZoom', 'pdfViewer.rangeThresholdMB', 'pdfViewer.maxFileSizeMB', 'pdf.maxReadSizeMB', 'pdf.maxChars',
   'healing.enabled', 'healing.autoDetect', 'healing.autoRetry', 'healing.autoFix', 'healing.regressionRequired', 'healing.maxRepairAttempts', 'healing.maxTotalAttempts', 'healing.extraSteps', 'healing.taskDeadlineMinutes',
@@ -1484,9 +1484,10 @@ export class SettingsPanel implements vscode.Disposable {
   /** Builds the model-manager view: machine profile, runtimes, installed models with roles, catalog and jobs. */
   async modelsState(): Promise<ModelsState> {
     const [system, runtimes, all] = await Promise.all([getSystemProfile(), this.models.detectRuntimes(), this.providers.listAllModels().catch(() => [] as ModelInfo[])]);
-    const enabled = all.filter((m) => !m.disabled);
+    // localpilot.models.localOnly: automatic picks never choose a cloud model, and image turns never move to one on their own.
+    const enabled = all.filter((m) => !m.disabled && (!getConfig().localOnlyModels || !m.remote));
     // Plan mode keeps the session model unless `routing.reasoning` is set, so there is no "auto" reasoning pick to show.
-    const auto = { agent: pickForRole(enabled, 'agent', system)?.id, completion: pickForRole(enabled, 'completion', system)?.id, vision: pickForRole(enabled, 'vision', system)?.id, fast: pickForRole(enabled, 'fast', system)?.id };
+    const auto = { agent: pickForRole(enabled, 'agent', system)?.id, completion: pickForRole(enabled, 'completion', system)?.id, vision: pickForRole(enabled.some((m) => !m.remote) ? enabled.filter((m) => !m.remote) : enabled, 'vision', system)?.id, fast: pickForRole(enabled, 'fast', system)?.id };
     const installed: ManagedModel[] = all.map((m) => {
       // A cloud model takes no memory here: no size and no "fits" badge, which would only mislead.
       const gb = m.remote ? undefined : modelFootprintGb(m);

@@ -221,6 +221,10 @@ export async function memorySmoke(check: Check): Promise<void> {
   check('memory tools: the four 1.6 tools plus memory_search', ['memory_save', 'memory_read', 'memory_list', 'memory_delete', 'memory_search'].every((n) => !!tools[n]));
   const saved = await tools.memory_save.execute({ name: 'editor', content: '- vim keys', scope: 'global' }, toolCtx());
   check('scope "global" still writes a developer note file', !saved.isError && fs.existsSync(path.join(devDir, 'editor.md')), saved.content);
+  const leaked = 'sk-' + 'ant-' + 'a1B2c3D4'.repeat(5);
+  const secretSave = await tools.memory_save.execute({ name: 'keys', content: `- use ${leaked} for the API`, scope: 'global' }, toolCtx());
+  const secretTyped = await tools.memory_save.execute({ name: 'keys', content: `- use ${leaked}`, type: 'knowledge' }, toolCtx());
+  check('memory_save refuses a note with a secret (files and the other types), without echoing it', !!secretSave.isError && !!secretTyped.isError && /looks like a secret/.test(secretSave.content) && !secretSave.content.includes(leaked) && !fs.existsSync(path.join(devDir, 'keys.md')), secretSave.content);
   const savedK = await tools.memory_save.execute({ name: 'release-checklist', content: '- bump the version\n- tag the commit', type: 'knowledge' }, toolCtx());
   const savedC = await tools.memory_save.execute({ name: 'decision', content: '- we keep REST, not gRPC', type: 'conversation' }, toolCtx('s_chat1'));
   check('type knowledge / conversation go to the log', !savedK.isError && !savedC.isError && (await mgr.list({ type: 'conversation' })).some((r) => r.conversationId === 's_chat1'), [savedK.content, savedC.content]);

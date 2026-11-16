@@ -102,7 +102,7 @@ Every recovery loop has a limit:
 |---|---|---|
 | Fix attempts per code-fix category | `localpilot.healing.maxRepairAttempts` | 3 |
 | Recovery attempts per task, all categories | `localpilot.healing.maxTotalAttempts` | 8 |
-| Extra model steps for recovery, beyond `maxIterations` | `localpilot.healing.extraSteps` | 16 |
+| Extra model steps for recovery, beyond `localpilot.maxIterations` (40) | `localpilot.healing.extraSteps` | 16 |
 | Recovery deadline | `localpilot.healing.taskDeadlineMinutes` | 60 min |
 | Time for one verification run | `localpilot.healing.checkTimeBudgetSeconds` | 900 s |
 

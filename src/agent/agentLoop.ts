@@ -12,7 +12,7 @@ import { isCloudProvider } from '../providers/cloud';
 import { streamsFromDisk } from '../providers/colibri';
 import { getSystemProfile } from '../providers/system';
 import { newId } from '../providers/http';
-import { parseArgs, ToolRegistry } from '../tools/registry';
+import { invalidArgsMessage, parseArgs, parseToolArgs, ToolRegistry } from '../tools/registry';
 import { approvalModeFor, deniedResultText, effectiveApproval, toDecision } from './approvalLevel';
 import type { TestSummary } from './healing/parsers/testSummary';
 import { isReadOnlyOrSafe } from './commandGuard';
@@ -21,9 +21,9 @@ import { addUsage } from './usage';
 import { withCost } from '../providers/pricing';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt, buildTurnContext } from './prompts';
-import { callKey, classifyModelError, describeModelError, isTransient, ModelFailure, retryDelayMs, sleep, withWatchdog, onAbort } from './resilience';
+import { callKey, classifyModelError, describeModelError, isTransient, ModelFailure, modelRetryDelayMs, sleep, withWatchdog, onAbort } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, needsQuestions, questionSteer, userText } from './clarify';
-import { asksToRemember, clampSkillBody, namesTool, PreloadReason, recommendSkills, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
+import { asksToRemember, clampSkillBody, namesTool, PreloadReason, recommendSkills, shouldPreload, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
 import { RunControl } from './runControl';
 import { SkillCatalog } from './skillCatalog';
 import { skillsDestination } from './skillInstaller';
@@ -158,7 +158,7 @@ export interface AgentRunOptions {
   maxIterations?: number;
   /** Pause/resume/steer handle. When given, `signal` should be `control.signal`. */
   control?: RunControl;
-  /** Transient-failure retries per model step (default 2). Subagents on a router-chosen model use 0 so a dead model fails fast and the caller can fall back. */
+  /** Transient-failure retries per model step (default `localpilot.agent.modelRetries`). Subagents on a router-chosen model use 0 so a dead model fails fast and the caller can fall back. */
   maxModelRetries?: number;
   /** First-token watchdog for this run (default 180 s, scaled by queue depth). Shorter for router-chosen subagent models, which have a fallback. */
   firstTokenTimeoutMs?: number;
@@ -184,10 +184,10 @@ export interface AgentRunOptions {
   traceId?: string;
 }
 
-const MAX_ITERATIONS_DEFAULT = 40;
-/** Transient model failures (network, 5xx/429, stall, empty completion) are retried this many times per step. */
-const MAX_MODEL_RETRIES = 2;
-const RETRY_BACKOFF_MS = [800, 2500];
+/** Wait before asking again after an empty completion (nothing failed on the server, so no growing backoff). */
+const EMPTY_RETRY_MS = 800;
+/** Asked once when the connection dropped in the middle of an answer: carry on from the partial text. */
+export const RESUME_NUDGE = 'The connection to you dropped in the middle of your last reply, so it is cut off. Continue exactly where it stopped: do not repeat or restate anything you already wrote, start with the next word or line.';
 /** Tool calls the server could not parse are handed back to the model at most this many times per run. */
 const MAX_TOOLCALL_REPAIRS = 2;
 /** The kind a failed turn reports to the chat, which picks the fix it offers (start the server, set a key, compact). */
@@ -223,8 +223,6 @@ const IMPLEMENT_PLAN = /\b(implement|execute|run|start|apply|build|do|carry out|
 const SERIAL_DETECT_MS = 8_000;
 /** Tools that hand work to subagents; running one is work done, and a later re-announcement of it is stale. */
 const DELEGATION_TOOLS = new Set(['run_subagent', 'run_parallel_subagents', 'run_todos_parallel']);
-/** Up to this many words a request is "brief": its single matching skill is preloaded rather than hinted, saving a load_skill round trip. */
-const BRIEF_REQUEST_WORDS = 24;
 /** A Stop / SubagentStop hook may send the agent back to work this many times in one turn. */
 const MAX_STOP_HOOK_CONTINUES = 5;
 
@@ -488,7 +486,8 @@ export class AgentRunner {
     let { provider } = route;
     // The stricter limits are for a side model with a fallback; the parent's own model gets the normal patience.
     const onSide = !o.sideModelOf || route.model.id !== o.sideModelOf;
-    const maxModelRetries = onSide ? o.maxModelRetries ?? MAX_MODEL_RETRIES : MAX_MODEL_RETRIES;
+    // Transient failures (network, 5xx/429, stall, empty completion) are retried this many times per step.
+    const maxModelRetries = onSide ? o.maxModelRetries ?? cfg.agent.modelRetries : cfg.agent.modelRetries;
     // One number for the budget and for the request: the window the model is actually given (the setting, capped by
     // the model; 0 = the model's full native window). Budgeting against the native window while sending a smaller
     // num_ctx would let the server truncate silently before compaction ever triggered.
@@ -786,8 +785,9 @@ export class AgentRunner {
             wanted.push({ name: r.skill.name, reason: 'pinned' });
           }
         }
-        const brief = text.trim().split(/\s+/).length <= BRIEF_REQUEST_WORDS;
-        if (!quiet && !prescribed && !forcedName && fresh[0] && (fresh[0].strong || (brief && fresh.length === 1))) {
+        // A strong match, or a brief request's single clear match (a minimum score over two specific words); never
+        // for a question about the conversation itself ("what did you reply in your previous message?").
+        if (!quiet && !prescribed && !forcedName && shouldPreload(request, fresh)) {
           wanted.push({ name: fresh[0].name, reason: installed?.name === fresh[0].name ? 'installed' : 'match' });
         }
         const items: { name: string; body: string; reason: (typeof wanted)[number]['reason'] }[] = [];
@@ -1037,7 +1037,8 @@ export class AgentRunner {
     let stopHookContinues = 0;
 
     let finalText = '';
-    const maxIter = o.maxIterations ?? MAX_ITERATIONS_DEFAULT;
+    // localpilot.maxIterations (default 40); subagents pass their own, lower cap.
+    const maxIter = o.maxIterations ?? cfg.maxIterations;
     /** maxIterations plus the recovery steps the engine granted (at most `healing.extraSteps` in total). */
     let iterLimit = maxIter;
     // Read-only tool results are memoised for the turn (including in-flight calls, so identical
@@ -1242,6 +1243,8 @@ export class AgentRunner {
       // Transient failures (connection drops, 5xx, a stalled server, an empty completion) are retried a
       // couple of times before the user sees an error; a context-overflow reply compacts once and retries.
       let attempt = 0;
+      /** The connection dropped mid-answer once this step and the model was asked to continue from the partial text. */
+      let resumedAfterDrop = false;
       // compaction.strategy off: an overflow is reported, not compacted away.
       let compactedForOverflow = ctxMgr.strategy === 'off';
       let aborted = false;
@@ -1430,6 +1433,27 @@ export class AgentRunner {
           }
           // Only thinking streamed before a stall (no answer text, no tool call): nothing was produced that a retry could duplicate.
           const replayable = first || (kind === 'stall' && !text && !calls.length);
+          // The connection dropped in the middle of an answer: sending the same request again would repeat what the
+          // user already read. Keep the partial answer in the transcript and ask the model, once, to continue from it.
+          if (!replayable && isTransient(kind) && text.trim() && !calls.length && !resumedAfterDrop && !continuing && maxModelRetries > 0 && !o.signal.aborted) {
+            resumedAfterDrop = true;
+            attempt++;
+            modelEvent('retry', kind, failedAt);
+            const wait = modelRetryDelayMs(kind, e, 1);
+            this.log.warn(`model call failed mid-answer (${kind}) after ${text.length} chars; asking ${model.id} to continue in ${wait}ms: ${msg}`);
+            status('The connection dropped mid-answer — asking the model to continue where it stopped…');
+            emit({ sessionId: session.id, type: 'retry', payload: { attempt: 1, max: 1, reason: kind, message: msg, delayMs: wait, resume: true } });
+            const partial: ChatMessage = { role: 'assistant', content: text, thinking: thinking || undefined, meta: { ...assistant.meta, timestamp: Date.now() } };
+            const nudge: ChatMessage = { role: 'user', content: RESUME_NUDGE, meta: { timestamp: Date.now(), hidden: true, nudge: 'resume' } };
+            session.messages.push(partial, nudge);
+            continuing = { message: partial, nudge };
+            await sleep(wait, o.signal);
+            if (o.signal.aborted) {
+              aborted = true;
+              break;
+            }
+            continue;
+          }
           const healer = healModel();
           if (healer && !healed && !(kind === 'overflow' && !compactedForOverflow)) {
             healed = await healer.onModelFailure(kind, e, attempt + 1, {
@@ -1497,7 +1521,7 @@ export class AgentRunner {
             // A model that went silent inside a tool call after thinking samples afresh; its partial reasoning goes.
             thinking = '';
             first = true;
-            const wait = retryDelayMs(kind, e, attempt, RETRY_BACKOFF_MS);
+            const wait = modelRetryDelayMs(kind, e, attempt);
             this.log.warn(`model call failed (${kind}), retry ${attempt}/${maxModelRetries} in ${wait}ms: ${msg}`);
             status(`${kind === 'stall' ? 'The model stopped responding' : kind === 'ratelimit' ? `The server is rate limiting — waiting ${Math.round(wait / 1000)} s` : 'Connection to the model failed'} — retrying (${attempt}/${maxModelRetries})…`);
             emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: maxModelRetries, reason: kind, message: msg, delayMs: wait } });
@@ -1553,7 +1577,7 @@ export class AgentRunner {
           this.log.warn(`${overthought ? 'reasoning-only' : 'empty'} completion from ${model.id}; retry ${attempt}/${maxModelRetries}${overthought ? ' without thinking' : ''}`);
           status(overthought ? `The model used its whole reply for thinking — asking again without thinking (${attempt}/${maxModelRetries})…` : `The model returned nothing — asking again (${attempt}/${maxModelRetries})…`);
           emit({ sessionId: session.id, type: 'retry', payload: { attempt, max: maxModelRetries, reason: 'empty', message: 'empty completion' } });
-          await sleep(RETRY_BACKOFF_MS[0], o.signal);
+          await sleep(EMPTY_RETRY_MS, o.signal);
           if (o.signal.aborted) {
             aborted = true;
             break;
@@ -2445,11 +2469,26 @@ export class AgentRunner {
       return { msg, isError: !!result.isError };
     };
     const runOne = async (call: ToolCall): Promise<ChatMessage> => {
-      const args = parseArgs(call.arguments);
+      const parsed = parseToolArgs(call.arguments);
+      // Repaired arguments replace the broken text in the transcript: servers reject a replayed call whose arguments
+      // are not JSON, and the model should not see its own mistake echoed back as if it were fine.
+      if (parsed.repaired !== undefined) {
+        this.log.info(`tool call ${call.name}: repaired arguments that were not valid JSON`);
+        call.arguments = parsed.repaired;
+      }
+      const args = parsed.args;
       const tool = byName.get(call.name);
       // The checklist item in progress when the call starts: the chat links the row to that task (and back).
       const todoId = call.name === 'manage_todos' ? undefined : ctx.todos?.get().find((t) => t.status === 'in_progress')?.id;
       emit({ sessionId, type: 'tool_start', payload: { id: call.id, name: call.name, args, ...(todoId ? { todoId } : {}) } });
+      if (parsed.invalid !== undefined) {
+        // Not "Missing required argument": the model sent arguments, they just did not parse. Nothing runs.
+        const content = invalidArgsMessage(call.name, call.arguments, parsed.invalid);
+        call.arguments = '{}';
+        emit({ sessionId, type: 'tool_end', payload: { id: call.id, name: call.name, isError: true, durationMs: 0, content } });
+        failed.add(call.id);
+        return toolMsg(call, content, true);
+      }
       const key = callKey(call.name, args);
       if (callCounts) {
         const n = (callCounts.get(key) ?? 0) + 1;
