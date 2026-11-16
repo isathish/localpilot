@@ -1,13 +1,17 @@
 name: Docs
 
-# Deploys the GitHub Pages site. The version shown on the site always comes from package.json at
-# build time, so it can never drift from the extension that was actually released. The Release
+# Builds, link-checks and deploys the GitHub Pages site. The version shown on the site always comes from
+# package.json at build time, so it can never drift from the extension that was actually released. The Release
 # workflow dispatches this workflow after publishing, because pushes made with GITHUB_TOKEN
 # (the "release: vX.Y.Z" bump commit) do not trigger push-based runs on their own.
+# Pull requests that touch the site build it and check its links without deploying.
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'CHANGELOG.md', '.github/workflows/docs.yml', 'scripts/ga-pageviews.mjs', 'scripts/pageviews-test.mjs']
+    paths: ['docs/**', 'CHANGELOG.md', '.github/workflows/docs.yml', 'scripts/ga-pageviews.mjs', 'scripts/pageviews-test.mjs', 'scripts/check-links.mjs']
+  pull_request:
+    branches: [main]
+    paths: ['docs/**', '.github/workflows/docs.yml', 'scripts/check-links.mjs']
   workflow_dispatch:
   # Daily rebuild so the page view counts stay current without a push.
   schedule:
@@ -19,16 +23,19 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  # Deploys queue behind each other; a pull request only cancels its own older runs.
+  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.ref) || 'pages' }}
   cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/configure-pages@v6
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        if: github.event_name != 'pull_request'
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
       - name: Sync site version from package.json
@@ -38,32 +45,58 @@ jobs:
           grep -q "^version: $V$" docs/_config.yml || { echo "::error::could not set version in docs/_config.yml"; exit 1; }
           echo "Building site as v$V"
       - name: Test the live page view counter
+        if: github.event_name != 'pull_request'
         run: node --experimental-eventsource --no-warnings scripts/pageviews-test.mjs
       - name: Page views from Google Analytics
         # Optional: without the GA_PROPERTY_ID / GA_CREDENTIALS secrets (or if the API fails) the site builds without counts.
+        if: github.event_name != 'pull_request'
         continue-on-error: true
         env:
           GA_PROPERTY_ID: ${{ secrets.GA_PROPERTY_ID }}
           GA_CREDENTIALS: ${{ secrets.GA_CREDENTIALS }}
         run: node scripts/ga-pageviews.mjs docs/_data/pageviews.json
       - name: Build site with Jekyll
-        uses: actions/jekyll-build-pages@v1
+        uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
         with:
           source: ./docs
           destination: ./_site
-      - uses: actions/upload-pages-artifact@v5
+      - name: Check internal links and anchors
+        # Offline: every link to a page or file of the site, and every #anchor on it, must exist. Fails the build.
+        run: |
+          node scripts/check-links.mjs --self-test
+          BASE=$(sed -n -E 's/^baseurl:[[:space:]]*//p' docs/_config.yml | tr -d "\"'")
+          SITE=$(sed -n -E 's/^url:[[:space:]]*//p' docs/_config.yml | tr -d "\"'")
+          node scripts/check-links.mjs _site --base "$BASE" --site "$SITE"
+      - name: Check external links (soft)
+        # Third-party sites go down, rate-limit and block bots: report broken ones without failing the build.
+        continue-on-error: true
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          fail: false
+          args: >-
+            --no-progress --max-concurrency 8 --timeout 20 --max-retries 2
+            --scheme https --scheme http
+            --accept 200..=299,403,429
+            --exclude '^https://isathish\.github\.io/localpilot'
+            --exclude '^https://(www\.)?(linkedin|twitter|x)\.com'
+            './_site/**/*.html'
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name != 'pull_request'
         with:
           path: ./_site
 
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # deploy-pages itself waits up to 20 minutes (below).
+    timeout-minutes: 30
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
         with:
           # Pages sometimes stays in "updating_pages" for over 10 minutes (the default); wait up to 20.
           timeout: 1200000

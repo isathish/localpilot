@@ -1,26 +1,24 @@
 /**
- * The version after `current` for a bump level. Each part counts 0–9 and carries into the one above, like a decimal
- * counter: 1.2.9 → 1.3.0 and 1.3.9 → 1.4.0 on a patch, 1.9.9 → 2.0.0, and a minor bump from 1.9.x gives 2.0.0.
- * A part already past 9 (1.3.11, from before the rule) carries on the next bump too.
+ * The version after `current` for a bump level, by plain semantic versioning: a patch bump raises the patch part
+ * (1.9.9 → 1.9.10, never a rollover into the minor or major), a minor bump resets the patch (1.3.4 → 1.4.0) and a
+ * major bump resets both (1.3.4 → 2.0.0). Pre-release or build suffixes on `current` are dropped.
  */
 function nextVersion(current, level) {
-  let [maj, min, pat] = current.split('.').map(Number);
+  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(current).trim());
+  if (!m) {
+    throw new Error(`not a version: ${current}`);
+  }
+  const [maj, min, pat] = m.slice(1).map(Number);
   if (level === 'major') {
     return `${maj + 1}.0.0`;
   }
+  if (level === 'minor') {
+    return `${maj}.${min + 1}.0`;
+  }
   if (level === 'patch') {
-    pat += 1;
+    return `${maj}.${min}.${pat + 1}`;
   }
-  if (level === 'minor' || pat > 9) {
-    min += 1;
-    pat = 0;
-  }
-  if (min > 9) {
-    maj += 1;
-    min = 0;
-    pat = 0;
-  }
-  return `${maj}.${min}.${pat}`;
+  throw new Error(`unknown bump level: ${level}`);
 }
 
 module.exports = { nextVersion };

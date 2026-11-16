@@ -2,7 +2,7 @@
 /**
  * Prepare a release:
  *   npm run release -- patch            (or: minor | major | 1.2.3)
- *   Each version part counts 0–9 and carries into the next: 1.2.9 → 1.3.0, 1.3.9 → 1.4.0, 1.9.9 → 2.0.0.
+ *   Semantic versioning, no rollover: 1.9.9 + patch → 1.9.10, + minor → 1.10.0, + major → 2.0.0.
  *
  * 1. Picks the next version (or releases the version already in package.json if it has no tag yet).
  * 2. Updates package.json, package-lock.json and docs/_config.yml.
@@ -64,7 +64,7 @@ if (/^(patch|minor|major)$/.test(arg) && !tags.includes(`v${current}`) && previo
   log(`package.json is already at ${current}, which has no tag yet; releasing it (pass an explicit version to override)`);
   next = current;
 } else {
-  // Parts count 0–9 and carry: 1.2.9 → 1.3.0, 1.3.9 → 1.4.0, 1.9.9 → 2.0.0 (scripts/next-version.js).
+  // Semantic versioning: 1.9.9 → 1.9.10 (patch), → 1.10.0 (minor), → 2.0.0 (major) (scripts/next-version.js).
   next = /^(patch|minor|major)$/.test(arg) ? nextVersion(current, arg) : arg.replace(/^v/, '');
 }
 if (!/^\d+\.\d+\.\d+$/.test(next)) {

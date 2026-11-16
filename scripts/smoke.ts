@@ -1539,14 +1539,21 @@ rl.on('line', (l) => { const m = JSON.parse(l); const out = (r) => process.stdou
     check('nothing worth keeping and invalid replies give no notes', parseMemoryNotes('{"notes":[]}').length === 0 && parseMemoryNotes('I think nothing.').length === 0 && parseMemoryNotes('{"notes": "no"}').length === 0);
   }
 
-  console.log('\n[Release versions: each part counts 0–9 and carries]');
+  console.log('\n[Release versions: semantic versioning, no rollover]');
   {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { nextVersion } = require('./next-version.js') as { nextVersion: (v: string, l: string) => string };
-    check('patch after 9 promotes the minor: 1.2.9 → 1.3.0, 1.3.9 → 1.4.0', nextVersion('1.2.9', 'patch') === '1.3.0' && nextVersion('1.3.9', 'patch') === '1.4.0');
-    check('ordinary patch: 1.3.4 → 1.3.5; a part already past 9 carries: 1.3.11 → 1.4.0', nextVersion('1.3.4', 'patch') === '1.3.5' && nextVersion('1.3.11', 'patch') === '1.4.0');
-    check('minor after 9 promotes the major: 1.9.9 → 2.0.0 (patch), 1.9.3 → 2.0.0 (minor)', nextVersion('1.9.9', 'patch') === '2.0.0' && nextVersion('1.9.3', 'minor') === '2.0.0');
-    check('minor and major as usual: 1.3.4 → 1.4.0, → 2.0.0', nextVersion('1.3.4', 'minor') === '1.4.0' && nextVersion('1.3.4', 'major') === '2.0.0');
+    check('patch raises the patch part only: 1.3.4 → 1.3.5, 1.2.9 → 1.2.10, 1.9.9 → 1.9.10', nextVersion('1.3.4', 'patch') === '1.3.5' && nextVersion('1.2.9', 'patch') === '1.2.10' && nextVersion('1.9.9', 'patch') === '1.9.10');
+    check('minor resets the patch: 1.3.4 → 1.4.0, 1.9.9 → 1.10.0', nextVersion('1.3.4', 'minor') === '1.4.0' && nextVersion('1.9.9', 'minor') === '1.10.0');
+    check('major resets both: 1.3.4 → 2.0.0, 0.9.3 → 1.0.0', nextVersion('1.3.4', 'major') === '2.0.0' && nextVersion('0.9.3', 'major') === '1.0.0');
+    check('a leading v and a pre-release suffix are tolerated: v1.2.3-beta.1 → 1.2.4', nextVersion('v1.2.3-beta.1', 'patch') === '1.2.4');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { decideBump } = require('./auto-bump.js') as { decideBump: (since: string[], pushed: string[], version: string) => string };
+    const bump = (msgs: string[], v = 'v1.7.0', pushed = msgs) => decideBump(msgs, pushed, v);
+    check('1.x: fix → patch, feat → minor, feat! → major, BREAKING CHANGE footer → major', bump(['fix: a']) === 'patch' && bump(['feat(ui): b', 'fix: a']) === 'minor' && bump(['feat!: c', 'feat: b']) === 'major' && bump(['refactor: x\n\nBREAKING CHANGE: gone']) === 'major');
+    check('0.x: breaking → minor, feat → patch', bump(['feat!: c'], 'v0.4.2') === 'minor' && bump(['feat: b'], 'v0.4.2') === 'patch');
+    check('docs/ci/chore only → nothing; perf/refactor → patch', bump(['docs: a', 'ci: b', 'chore: c']) === '' && bump(['perf: a']) === 'patch' && bump(['refactor: a']) === 'patch');
+    check('[release major] wins; [skip release] in the push holds everything back', bump(['fix: a [release major]']) === 'major' && bump(['feat!: x', 'fix: y [skip release]']) === '' && bump(['feat: x', 'docs: y [skip release]'], 'v1.7.0', ['docs: z']) === 'minor');
   }
 
   console.log('\n[Effective context window]');

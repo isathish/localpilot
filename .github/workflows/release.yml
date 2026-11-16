@@ -2,9 +2,10 @@ name: Release
 
 # How a release happens
 #   1. a push to main whose version is already tagged but that contains releasable commits (anything
-#      except docs/chore/ci/build/test/style/release) is bumped automatically: patch by default, minor
-#      for a breaking "type!:" commit, or whatever "[release patch|minor|major]" in a commit message
-#      asks for. "[skip release]" anywhere in the pushed commits skips the bump. The bump job runs
+#      except docs/chore/ci/build/test/style/release) is bumped automatically (scripts/auto-bump.js):
+#      patch for fixes and other code, minor for a "feat:", major for a breaking "type!:" /
+#      "BREAKING CHANGE:" commit (one level lower while the version is 0.x), or whatever
+#      "[release patch|minor|major]" in a commit message asks for. "[skip release]" anywhere in the pushed commits skips the bump. The bump job runs
 #      scripts/release.js --ci (version files + changelog + compile/smoke/package check), commits
 #      "release: vX.Y.Z" and re-dispatches this workflow, which then takes path 2; or
 #   2. main carries a package.json version that has no vX.Y.Z tag yet (the bump job, npm run release,
@@ -17,7 +18,9 @@ name: Release
 # publish  only then tags the commit, creates the GitHub Release with the changelog section as notes
 #          and publishes to the VS Code Marketplace and Open VSX, then redeploys the website so it
 #          shows the new version. A failed publish fails the run;
-#          re-run "Publish to Marketplace" for that tag to retry without a new version.
+#          re-run "Publish to Marketplace" for that tag to retry without a new version. It runs in the
+#          "marketplace" environment: add required reviewers to it (Settings → Environments) to make
+#          every release wait for a maintainer's approval before anything is tagged or published.
 on:
   push:
     branches: [main]
@@ -40,6 +43,7 @@ jobs:
   prepare:
     name: Decide whether to release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       release: ${{ steps.decide.outputs.release }}
       tag: ${{ steps.decide.outputs.tag }}
@@ -49,7 +53,7 @@ jobs:
       previous_tag: ${{ steps.decide.outputs.previous_tag }}
       bump: ${{ steps.decide.outputs.bump }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
@@ -100,12 +104,14 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release != 'true' && needs.prepare.outputs.bump != ''
     runs-on: ubuntu-latest
+    # release.js --ci compiles, runs the smoke tests and packages the VSIX before committing.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -130,9 +136,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          HEAD_SHA=$(git rev-parse HEAD)
+          # A minute of slack for clock skew between the runner and GitHub.
+          SINCE=$(date -u -d '-60 seconds' +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run release.yml --ref main
-          sleep 5
-          RUN=$(gh run list --workflow=release.yml --branch main --event workflow_dispatch --limit 1 --json url --jq '.[0].url')
+          # Link only the run this dispatch started: a workflow_dispatch run on the bump commit created after it.
+          RUN=""
+          for i in $(seq 1 12); do
+            sleep 5
+            RUN=$(gh run list --workflow=release.yml --branch main --event workflow_dispatch --commit "$HEAD_SHA" --limit 5 --json url,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$SINCE\")][0].url // empty")
+            [ -n "$RUN" ] && break
+          done
           {
             echo "## Auto-bumped to v${version}"
             echo ""
@@ -144,11 +159,12 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.prepare.outputs.sha }}
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -159,7 +175,19 @@ jobs:
         run: npm run smoke
       - name: CLI end-to-end
         run: node scripts/cli-e2e.mjs
+      - name: Start Redis Stack
+        run: |
+          docker run -d --name lp-redis -p 16379:6379 redis/redis-stack-server:7.4.0-v8
+          for i in $(seq 1 30); do
+            if docker exec lp-redis redis-cli ping 2>/dev/null | grep -q PONG; then echo "Redis is up"; exit 0; fi
+            sleep 1
+          done
+          docker logs lp-redis || true
+          echo "::error::Redis Stack did not answer PING within 30 s"; exit 1
       - name: Extension Host tests
+        env:
+          # The Redis suite must run here, not skip (the macOS/Windows runners in verify-os have no Docker for it).
+          REDIS_REQUIRED: '1'
         run: xvfb-run -a npm test
       - name: Package VSIX
         run: |
@@ -188,7 +216,7 @@ jobs:
             echo "Or **Extensions → ··· → Install from VSIX…** in VS Code. Documentation: https://isathish.github.io/localpilot/"
             if [ -n "$PREV" ]; then echo ""; echo "**Full changelog:** https://github.com/${GITHUB_REPOSITORY}/compare/$PREV...$TAG"; fi
           } >> RELEASE_NOTES.md
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-${{ needs.prepare.outputs.version }}
           path: |
@@ -204,15 +232,16 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: true
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.prepare.outputs.sha }}
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -226,24 +255,60 @@ jobs:
       - name: Extension Host tests
         run: npm test
 
+  verify-cli-node:
+    name: CLI on Node ${{ matrix.node }}
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        # The CLI promises Node 18.17+ (docs/docs/terminal-and-cli.md): bundle on 22, run on the older ones.
+        node: ['18.17.0', '20']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Bundle
+        run: node esbuild.js
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: CLI end-to-end on Node ${{ matrix.node }}
+        run: |
+          node --version
+          node scripts/cli-e2e.mjs
+
   publish:
     name: Tag, release & publish
-    needs: [prepare, verify, verify-os]
+    needs: [prepare, verify, verify-os, verify-cli-node]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Holds the publishing secrets. Maintainers add required reviewers to this environment (Settings → Environments →
+    # marketplace) so every release waits for an approval here; until then it runs straight through.
+    environment:
+      name: marketplace
+      url: https://marketplace.visualstudio.com/items?itemName=localpilot.localpilot-agent
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
       VERSION: ${{ needs.prepare.outputs.version }}
       TAG: ${{ needs.prepare.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-${{ needs.prepare.outputs.version }}
       - name: Verify checksums
@@ -258,7 +323,7 @@ jobs:
           git push origin "$TAG"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ env.TAG }}
           name: LocalPilot ${{ env.TAG }}

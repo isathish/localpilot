@@ -15,7 +15,7 @@ npm run smoke                               # offline: mock Ollama/OpenAI server
 
 ## Mocha suites in VS Code
 
-`npm test` compiles to `out/`, bundles, lints and runs every `out/test/**/*.test.js` in an Extension Development Host. `.vscode-test.mjs` points telemetry and the skill catalog at scratch folders, and VS Code builds are cached in `.vscode-test/`.
+`npm test` compiles to `out/`, bundles, lints and runs every `out/test/**/*.test.js` in an Extension Development Host. `.vscode-test.mjs` runs VS Code with a throwaway `HOME`/`USERPROFILE` (nothing touches the real `~/.localpilot`), `LOCALPILOT_KEYCHAIN=none` and a test secrets passphrase; VS Code builds are cached in `.vscode-test/`. Wait for asynchronous effects with `waitFor(condition, timeoutMs, what)` from `src/test/waitFor.ts` instead of fixed sleeps.
 
 Write tests in `src/test/<area>.test.ts` using `suite`/`test` and `assert`. Put logic in pure functions or classes with injected dependencies (a runner, a clock `now`, a file path) so tests need no real models or timers. `src/test/autonomy.test.ts` shows the pattern: a controllable runner, a fake clock, `await q.flush()` before teardown.
 
@@ -27,12 +27,11 @@ The test CLI refuses to start while another instance using the same user-data fo
 npm run compile-tests && node esbuild.js
 d=$(mktemp -d /tmp/lp-test-XXXX)
 cat > .vscode-test.tmp.mjs <<EOF
-import * as fs from 'fs';
+import base from './.vscode-test.mjs';         // keeps the isolated home and the test env
 export default {
+  ...base,
   files: 'out/test/autonomy.test.js',            // or 'out/test/**/*.test.js'
-  workspaceFolder: fs.mkdtempSync('$d/ws-'),
   launchArgs: ['--user-data-dir', '$d/ud'],
-  env: { LOCALPILOT_TELEMETRY_DIR: '$d/telemetry', LOCALPILOT_SKILL_CATALOG: '$d/cat.json', LOCALPILOT_WORKTREES_DIR: '$d/worktrees' },
   mocha: { timeout: 60000 },
 };
 EOF
@@ -40,13 +39,13 @@ npx vscode-test --config .vscode-test.tmp.mjs 2>&1 | grep -E "✔|passing|failin
 rm -f .vscode-test.tmp.mjs; rm -rf "$d"
 ```
 
-- The telemetry folder **must end in `telemetry`**, because `telemetry.test.ts` asserts it.
+- A config without `...base` must set the env itself; the telemetry folder **must end in `telemetry`**, because `telemetry.test.ts` asserts it.
 - Don't kill VS Code processes you didn't start. Another session or the user may own them.
 - The full suite takes about 4 minutes. Run it in the background and keep working.
 
 ### End-to-end tests with a real model
 
-`src/test/e2e.test.ts` needs Ollama on `localhost:11434` with a tool-capable model, and skips itself without one. Set `LOCALPILOT_E2E_MODEL=ollama/<tag>` to choose the model. A timeout like `session … still running after 200000 ms` with only the first user message in the transcript means the model never answered. Check `curl -s localhost:11434/api/ps` for large models loaded and other test runs sharing Ollama before suspecting the code. Say so in your report instead of calling the run green.
+`src/test/e2e.test.ts` is opt-in: it skips unless `LOCALPILOT_E2E_MODEL=ollama/<tag>` (or `auto`) is set, and then needs Ollama on `localhost:11434` with that model; once opted in, a missing Ollama or model fails instead of skipping. A timeout like `session … still running after 200000 ms` with only the first user message in the transcript means the model never answered. Check `curl -s localhost:11434/api/ps` for large models loaded and other test runs sharing Ollama before suspecting the code. Say so in your report instead of calling the run green.
 
 ## Report
 
