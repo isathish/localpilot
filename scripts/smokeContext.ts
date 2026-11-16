@@ -224,7 +224,7 @@ export async function contextSmoke(check: Check): Promise<void> {
   await c.memory!.sync();
   const before = await memory.promptSection(4000);
   const sameLocal = await memory.promptSection(4000, { cloud: false });
-  const excluded: { ref: string; reason: string }[] = [];
+  const excluded: { ref: string; reason: 'localOnly' | 'budget' | 'ignored' }[] = [];
   const forCloud = await memory.promptSection(4000, { cloud: true, excluded });
   check('memory policy: a local model\'s memory section is byte-for-byte the same', before === sameLocal && before.includes('bastion'));
   check('memory policy: a cloud model\'s memory section has no local-only note, which is listed as excluded', !forCloud.includes('bastion') && forCloud.includes('answer briefly') && excluded.some((e) => e.ref === 'memory:prod-access' && e.reason === 'localOnly'), { forCloud, excluded });
