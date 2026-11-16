@@ -157,7 +157,7 @@ export function registerChatParticipant(ctx: vscode.ExtensionContext, controller
     if (changed.length) {
       const n = changed.length;
       stream.button(n > 1 ? { command: REVIEW_CMD, arguments: [sessionId], title: `Review ${n} changed files` } : { command: 'localpilot.showDiff', arguments: [sessionId, changed[0].fsPath], title: `Review ${path.basename(changed[0].fsPath)}` });
-      stream.button({ command: UNDO_CMD, arguments: [sessionId], title: `Undo ${n} file change${n > 1 ? 's' : ''}` });
+      stream.button({ command: UNDO_CMD, arguments: [sessionId], title: `Reject ${n} file change${n > 1 ? 's' : ''}` });
     }
     stream.button({ command: 'localpilot.openSession', arguments: [sessionId], title: 'Open in LocalPilot' });
     return { metadata: { sessionId, mode: controller.store.get(sessionId)?.mode ?? session.mode } };

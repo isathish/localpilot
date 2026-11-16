@@ -4,26 +4,45 @@
 (function () {
   const api = window.LPChat;
   if (!api) { return; }
-  const { post, esc, el, I, timeAgo, md } = api;
+  const { post, esc, el, I, timeAgo, md, trapTab } = api;
   const TITLES = { trash: 'Trash', versions: 'Versions', memory: 'Memory', context: 'Context', checkpoints: 'Checkpoints', sync: 'Sync', compare: 'Compare answers' };
   const root = el('div', 'cpage hidden');
   root.id = 'cpage'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true');
   (document.getElementById('app') || document.body).appendChild(root);
   let cur = null;
+  /** What had focus before the page opened; closing (not Back to the navigator) puts it back. */
+  let opener = null;
 
   function close(goBack) {
     root.classList.add('hidden'); root.innerHTML = '';
     const back = cur && cur.back; cur = null;
-    if (goBack && back) { back(); } else { const i = document.getElementById('input'); if (i) { i.focus(); } }
+    const was = opener; opener = null;
+    if (goBack && back) { back(); } else if (was && was.isConnected && !was.closest('.hidden')) { was.focus(); } else { const i = document.getElementById('input'); if (i) { i.focus(); } }
   }
+  /** Remembers the control that opened a page (once: a page opened from another page keeps the first opener). */
+  function remember() { const a = document.activeElement; if (root.classList.contains('hidden') && a && a !== document.body && !root.contains(a)) { opener = a; } }
   function frame(title, sub, actions) {
+    // A redraw (data arrived, a refresh) drops the focused control with the old markup: keep focus in the page.
+    const a = document.activeElement; const keep = !a || a === document.body || root.contains(a);
+    const was = keep && a && root.contains(a) ? focusKey(a) : '';
     root.innerHTML = '';
     const head = el('div', 'cp-head', `<button class="cp-back" data-c="back" title="Back (Esc)" aria-label="Back">${I.reply}</button><div class="cp-title"><h2>${esc(title)}</h2>${sub ? `<span class="cp-sub">${sub}</span>` : ''}</div><span class="cp-acts">${actions || ''}</span>`);
     const body = el('div', 'cp-body'); body.setAttribute('tabindex', '-1');
     root.append(head, body);
     root.setAttribute('aria-label', title);
     head.querySelector('[data-c="back"]').onclick = () => close(true);
+    if (keep && !root.classList.contains('hidden')) {
+      const back = head.querySelector('[data-c="back"]'); back.focus();
+      // Once the caller has filled the page, the same control (a type tab, a row action) gets focus back.
+      if (was) { setTimeout(() => { const n = root.querySelector(was); if (n && document.activeElement === back && !n.disabled) { n.focus(); } }, 0); }
+    }
     return body;
+  }
+  /** A selector for "the same control" after a redraw: its data-c / data-t / data-k / data-id, else its label. */
+  function focusKey(n) {
+    const q = (v) => String(v).replace(/["\\]/g, '\\$&');
+    for (const k of ['c', 't', 'k', 'id']) { if (n.dataset && n.dataset[k] && n.dataset.c !== 'back') { return `[data-${k}="${q(n.dataset[k])}"]`; } }
+    const l = n.getAttribute && n.getAttribute('aria-label'); return l && l !== 'Back' ? `[aria-label="${q(l)}"]` : '';
   }
   function loading(page) {
     const body = frame(TITLES[page] || page);
@@ -35,6 +54,7 @@
     else { post({ type: 'continuityPage', page: cur.page, params: cur.params }); }
   }
   function open(page, params, o) {
+    remember();
     cur = { page, params: params || {}, back: o && o.back };
     root.classList.remove('hidden');
     loading(page);
@@ -43,9 +63,13 @@
   }
   // Esc: back to the list from a sub-view (memory editor, versions), else close the page.
   function subBack() { if (cur && cur.page === 'context' && cur.params.view === 'edit') { cur.params.view = 'library'; cur.edit = null; if (cur.data) { context(cur.data); } return true; } if (cur && cur.page === 'memory' && cur.params.view && cur.params.view !== 'list') { cur.params.view = 'list'; cur.edit = null; cur.versions = null; if (cur.data) { memory(cur.data); } return true; } return false; }
-  root.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); if (!subBack()) { close(true); } } });
+  // A modal page: Tab and Shift+Tab stay inside it.
+  root.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); if (!subBack()) { close(true); } return; } if (trapTab) { trapTab(root, e); } });
 
   const row = (cls, html) => el('div', `cp-row ${cls || ''}`, html);
+  // A Trash row stays until the host answers: its refresh (navChanged / memoryDone / contextDone) redraws the list, so
+  // a row that could not be restored ("Nothing to restore") is still there, with its buttons back.
+  function waitRow(it) { it.setAttribute('aria-busy', 'true'); it.querySelectorAll('button').forEach((b) => { b.disabled = true; }); }
   const ago = (t) => { const a = timeAgo(t); return a === 'now' ? 'just now' : `${a} ago`; };
   const when = (t) => (t ? `<span title="${esc(new Date(t).toLocaleString())}">${esc(ago(t))}</span>` : '');
 
@@ -66,7 +90,7 @@
     for (const r of rows) {
       const it = row('', `<span class="cp-main"><span class="cp-name">${esc(r.title || 'New chat')}</span><span class="cp-meta">${esc(r.projectName || '')}${r.projectName ? ' · ' : ''}${r.messageCount} message${r.messageCount === 1 ? '' : 's'} · deleted ${when(r.trashedAt)}</span></span><span class="cp-ra"><button class="btn sm" data-c="restore" title="Restore" aria-label="Restore">${I.restore}<span>Restore</span></button><button class="btn sm ghost danger" data-c="purge" title="Delete permanently" aria-label="Delete permanently">${I.trash}</button></span>`);
       it.setAttribute('role', 'listitem');
-      it.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) { return; } if (b.dataset.c === 'restore') { b.disabled = true; post({ type: 'convAction', ids: [r.id], action: 'restore' }); it.remove(); } else { post({ type: 'convAction', ids: [r.id], action: 'purge' }); } };
+      it.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) { return; } if (b.dataset.c === 'restore') { waitRow(it); post({ type: 'convAction', ids: [r.id], action: 'restore' }); } else { post({ type: 'convAction', ids: [r.id], action: 'purge' }); } };
       list.appendChild(it);
     }
     body.insertBefore(list, body.firstChild);
@@ -78,7 +102,7 @@
     for (const m of mem) {
       const it = row('', `<span class="cp-main"><span class="cp-name">${esc(m.name)}</span><span class="cp-meta">${esc(MEM_LABEL[m.type] || m.type)} memory · deleted ${when(m.trashedAt)}</span></span><span class="cp-ra"><button class="btn sm" data-c="restore" title="Restore" aria-label="Restore ${esc(m.name)}">${I.restore}<span>Restore</span></button><button class="btn sm ghost danger" data-c="purge" title="Delete permanently" aria-label="Delete ${esc(m.name)} permanently">${I.trash}</button></span>`);
       it.setAttribute('role', 'listitem');
-      it.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) { return; } memAct(b.dataset.c, { id: m.id }); it.remove(); };
+      it.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) { return; } waitRow(it); memAct(b.dataset.c, { id: m.id }); };
       list.appendChild(it);
     }
     sec.appendChild(list);
@@ -93,7 +117,7 @@
     for (const x of sets) {
       const it = row('', `<span class="cp-main"><span class="cp-name">${esc(x.name)}</span><span class="cp-meta">${(x.items || []).length} item${(x.items || []).length === 1 ? '' : 's'} · deleted ${when(x.trashedAt)}</span></span><span class="cp-ra"><button class="btn sm" data-c="restore" title="Restore" aria-label="Restore ${esc(x.name)}">${I.restore}<span>Restore</span></button><button class="btn sm ghost danger" data-c="purge" title="Delete permanently" aria-label="Delete ${esc(x.name)} permanently">${I.trash}</button></span>`);
       it.setAttribute('role', 'listitem');
-      it.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) { return; } post({ type: 'contextAction', action: b.dataset.c === 'restore' ? 'restore' : 'purge', id: x.id }); it.remove(); };
+      it.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) { return; } waitRow(it); post({ type: 'contextAction', action: b.dataset.c === 'restore' ? 'restore' : 'purge', id: x.id }); };
       list.appendChild(it);
     }
     sec.appendChild(list);
@@ -163,15 +187,15 @@
     const body = frame('Memory', `${items.length} note${items.length === 1 ? '' : 's'}${d.all ? ' · all projects' : ' · this project and yours'}`, `<button class="btn sm" data-c="new" title="New note" aria-label="New note">${I.plus}<span>New</span></button><button class="btn sm ghost" data-c="settings" title="Memory settings" aria-label="Memory settings">${I.gear}</button>`);
     root.querySelector('[data-c="settings"]').onclick = () => { post({ type: 'openSettings', section: 'memory' }); close(false); };
     root.querySelector('[data-c="new"]').onclick = () => { cur.params.view = 'edit'; cur.edit = { type: FILE_TYPES.has(sel) || sel === 'agent' ? (sel === 'agent' ? 'knowledge' : sel) : sel, name: '', body: '' }; memory(d); };
-    if (d.enabled === false) { body.appendChild(el('p', 'cp-note mm-warn', `${I.warn}<span>Memory is turned off (Settings → Memory): notes are kept but not given to the agent.</span>`)); }
+    if (d.enabled === false) { body.appendChild(el('p', 'cp-note mm-warn', `${I.warn}<span>Memory is turned off (Settings → Memory &amp; history): notes are kept but not given to the agent.</span>`)); }
     const tabs = el('div', 'cp-tabs', `${MEM_TYPES.map(([k, l]) => `<button class="vchip${sel === k ? ' on' : ''}" data-t="${k}" aria-pressed="${sel === k}">${l}<i>${counts[k] || 0}</i></button>`).join('')}<select class="cp-tsel" aria-label="Memory type">${MEM_TYPES.map(([k, l]) => `<option value="${k}"${sel === k ? ' selected' : ''}>${l} (${counts[k] || 0})</option>`).join('')}</select>`);
     tabs.setAttribute('role', 'group'); tabs.setAttribute('aria-label', 'Memory type');
     tabs.onclick = (e) => { const b = e.target.closest('[data-t]'); if (b) { cur.params.type = b.dataset.t; cur.open = null; memory(d); } };
     tabs.onchange = (e) => { cur.params.type = e.target.value; cur.open = null; memory(d); };
     body.appendChild(tabs);
-    const head = el('div', 'mm-head', `<p class="cp-note">${esc(info.description || '')}${FILE_TYPES.has(sel) ? ` <a class="lnk" data-c="folder" role="button" tabindex="0">Open folder</a>` : ''}</p><input class="mm-search" type="search" placeholder="Filter ${esc((MEM_LABEL[sel] || '').toLowerCase())} notes" aria-label="Filter notes" value="${esc(cur.q || '')}"><label class="mm-all"><input type="checkbox" data-c="all"${d.all ? ' checked' : ''}> All projects</label>`);
+    const head = el('div', 'mm-head', `<p class="cp-note">${esc(info.description || '')}${FILE_TYPES.has(sel) ? ` <button type="button" class="lnk" data-c="folder">Open folder</button>` : ''}</p><input class="mm-search" type="search" placeholder="Filter ${esc((MEM_LABEL[sel] || '').toLowerCase())} notes" aria-label="Filter notes" value="${esc(cur.q || '')}"><label class="mm-all"><input type="checkbox" data-c="all"${d.all ? ' checked' : ''}> All projects</label>`);
     body.appendChild(head);
-    const fl = head.querySelector('[data-c="folder"]'); if (fl) { fl.onclick = () => memAct('openFolder', { to: sel }); fl.onkeydown = (e) => { if (e.key === 'Enter') { fl.click(); } }; }
+    const fl = head.querySelector('[data-c="folder"]'); if (fl) { fl.onclick = () => memAct('openFolder', { to: sel }); }
     head.querySelector('[data-c="all"]').onchange = (e) => { cur.params.all = e.target.checked; request(); };
     const list = el('div', 'cp-list'); list.setAttribute('role', 'list');
     body.appendChild(list);
@@ -565,8 +589,10 @@
   }
 
   function compare(m) {
+    remember();
     cur = { page: 'compare', params: {}, back: null };
     root.classList.remove('hidden');
+    setTimeout(() => { const b = root.querySelector('.cp-back'); if (b) { b.focus(); } }, 0);
     const items = m.items || [];
     const body = frame('Compare answers', `${items.length} answers to the same request`);
     const tabs = el('div', 'cmp-tabs'); tabs.setAttribute('role', 'tablist');
@@ -594,13 +620,13 @@
     if (m.type === 'versionsList' && cur.page === 'versions') { versions({ ...m, id: m.id }); return; }
     if (m.type === 'memoryVersions' && cur.page === 'memory') { cur.versions = m; cur.vsel = null; cur.params.view = 'versions'; if (cur.data) { memory(cur.data); } return; }
     if (m.type === 'memoryDone') {
-      if (m.error) { const s = root.querySelector('.mm-form [type="submit"]'); if (s) { s.disabled = false; } return; }
+      if (m.error) { const s = root.querySelector('.mm-form [type="submit"]'); if (s) { s.disabled = false; } if (cur.page === 'trash') { request(); } return; }
       if (api.toast && m.note) { api.toast(m.note, 'info'); }
       if (cur.page === 'memory') { if (m.action === 'create' || m.action === 'update' || m.action === 'move') { cur.params.view = 'list'; cur.edit = null; if (cur.pendingType && m.action !== 'update') { cur.params.type = cur.pendingType; } if (m.action === 'move') { cur.open = null; } } if (m.action === 'restoreVersion') { cur.params.view = 'list'; cur.versions = null; } }
       request(); return;
     }
     if (m.type === 'contextDone') {
-      if (m.error) { const sb = root.querySelector('.cx-form [type="submit"]'); if (sb) { sb.disabled = false; } return; }
+      if (m.error) { const sb = root.querySelector('.cx-form [type="submit"]'); if (sb) { sb.disabled = false; } if (cur.page === 'trash') { request(); } return; }
       if (api.toast && m.note && m.action !== 'attach') { api.toast(m.note, 'info'); }
       if (cur.page === 'context' && (m.action === 'create' || m.action === 'update')) { cur.params.view = 'library'; cur.edit = null; }
       if (cur.page === 'context' || cur.page === 'trash') { request(); }

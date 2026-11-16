@@ -11,6 +11,7 @@ permalink: /docs/shortcuts/
 | Action | macOS | Windows / Linux | When |
 |---|---|---|---|
 | Open chat | <kbd>⌘⇧L</kbd> | <kbd>Ctrl+Shift+L</kbd> | outside the text editor |
+| Open chat | <kbd>⌃⌘L</kbd> | <kbd>Ctrl+Alt+L</kbd> | editor focused |
 | New chat | <kbd>⌘⇧⌥L</kbd> | <kbd>Ctrl+Shift+Alt+L</kbd> | always |
 | Run tasks in parallel | <kbd>⌘⇧⌥P</kbd> | <kbd>Ctrl+Shift+Alt+P</kbd> | always |
 | Edit with LocalPilot (inline) | <kbd>⌘⌥K</kbd> | <kbd>Ctrl+Alt+K</kbd> | editor focused and not read-only |
@@ -18,7 +19,7 @@ permalink: /docs/shortcuts/
 | Capture screenshot to chat | <kbd>⌘⌥⇧S</kbd> | <kbd>Ctrl+Alt+Shift+S</kbd> | always |
 | Add selection to chat (focuses the chat input when nothing is selected) | <kbd>⌘'</kbd> | <kbd>Ctrl+'</kbd> | editor focused |
 
-<kbd>⌘⇧L</kbd> / <kbd>Ctrl+Shift+L</kbd> opens the chat when focus is not in a text editor, so VS Code's **Select All Occurrences** still works while you edit. <kbd>⌘⇧⌥L</kbd> replaces **Open Quick Chat**. To get that back, open **Keyboard Shortcuts**, search for "LocalPilot: New Chat", and change or remove the binding.
+<kbd>⌘⇧L</kbd> / <kbd>Ctrl+Shift+L</kbd> opens the chat when focus is not in a text editor, so VS Code's **Select All Occurrences** still works while you edit; from the editor, use <kbd>⌃⌘L</kbd> / <kbd>Ctrl+Alt+L</kbd>. Some Linux desktops (KDE, Xfce, older Ubuntu) lock the screen on <kbd>Ctrl+Alt+L</kbd>; rebind **LocalPilot: Open Chat** there. <kbd>⌘⇧⌥L</kbd> replaces **Open Quick Chat**. To get that back, open **Keyboard Shortcuts**, search for "LocalPilot: New Chat", and change or remove the binding.
 
 ## Inside the chat
 
@@ -89,10 +90,11 @@ In the review diff (the title bar shows the same actions):
 | Key | Action |
 |---|---|
 | <kbd>⌘Enter</kbd> / <kbd>Ctrl+Enter</kbd> | Accept the file and open the next one |
+| <kbd>⌘⇧⌫</kbd> / <kbd>Ctrl+Shift+Backspace</kbd> | Reject the file and open the next one |
 | <kbd>⌥F5</kbd> / <kbd>Alt+F5</kbd> | Next changed file |
 | <kbd>⇧⌥F5</kbd> / <kbd>Shift+Alt+F5</kbd> | Previous changed file |
 
-**Reject File** is in the diff's title bar. The right side of the diff is the file itself, so you can edit it before accepting. When the last file is decided, a summary ("All 5 files reviewed: 4 accepted, 1 rejected") offers **Undo**.
+**Accept File** and **Reject File** are also in the diff's title bar. Reject uses <kbd>Shift</kbd> so that <kbd>⌘⌫</kbd> / <kbd>Ctrl+Backspace</kbd> keep deleting text while you edit. The right side of the diff is the file itself, so you can edit it before accepting. When the last file is decided, a summary ("All 5 files reviewed: 4 accepted, 1 rejected") offers **Undo**.
 
 ## Commands
 
@@ -103,7 +105,7 @@ Open the Command Palette and type "LocalPilot" to see these.
 | Chat | Open Chat · Open Chat in Editor · Move Chat To… · Show Quick Menu… · New Chat · Show Chats… · Chat Actions… · Open in Markdown Reader · Open Markdown Reader to the Side · Ask LocalPilot About This Document · Export Markdown as HTML · Export Markdown as PDF |
 | Agents | Run Tasks in Parallel… · Stop All Agents · Pause or Resume Agent · Pause All Agents · Resume All Agents |
 | Best-of-N and worktrees | Best of N: Run One Task on Several Models… · Compare Best-of-N Results… · Apply Agent's Changes to Workspace · Discard Agent's Isolated Changes |
-| Changes | Keep All Agent Changes · Undo All Agent Changes · Accept File · Reject File · Next Changed File · Previous Changed File (in a review diff) |
+| Changes | Accept All Agent Changes · Reject All Agent Changes · Accept File · Reject File · Next Changed File · Previous Changed File (in a review diff) |
 | Models | Select Default Model… · Refresh Models · Set Up Models Automatically · Install Model from Catalog… · Remove Local Model… · Enable / Disable Model… · Manage Models · Browse Ollama Model Gallery… · Manage Model Providers… · Set Provider API Key… · Restart Ollama with Parallel Request Slots · Tune Models From Usage · Start Colibri Server · Stop Colibri Server |
 | Skills | Install Skill… · Browse Skill Registry… · Manage Skills · Reload Skills, Subagents & MCP Servers |
 | Browser and images | Open URL in Browser View… · Screenshot a Web Page… · Inspect a Web Page (Screenshot, Console, Network)… · Capture Screenshot to Chat (Area / Window / Screen) · Attach Image to Chat… · Add File/Folder to Chat |

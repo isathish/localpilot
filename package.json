@@ -383,13 +383,13 @@
       },
       {
         "command": "localpilot.keepChanges",
-        "title": "Keep",
+        "title": "Accept",
         "category": "LocalPilot",
         "icon": "$(check)"
       },
       {
         "command": "localpilot.undoChanges",
-        "title": "Undo",
+        "title": "Reject",
         "category": "LocalPilot",
         "icon": "$(discard)"
       },
@@ -419,13 +419,13 @@
       },
       {
         "command": "localpilot.keepAllChanges",
-        "title": "Keep All Agent Changes",
+        "title": "Accept All Agent Changes",
         "category": "LocalPilot",
         "icon": "$(check-all)"
       },
       {
         "command": "localpilot.undoAllChanges",
-        "title": "Undo All Agent Changes",
+        "title": "Reject All Agent Changes",
         "category": "LocalPilot",
         "icon": "$(discard)"
       },
@@ -1743,6 +1743,12 @@
         "when": "!editorTextFocus"
       },
       {
+        "command": "localpilot.openChat",
+        "key": "ctrl+alt+l",
+        "mac": "ctrl+cmd+l",
+        "when": "editorTextFocus"
+      },
+      {
         "command": "localpilot.newSession",
         "key": "ctrl+shift+alt+l",
         "mac": "cmd+shift+alt+l"
@@ -1785,6 +1791,12 @@
         "command": "localpilot.review.acceptFile",
         "key": "ctrl+enter",
         "mac": "cmd+enter",
+        "when": "localpilot.reviewing && editorFocus && !suggestWidgetVisible && !inlineSuggestionVisible"
+      },
+      {
+        "command": "localpilot.review.rejectFile",
+        "key": "ctrl+shift+backspace",
+        "mac": "cmd+shift+backspace",
         "when": "localpilot.reviewing && editorFocus && !suggestWidgetVisible && !inlineSuggestionVisible"
       },
       {

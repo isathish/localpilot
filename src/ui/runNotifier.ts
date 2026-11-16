@@ -132,10 +132,10 @@ export class RunNotifier implements vscode.Disposable {
     }
     if (changedFiles > 0) {
       const files = `${changedFiles} file${changedFiles === 1 ? '' : 's'} changed`;
-      void vscode.window.showInformationMessage(`LocalPilot finished${took}: ${name}. ${files}`, 'Review', ...(this.actions ? ['Keep All'] : [])).then((pick) => {
+      void vscode.window.showInformationMessage(`LocalPilot finished${took}: ${name}. ${files}`, 'Review', ...(this.actions ? ['Accept All'] : [])).then((pick) => {
         if (pick === 'Review') {
           void open();
-        } else if (pick === 'Keep All') {
+        } else if (pick === 'Accept All') {
           void this.actions?.keep(sessionId);
         }
       });

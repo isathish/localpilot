@@ -308,9 +308,7 @@ export type FromWebview =
   | { type: 'stopChild'; sessionId: string; childId: string }
   | { type: 'applyWorktree'; sessionId: string; files?: string[] }
   | { type: 'discardWorktree'; sessionId: string; files?: string[] }
-  | { type: 'openWorktree'; sessionId: string }
   | { type: 'runBestOfN'; prompt: string; models: string[]; mode?: Session['mode'] }
-  | { type: 'compareGroup'; groupId: string }
   | { type: 'suggestTasks'; more?: boolean }
   /** "Build" on the Prepared-plan card: switch to Agent mode and execute the checklist. */
   | { type: 'buildPlan'; sessionId: string }
@@ -408,12 +406,9 @@ export type FromWebview =
   /** `run`: the turn whose checkpoint to compare with (the Checkpoints page); default the last one. */
   | { type: 'viewChanges'; sessionId: string; scope: 'turn' | 'session'; run?: number }
   | { type: 'openCheckpointSetting' }
-  /** Edit & resend: drop this user message and everything after it, keep files as they are, put the text in the composer. */
-  | { type: 'editMessage'; sessionId: string; messageIndex: number }
   /** Inline edit: rewind to the user message at `index` (and its files with `restoreWorkspace`), then send the edited message. */
   | { type: 'editAndRegenerate'; sessionId: string; index: number; text: string; images?: string[]; attachments?: string[]; restoreWorkspace?: boolean }
   | { type: 'checkpointExists'; sessionId: string; index: number }
-  | { type: 'runParallelPrompt' }
   | { type: 'dismissSkillTopic'; topic: string }
   /** Install a catalog skill offered under a request (`skills.autoInstall: ask`). */
   | { type: 'installCatalogSkill'; name: string; repo: string; sessionId?: string }
@@ -2862,24 +2857,11 @@ export class ChatController implements vscode.Disposable {
         }
         await this.discardWorktree(msg.sessionId, { confirm: true });
         return;
-      case 'openWorktree': {
-        const s = this.store.get(msg.sessionId);
-        if (s?.worktree) {
-          await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(s.worktree.path), { forceNewWindow: true });
-        }
-        return;
-      }
       case 'runBestOfN':
         await this.runBestOfN(msg.prompt, msg.models, msg.mode ?? 'agent');
         return;
-      case 'compareGroup':
-        await vscode.commands.executeCommand('localpilot.compareResults', msg.groupId);
-        return;
       case 'copyText':
         await vscode.env.clipboard.writeText(msg.text);
-        return;
-      case 'runParallelPrompt':
-        await vscode.commands.executeCommand('localpilot.runParallelTasks');
         return;
       case 'suggestTasks':
         await this.suggestTasks(!!msg.more);
@@ -2901,9 +2883,6 @@ export class ChatController implements vscode.Disposable {
       }
       case 'restoreCheckpoint':
         await this.rewindTo(msg.sessionId, msg.messageIndex, msg.restoreType ?? 'both', reply);
-        return;
-      case 'editMessage':
-        await this.rewindTo(msg.sessionId, msg.messageIndex, 'edit', reply);
         return;
       case 'editAndRegenerate':
         if (!(await this.editAndRegenerate(msg))) {
@@ -2929,16 +2908,12 @@ export class ChatController implements vscode.Disposable {
    * turn's git checkpoint when there is one (changes made by shell commands included), else from the file snapshots.
    * `resend` (inline edit) leaves the composer and the success toast alone; false when nothing (or not all) was rewound.
    */
-  private async rewindTo(sessionId: string, messageIndex: number, type: RestoreType | 'edit', reply?: Sink, opts: { resend?: boolean } = {}): Promise<boolean> {
+  private async rewindTo(sessionId: string, messageIndex: number, type: RestoreType, reply?: Sink, opts: { resend?: boolean } = {}): Promise<boolean> {
     if (this.compacting.has(sessionId)) {
       this.broadcast({ type: 'toast', level: 'info', text: 'Wait for the compaction to finish' });
       return false;
     }
     if (this.isRunning(sessionId)) {
-      if (type === 'edit') {
-        this.broadcast({ type: 'toast', level: 'error', text: 'Stop the running agent before editing a message' });
-        return false;
-      }
       // A restore cancels the run first: its edits are what the user wants undone.
       if (!(await this.stopAndWait(sessionId))) {
         this.broadcast({ type: 'toast', level: 'error', text: 'The agent did not stop in time; try restoring again' });
@@ -3017,21 +2992,19 @@ export class ChatController implements vscode.Disposable {
       type: 'toast',
       level: 'info',
       text:
-        type === 'edit'
-          ? 'Edit the message and send it again — later turns were removed, files were kept'
-          : type === 'task'
-            ? 'Rewound the conversation — files were kept as they are'
-            : s.worktree
-              ? `${type === 'both' ? 'Rewound the conversation — f' : 'F'}iles in the isolated worktree were not reverted; use Discard to drop the agent's changes`
-              : key === undefined
-                ? 'No checkpoint was recorded for this message — files were not changed'
-                : restore.failed
-                  ? `${what} — reverted ${n(restore.restored)}; ${restore.failed} could not be restored (see the LocalPilot log)`
-                  : restore.restored
-                    ? `${what} — reverted ${n(restore.restored)}${stashNote}`
-                    : type === 'both'
-                      ? 'Rewound the conversation — no file changes since this message'
-                      : 'No file changes since this message',
+        type === 'task'
+          ? 'Rewound the conversation — files were kept as they are'
+          : s.worktree
+            ? `${type === 'both' ? 'Rewound the conversation — f' : 'F'}iles in the isolated worktree were not reverted; use Discard to drop the agent's changes`
+            : key === undefined
+              ? 'No checkpoint was recorded for this message — files were not changed'
+              : restore.failed
+                ? `${what} — reverted ${n(restore.restored)}; ${restore.failed} could not be restored (see the LocalPilot log)`
+                : restore.restored
+                  ? `${what} — reverted ${n(restore.restored)}${stashNote}`
+                  : type === 'both'
+                    ? 'Rewound the conversation — no file changes since this message'
+                    : 'No file changes since this message',
     });
     return !restore.failed;
   }

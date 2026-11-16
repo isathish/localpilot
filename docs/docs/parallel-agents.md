@@ -180,7 +180,7 @@ The **Agents** view sits below the chat view (collapsed by default). It stays in
 - **Running:** live status line (for example `Running grep_search…`), Pause / Resume / Stop, and a count badge.
 - **Idle:** recent sessions with mode, message count and changed-file count.
 - Expand a session to see the files it changed. Click a file for a side-by-side diff.
-- Inline **Keep** / **Undo** on sessions and files, and **Keep All** / **Undo All Agent Changes** in the title menu.
+- Inline **Accept** / **Reject** on sessions and files, and **Accept All Agent Changes** / **Reject All Agent Changes** in the title menu.
 
 ## Change review
 

@@ -1943,3 +1943,5 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .ratecard { backgrou
 .relrow .rel .x:hover { background: var(--hover); color: var(--fg); }
 @container (max-width: 330px) { .relrow .rl .long { display: none; } .relrow .rel .t { max-width: 16ch; } }
 body.vscode-high-contrast .relrow .rel, body.vscode-high-contrast-light .relrow .rel { border: 1px solid var(--border); }
+/* Image thumbnails are buttons (Enter / Space open the lightbox). */
+:is(.imgs img, .md-img, .content.shot img, .content.inspect .shot-img):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

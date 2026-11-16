@@ -1176,7 +1176,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       case 'keep':
         return controller.handle({ type: 'keepChanges', sessionId: s.id });
       case 'undo':
-        if ((await vscode.window.showWarningMessage(`Undo all ${changed} changes of "${s.title}"?`, { modal: true }, 'Undo all')) === 'Undo all') {
+        if ((await vscode.window.showWarningMessage(`Reject all ${changed} changes of "${s.title}"?`, { modal: true, detail: 'Their edits are removed from disk.' }, 'Reject all')) === 'Reject all') {
           return controller.handle({ type: 'undoChanges', sessionId: s.id });
         }
         return;
@@ -1205,7 +1205,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
         { label: '$(git-branch) Fork', action: 'fork' },
         { label: '$(export) Export as Markdown', action: 'export' },
         { label: '$(fold) Compact context', action: 'compact' },
-        ...(changed ? [{ label: `$(check-all) Keep all ${changed} changes`, action: 'keep' }, { label: `$(discard) Undo all ${changed} changes`, action: 'undo' }] : []),
+        ...(changed ? [{ label: `$(check-all) Accept all ${changed} changes`, action: 'keep' }, { label: `$(discard) Reject all ${changed} changes`, action: 'undo' }] : []),
         { label: '$(clear-all) Clear messages', action: 'clear' },
         { label: '$(trash) Delete chat', action: 'delete' },
       ],
