@@ -16,7 +16,7 @@ import { SkillManager } from '../src/agent/skills';
 import { applyPolicy, blockReason, cloudNotice, stripLocalOnly } from '../src/continuity/context/contextPolicy';
 import { changedNote, changedSince, hashFiles, restoreInto, snapshotItems, type ContextSnapshot } from '../src/continuity/context/contextSnapshots';
 import { cleanItems, expandGlob, globRegExp, slugName } from '../src/continuity/context/contextLibrary';
-import { CHAT_REF_TOKENS, capTokens, historyTools, keywords, READ_MAX_MESSAGES, READ_TOTAL_CHARS, scoreRelated } from '../src/continuity/context/relatedContext';
+import { CHAT_REF_TOKENS, capTokens, historyTools, keywords, READ_MAX_MESSAGES, READ_TOTAL_CHARS, scoreRelated, stripTrashFilters } from '../src/continuity/context/relatedContext';
 import { estimateTokens } from '../src/context/tokenizer';
 import { WorkspaceContext } from '../src/context/workspaceContext';
 import { ProviderRegistry } from '../src/providers/registry';
@@ -117,7 +117,8 @@ export async function contextSmoke(check: Check): Promise<void> {
   const tools = new ToolRegistry();
   const runner = { contextHooks: undefined } as unknown as AgentRunner;
   const posted: { type: string; [k: string]: unknown }[] = [];
-  const ctxD = attachContext(c, { runner, workspace, memory, tools, sink: { post: (m) => posted.push(m as never) }, defaultFolder: () => folder, log });
+  let settingsChanged: (() => void) | undefined;
+  const ctxD = attachContext(c, { runner, workspace, memory, tools, sink: { post: (m) => posted.push(m as never) }, defaultFolder: () => folder, log, onSettingsChanged: (cb) => ((settingsChanged = cb), { dispose: () => (settingsChanged = undefined) }) });
   const svc = c.context!;
   check('attachContext sets continuity.context, the agent hooks, the #context:/#chat: resolvers and the history tools', !!svc && !!runner.contextHooks?.beforeRequest && workspace.mentionResolvers.has('context') && workspace.mentionResolvers.has('chat') && !!tools.get('history_search') && !!tools.get('history_read'));
 
@@ -189,6 +190,30 @@ export async function contextSmoke(check: Check): Promise<void> {
   const rres2 = await hread.execute({ conversation_id: 'button-colours' }, toolCtx(dbChat.id));
   check('history_read: by title, requests and answers only', /\[1\] user/.test(rres2.content) && rres2.content.includes('amber'), rres2.content);
   check('history tools: read-only (offered in Ask and Plan mode)', !!hsearch.readOnly && !!hread.readOnly && !hsearch.approvalKind);
+  // The model cannot reach Trash with an inline filter.
+  const tres = await hsearch.execute({ query: 'is:trashed ECONNREFUSED' }, toolCtx(cssChat.id));
+  check('history_search: an is:trashed filter from the model is dropped (Trash stays out)', !tres.content.includes(trashChat.id) && tres.content.includes(dbChat.id) && stripTrashFilters('-is:trashed foo is:"trashed" bar') === 'foo bar', { trash: tres.content.includes(trashChat.id), db: tres.content.includes(dbChat.id), strip: stripTrashFilters('-is:trashed foo is:"trashed" bar') });
+  // history_read stays in this project unless asked for all projects.
+  const now0 = Date.now();
+  c.log.append('conversation', 's_other_proj', 'create', { title: 'Elsewhere', projectId: 'prj_somewhere_else', model: 'm', mode: 'agent', pinned: false, favorite: false, archived: false, tags: {}, activeBranchId: 'br_s_other_proj', createdAt: now0 }, { durable: true });
+  c.log.append('message', 'm_other_proj', 'create', { conversationId: 's_other_proj', branchId: 'br_s_other_proj', role: 'user', parts: [{ kind: 'text', text: 'OTHER-PROJECT-ONLY words' }], meta: {}, createdAt: now0 }, { durable: true });
+  await c.log.flush();
+  await c.index.catchUp();
+  const scoped = await hread.execute({ conversation_id: 's_other_proj' }, toolCtx(cssChat.id));
+  const wide = await hread.execute({ conversation_id: 's_other_proj', all_projects: true }, toolCtx(cssChat.id));
+  check('history_read: another project\'s chat only with all_projects', !scoped.content.includes('OTHER-PROJECT-ONLY') && /all_projects/.test(scoped.content) && wide.content.includes('OTHER-PROJECT-ONLY'), { scoped: scoped.content.slice(0, 200), wide: wide.content.slice(0, 200) });
+  // Related conversations off: the history tools are not offered at all.
+  const prevCfg = process.env.LP_CONFIG;
+  process.env.LP_CONFIG = JSON.stringify({ ...(prevCfg ? (JSON.parse(prevCfg) as object) : {}), 'continuity.relatedConversations': false });
+  settingsChanged?.();
+  const offTools = !tools.get('history_search') && !tools.get('history_read');
+  if (prevCfg === undefined) {
+    delete process.env.LP_CONFIG;
+  } else {
+    process.env.LP_CONFIG = prevCfg;
+  }
+  settingsChanged?.();
+  check('history tools: not offered while related conversations are off; back when turned on', offTools && !!tools.get('history_search') && !!tools.get('history_read'));
 
   // Memory marked local only stays out of a cloud prompt; the budget is unchanged for a local one.
   await memory.write('prod-access', 'ssh bastion.internal with the ops key', 'project');

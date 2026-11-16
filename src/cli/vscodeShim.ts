@@ -405,7 +405,7 @@ export const SETTING_DEFAULTS: Readonly<Record<string, unknown>> = {
   'sync.webdav.url': '',
   'sync.webdav.username': '',
   'sync.intervalMinutes': 5,
-  'sync.categories': { conversations: true, memory: true, attachments: true, agentState: true, checkpointContents: false, prompts: true, preferences: true },
+  'sync.categories': { conversations: true, memory: true, attachments: true, agentState: true, checkpointContents: false, prompts: true, preferences: true, approvals: false },
   'sync.maxAttachmentMB': 20,
   'sync.deviceName': '',
 };

@@ -151,21 +151,22 @@ export class FolderBackend implements SyncBackend {
               await fh.close();
             }
           }
-        } else {
-          if (o.ifMatch) {
+        } else if (o.ifMatch) {
+          // Compare-and-swap on a folder: check, replace and verify under an exclusive lock file next to it, so two
+          // devices (or processes) changing the keyring at once cannot both pass the check and one lose its change.
+          await this.locked(target, key, async () => {
             const cur = await this.head(key);
             if (cur?.etag !== o.ifMatch) {
               throw new BackendError('precondition', `${key} changed`);
             }
-          }
-          await fs.promises.rename(tmp, target);
-          // Compare-and-swap on a folder: re-read and verify what landed is ours (another writer may have raced).
-          if (o.ifMatch) {
+            await fs.promises.rename(tmp, target);
             const back = await fs.promises.readFile(target);
             if (!back.equals(Buffer.from(body))) {
               throw new BackendError('precondition', `${key} changed`);
             }
-          }
+          });
+        } else {
+          await fs.promises.rename(tmp, target);
         }
       } finally {
         await fs.promises.rm(tmp, { force: true });
@@ -177,6 +178,43 @@ export class FolderBackend implements SyncBackend {
         throw e;
       }
       throw new BackendError(reasonOf(e), `cannot write ${key}: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Runs `fn` holding `.<name>.lock` next to `target` (exclusive create; dot files are never listed). A lock older than
+   * 60 s was left by a writer that died. Throws `precondition` when it cannot be had in 10 s (the caller retries).
+   */
+  private async locked(target: string, key: string, fn: () => Promise<void>): Promise<void> {
+    const lock = path.join(path.dirname(target), `.${path.basename(target)}.lock`);
+    const token = crypto.randomBytes(6).toString('hex');
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      try {
+        await fs.promises.writeFile(lock, token, { flag: 'wx' });
+        break;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw e;
+        }
+        const st = await fs.promises.stat(lock).catch(() => undefined);
+        if (st && Date.now() - st.mtimeMs > 60_000) {
+          await fs.promises.rm(lock, { force: true });
+          continue;
+        }
+        if (Date.now() > deadline) {
+          throw new BackendError('precondition', `${key} is being changed by another device`);
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    try {
+      await fn();
+    } finally {
+      const cur = await fs.promises.readFile(lock, 'utf8').catch(() => '');
+      if (cur === token) {
+        await fs.promises.rm(lock, { force: true });
+      }
     }
   }
 

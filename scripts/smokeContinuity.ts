@@ -8,7 +8,16 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as zlib from 'zlib';
 import { hash26, idTime, isEntityId, newId, stableId, ulid } from '../src/continuity/ids';
+import { Lease, leaseIsFree, readLease, withFileLock } from '../src/continuity/data/lease';
+import { streamLastSeq } from '../src/continuity/data/eventLog';
+import { readStreamDir } from '../src/continuity/data/segment';
+import { compactOtherStreams } from '../src/continuity/data/compaction';
+import { DataManager } from '../src/continuity/data/dataManager';
+import { listBackups } from '../src/continuity/data/backup';
+import { newKdf } from '../src/continuity/data/crypto/keyring';
+import { FolderBackend } from '../src/continuity/sync/backends/folder';
 import { Hlc, MAX_FUTURE_MS } from '../src/continuity/hlc';
 import { EventEnvelope, upgradePayload, validateEnvelope } from '../src/continuity/events';
 import { FileEventLog, readOrCreateDevice } from '../src/continuity/data/eventLog';
@@ -83,7 +92,7 @@ export async function continuitySmoke(check: Check): Promise<void> {
   check('HLC: compare / physical / device', Hlc.compare('0001-0000-a', '0002-0000-a') < 0 && Hlc.device(h1) === 'dev_A');
   const good = ev('dev_A.1', 1, h1, 'conversation', 's_1', 'create', { title: 'x' });
   check('envelope: valid', validateEnvelope(good) === undefined);
-  check('envelope: bad seq / id / op rejected', !!validateEnvelope({ ...good, seq: 0 }) && !!validateEnvelope({ ...good, id: 'x' }) && !!validateEnvelope({ ...good, op: 'zap' }));
+  check('envelope: bad seq / id / op rejected; an unknown op (a newer build) is well-formed but never applied', !!validateEnvelope({ ...good, seq: 0 }) && !!validateEnvelope({ ...good, id: 'x' }) && !!validateEnvelope({ ...good, op: 'Zap!' as never }) && validateEnvelope({ ...good, op: 'zap' as never }) === undefined && reduce(undefined, { ...good, op: 'zap' as never }).changed.length === 0);
   check('envelope: unknown kind and newer sv are well-formed but not applied', validateEnvelope({ ...good, ent: 'hologram' }) === undefined && upgradePayload('conversation', 99, {}) === undefined && reduce(undefined, { ...good, sv: 99 }).changed.length === 0);
 
   console.log('\n[continuity: event log, segments, leases]');
@@ -511,6 +520,312 @@ export async function continuitySmoke(check: Check): Promise<void> {
     threw = true;
   }
   check('an unusable data dir gives a degraded instance, never a throw', !!d.degraded && threw);
+  await hardening(check, SQL);
   void crypto;
   void readSegmentLines;
+}
+
+/**
+ * Hardening of the continuity data layer (design §26): leases (atomic takeover, live pids never stale by age, a log that
+ * lost its lease moves on), device binding (a copied data folder), purge redaction in every local stream and in
+ * backups, compaction of streams nobody writes (and of owners' newer bases), a base over a segment it covers in part,
+ * run details pruned with the history window, unknown ops kept, streamed and framed backups, blob re-use vs GC, one
+ * automatic backup at a time, lock files for shared read-merge-write files and the folder keyring.
+ */
+async function hardening(check: Check, SQL: Awaited<ReturnType<typeof loadSqlJs>>): Promise<void> {
+  const DAY = 86_400_000;
+  const conv = (log: FileEventLog, id: string, at: number) => log.append('conversation', id, 'create', { title: id, tags: {}, pinned: false, favorite: false, archived: false, model: '', mode: 'agent', activeBranchId: `br_${id}`, createdAt: at });
+  const say = (log: FileEventLog, convId: string, id: string, text: string, at: number) => log.append('message', id, 'create', { conversationId: convId, branchId: `br_${convId}`, role: 'user', parts: [{ kind: 'text', text }], meta: {}, createdAt: at });
+  const allText = (root: string) =>
+    fs
+      .readdirSync(path.join(root, 'streams'))
+      .flatMap((s) => listSegments(path.join(root, 'streams', s)).map((f) => fs.readFileSync(f.file, 'utf8')))
+      .join('');
+
+  console.log('\n[continuity: hardening — leases]');
+  {
+    const dir = tmp('lease');
+    const file = path.join(dir, 'lease.json');
+    fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: os.hostname(), kind: 'cli', at: Date.now() - 3600_000 }));
+    check('lease: a live pid on this host is never stale by age alone', !leaseIsFree(file));
+    fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: 'some-other-host', kind: 'cli', at: Date.now() - 3600_000 }));
+    check('lease: another host\'s lease is stale by age (its pid cannot be checked)', leaseIsFree(file));
+    fs.writeFileSync(file, JSON.stringify({ pid: 2 ** 22 + 4242, host: os.hostname(), kind: 'cli', at: Date.now() }));
+    // Another taker holds the take-over claim: this one must not take the lease too.
+    fs.writeFileSync(`${file}.claim`, JSON.stringify({ pid: process.pid, token: 'other', at: Date.now() }));
+    const l1 = new Lease(file, { kind: 'a', refreshMs: 0 });
+    check('lease: a stale lease is not taken while another taker holds the claim', !l1.tryClaim() && !l1.isHeld);
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(`${file}.claim`, old, old);
+    const l2 = new Lease(file, { kind: 'b', refreshMs: 0 });
+    const l3 = new Lease(file, { kind: 'c', refreshMs: 0 });
+    const won = [l2.tryClaim(), l3.tryClaim()];
+    check('lease: a claim left by a dead taker is cleared; exactly one of two takers wins', won.filter(Boolean).length === 1 && readLease(file)?.token === (won[0] ? l2.token : l3.token) && !fs.existsSync(`${file}.claim`), won);
+    l2.release();
+    l3.release();
+    // A log whose lease another process took moves to a stream of its own.
+    const root = tmp('lease-log');
+    const log = FileEventLog.open({ root, writer: 'cli', log: quiet, flushMs: 1 });
+    const first = log.stream;
+    log.append('conversation', 's_l', 'patch', { title: 'before' });
+    await log.flush();
+    let rotated = '';
+    log.onRotate((r) => (rotated = `${r.from}>${r.to}`));
+    fs.writeFileSync(path.join(log.ownStreamDir, 'lease.json'), JSON.stringify({ pid: process.pid, host: os.hostname(), kind: 'vscode', at: Date.now(), token: 'thief' }));
+    const e = log.append('conversation', 's_l', 'patch', { title: 'after' });
+    await log.flush();
+    const firstText = listSegments(path.join(root, 'streams', first)).map((f) => fs.readFileSync(f.file, 'utf8')).join('');
+    check('log: after losing its lease it writes to a new stream (re-stamped), never the taken one', log.stream !== first && e.stream === log.stream && e.id === `${log.stream}:1` && rotated === `${first}>${log.stream}` && !firstText.includes('"after"') && (await log.readAt(log.locOf(e)!)).p.title === 'after', { first, now: log.stream, rotated });
+    await log.dispose();
+  }
+
+  console.log('\n[continuity: hardening — device identity bound to the machine]');
+  {
+    const root = tmp('device');
+    const a = readOrCreateDevice(root, 'A', Date.now, { fingerprint: 'fp_machine_a' });
+    const copied = readOrCreateDevice(root, 'B', Date.now, { fingerprint: 'fp_machine_b' });
+    const againA = readOrCreateDevice(root, 'A', Date.now, { fingerprint: 'fp_machine_a' });
+    const againB = readOrCreateDevice(root, 'B', Date.now, { fingerprint: 'fp_machine_b' });
+    const file = JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')) as { deviceId: string; host: string; others: Record<string, { deviceId: string }> };
+    check('device: a copied data folder gets a device id of its own; each machine keeps its id', a.deviceId !== copied.deviceId && againA.deviceId === a.deviceId && againB.deviceId === copied.deviceId && file.deviceId === a.deviceId && file.others.fp_machine_b.deviceId === copied.deviceId, file);
+    const legacy = tmp('device-170');
+    fs.writeFileSync(path.join(legacy, 'device.json'), JSON.stringify({ v: 1, deviceId: 'dev_LEGACY', name: 'old', platform: 'x', createdAt: 1 }));
+    const bound = readOrCreateDevice(legacy, undefined, Date.now, { fingerprint: 'fp_here' });
+    check('device: a 1.7.0 device.json keeps its id and is bound to the first machine that opens it', bound.deviceId === 'dev_LEGACY' && JSON.parse(fs.readFileSync(path.join(legacy, 'device.json'), 'utf8')).host === 'fp_here');
+    // Streams of the copied identity stay readable as that device's history.
+    const la = FileEventLog.open({ root, writer: 'cli', log: quiet, flushMs: 1, fingerprint: 'fp_machine_a' });
+    la.append('conversation', 's_dev', 'patch', { title: 'from A' });
+    await la.dispose();
+    const lb = FileEventLog.open({ root, writer: 'cli', log: quiet, flushMs: 1, fingerprint: 'fp_machine_b' });
+    const streams = await lb.streams();
+    check('device: the copy writes its own stream; the original\'s stays as another device\'s', lb.device.deviceId === copied.deviceId && lb.stream.startsWith(copied.deviceId) && streams.some((s) => s.device === a.deviceId && !s.own && s.lastSeq === 1));
+    await lb.dispose();
+    check('device: the machine id lives outside the data folder (tests: a temp file)', !!process.env.LOCALPILOT_MACHINE_ID_FILE && !process.env.LOCALPILOT_MACHINE_ID_FILE.startsWith(os.homedir() + path.sep + '.localpilot') && fs.existsSync(process.env.LOCALPILOT_MACHINE_ID_FILE));
+  }
+
+  console.log('\n[continuity: hardening — purge reaches every local stream and later backups]');
+  {
+    let now = Date.UTC(2026, 3, 1);
+    const root = tmp('purge-all');
+    const SECRET = 'PURGE-ME-91c2';
+    // A process that ended (its stream is nobody's now), a live other process, and a copy of another device's stream.
+    const ended = FileEventLog.open({ root, writer: 'cli', log: quiet, flushMs: 1, now: () => now });
+    conv(ended, 's_x', now);
+    say(ended, 's_x', 'm_x_ended', `${SECRET} written by the CLI`, now);
+    const live = FileEventLog.open({ root, writer: 'vscode', log: quiet, flushMs: 1, now: () => now, pid: process.pid });
+    const me = FileEventLog.open({ root, writer: 'vscode', log: quiet, flushMs: 1, now: () => now });
+    const endedStream = ended.stream;
+    await ended.dispose();
+    check('purge test: three streams (one ended, one live, ours)', new Set([endedStream, live.stream, me.stream]).size === 3);
+    say(live, 's_x', 'm_x_live', `${SECRET} in a window still open`, now);
+    await live.flush();
+    const remote = 'dev_REMOTE1.1';
+    const H = (ms: number) => `${ms.toString(16).padStart(12, '0')}-0000-dev_REMOTE1`;
+    await me.importRemote(remote, [ev(remote, 1, H(now), 'message', 'm_x_remote', 'create', { conversationId: 's_x', branchId: 'br_s_x', role: 'assistant', parts: [{ kind: 'text', text: `${SECRET} from the other device` }], meta: {}, createdAt: now })]);
+    say(me, 's_keep', 'm_keep', 'KEEP-THIS-TEXT', now);
+    await me.flush();
+    const index = new LocalIndexClient({ root, deviceId: me.device.deviceId, ownStream: me.stream, sqlJs: SQL, now: () => now });
+    await index.ready;
+    await index.catchUp();
+    const ret = new Retention({ log: me, index, blobs: new BlobStore(root, () => now), settings: () => ({ trashRetentionDays: 30, historyDays: 90 }), now: () => now });
+    await ret.purge([{ ent: 'conversation', id: 's_x' }]);
+    const liveDir = live.ownStreamDir;
+    const others = fs.readdirSync(path.join(root, 'streams')).filter((s) => s !== live.stream).flatMap((s) => listSegments(path.join(root, 'streams', s)).map((f) => fs.readFileSync(f.file, 'utf8'))).join('');
+    check('purge: redacted in the stream of a process that ended and in other devices\' copies, not only our own', !others.includes(SECRET) && others.includes('KEEP-THIS-TEXT'));
+    const liveText = listSegments(liveDir).map((f) => fs.readFileSync(f.file, 'utf8')).join('');
+    check('purge: a stream another live process writes is left to it (single writer)', liveText.includes(SECRET));
+    // A backup taken now leaves the purged content out, even what still sits in the live stream.
+    const b = await writeBackup({ log: me, blobs: new BlobStore(root), dir: tmp('purge-bk'), now: () => now });
+    const plainText = zlib.gunzipSync(fs.readFileSync(b.file)).toString('utf8');
+    check('purge: later backups leave the purged content out (index set or a scan of purge events)', !plainText.includes(SECRET) && plainText.includes('KEEP-THIS-TEXT') && plainText.includes('"redacted":true'));
+    // The live process's own retention pass redacts its stream (it learns the purge from the index).
+    const lindex = new LocalIndexClient({ root, deviceId: live.device.deviceId, ownStream: live.stream, sqlJs: SQL, now: () => now });
+    await lindex.ready;
+    await lindex.catchUp();
+    const lret = new Retention({ log: live, index: lindex, blobs: new BlobStore(root, () => now), settings: () => ({ trashRetentionDays: 0, historyDays: 90 }), now: () => now });
+    const lr = await lret.run();
+    check('purge: the live process redacts its own stream at its next retention pass', lr.redacted > 0 && !allText(root).includes(SECRET), lr);
+    // A purge that arrives through sync is redacted the same way.
+    await me.importRemote(remote, [ev(remote, 2, H(now + 1), 'message', 'm_y_remote', 'create', { conversationId: 's_y', branchId: 'br_s_y', role: 'assistant', parts: [{ kind: 'text', text: 'SYNCED-AWAY-TEXT' }], meta: {}, createdAt: now }), ev(remote, 3, H(now + 2), 'conversation', 's_y', 'purge', { at: now })]);
+    const hooked: string[] = [];
+    ret.onPurge((_e, id) => void hooked.push(id));
+    await ret.redactRemote([{ ent: 'conversation', id: 's_y' }]);
+    check('purge from another device: hooks run and every local copy is redacted', hooked.includes('s_y') && !allText(root).includes('SYNCED-AWAY-TEXT'));
+    await lindex.dispose();
+    await index.dispose();
+    await live.dispose();
+    await me.dispose();
+    now += DAY;
+  }
+
+  console.log('\n[continuity: hardening — compaction of other streams, owners\' bases, overlap]');
+  {
+    let now = Date.UTC(2026, 0, 1);
+    const root = tmp('compact-others');
+    const ended = FileEventLog.open({ root, writer: 'cli', log: quiet, flushMs: 1, now: () => now, segmentMaxBytes: 600 });
+    const endedStream = ended.stream;
+    for (let i = 0; i < 30; i++) {
+      ended.append('conversation', 's_o', 'patch', { title: `old ${i}` });
+    }
+    const live = FileEventLog.open({ root, writer: 'vscode', log: quiet, flushMs: 1, now: () => now, segmentMaxBytes: 600, pid: process.pid });
+    for (let i = 0; i < 30; i++) {
+      live.append('conversation', 's_live', 'patch', { title: `live ${i}` });
+    }
+    await live.flush();
+    const me = FileEventLog.open({ root, writer: 'vscode', log: quiet, flushMs: 1, now: () => now });
+    await ended.dispose();
+    now += 120 * DAY;
+    const before = listSegments(path.join(root, 'streams', endedStream)).length;
+    const r = compactOtherStreams(me, { historyDays: 90, now: () => now });
+    const after = listSegments(path.join(root, 'streams', endedStream));
+    check('compaction: a stream nobody writes is compacted (under its lease), a live one is left to its writer', r.streams === 1 && before > 1 && after.length === 1 && after[0].compact && listSegments(live.ownStreamDir).every((f) => !f.compact), { r, before, after: after.map((f) => path.basename(f.file)) });
+    check('compaction: the stream nobody writes keeps its last seq and lease is released', streamLastSeq(path.join(root, 'streams', endedStream)) === 30 && !fs.existsSync(path.join(root, 'streams', endedStream, 'lease.json')));
+    const reopenEnded = FileEventLog.open({ root, writer: 'cli', log: quiet, flushMs: 1, now: () => now });
+    check('a process that takes the compacted stream again continues its seq', reopenEnded.stream === endedStream && reopenEnded.append('conversation', 's_o', 'patch', { pinned: true }).seq === 31);
+    await reopenEnded.dispose();
+    // An owner's newer base replaces what it covers in a local copy that is already past it.
+    const remote = 'dev_OWNER1.1';
+    const H = (ms: number, c = 0) => `${ms.toString(16).padStart(12, '0')}-${c.toString(16).padStart(4, '0')}-dev_OWNER1`;
+    const evs = Array.from({ length: 8 }, (_, i) => ev(remote, i + 1, H(1000 + i), 'conversation', 's_owned', i ? 'patch' : 'create', { title: `t${i}` }));
+    await me.importRemote(remote, evs);
+    const baseEvents = [ev(remote, 5, H(1004), 'conversation', 's_owned', 'create', { title: 't4', __clocks: { title: H(1004) } })];
+    baseEvents[0].id = `${remote}:5.0`;
+    const replaced = me.importBase(remote, 5, baseEvents, { replace: true });
+    const read: number[] = [];
+    for (const { e } of readStreamDir(path.join(root, 'streams', remote), 1)) {
+      read.push(e.seq);
+    }
+    check('owner\'s base over a local copy that is ahead: installed, readers see base then 6..8 once', replaced && read.join() === '5,6,7,8' && streamLastSeq(path.join(root, 'streams', remote)) === 8, read);
+    // A crash between writing a base and removing what it covers leaves both: readers skip the overlap.
+    const odir = path.join(root, 'streams', 'dev_OVERLAP.1');
+    fs.mkdirSync(odir, { recursive: true });
+    const oe = (seq: number) => JSON.stringify(ev('dev_OVERLAP.1', seq, `${(2000 + seq).toString(16).padStart(12, '0')}-0000-dev_OVERLAP`, 'conversation', 's_ov', 'patch', { title: `o${seq}` }));
+    fs.writeFileSync(path.join(odir, '000000000001.jsonl'), [1, 2].map(oe).join('\n') + '\n');
+    // A segment the base covers in part (3 and 4 are in the base too).
+    fs.writeFileSync(path.join(odir, '000000000003.jsonl'), [3, 4, 5, 6].map(oe).join('\n') + '\n');
+    fs.writeFileSync(path.join(odir, 'compact-000000000004.jsonl'), oe(4).replace('"id":"dev_OVERLAP.1:4"', '"id":"dev_OVERLAP.1:4.0"') + '\n');
+    const oseq: number[] = [];
+    for (const { e } of readStreamDir(odir, 1)) {
+      oseq.push(e.seq);
+    }
+    check('a base and the segments it covers both on disk (crash in between): no event is read twice', oseq.join() === '4,5,6' && streamLastSeq(odir) === 6, oseq);
+    await live.dispose();
+    await me.dispose();
+  }
+
+  console.log('\n[continuity: hardening — run details pruned with the window, unknown ops kept]');
+  {
+    let now = Date.UTC(2026, 0, 1);
+    const root = tmp('prune');
+    const log = FileEventLog.open({ root, writer: 'cli', log: quiet, flushMs: 1, now: () => now, segmentMaxBytes: 500 });
+    log.append('agent_session', 'as_1', 'create', { conversationId: 's_r', run: 1, mode: 'agent', startedAt: now, outcome: 'ok', writer: log.stream });
+    for (let i = 0; i < 10; i++) {
+      log.append('execution_event', `ex_${i}`, 'create', { agentSessionId: 'as_1', conversationId: 's_r', seq: i, kind: 'tool', name: 'read_file', status: 'ok' });
+    }
+    log.append('context_snapshot', 'cs_1', 'create', { conversationId: 's_r', items: [], createdAt: now });
+    log.append('model_session', 'ms_1', 'create', { conversationId: 's_r', model: 'm', startedAt: now });
+    await log.flush();
+    // A newer LocalPilot's event (an op this build does not know) in a stream nobody writes.
+    const ndir = path.join(root, 'streams', 'dev_NEWER1.1');
+    fs.mkdirSync(ndir, { recursive: true });
+    const H = (ms: number) => `${ms.toString(16).padStart(12, '0')}-0000-dev_NEWER1`;
+    const newer = [ev('dev_NEWER1.1', 1, H(now), 'conversation', 's_n', 'create', { title: 'n' }), { ...ev('dev_NEWER1.1', 2, H(now + 1), 'conversation', 's_n', 'patch', { star: 5 }), op: 'rate' as never }, ev('dev_NEWER1.1', 3, H(now + 2), 'conversation', 's_n', 'patch', { title: 'n2' })];
+    fs.writeFileSync(path.join(ndir, '000000000001.jsonl'), newer.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    now += 200 * DAY;
+    log.append('conversation', 's_r', 'patch', { title: 'still here' });
+    await log.flush();
+    const c = compactOwnStream(log, { historyDays: 90, now: () => now });
+    const base = listSegments(log.ownStreamDir).find((f) => f.compact);
+    const kinds = base ? readSegmentLines(base.file).map((r) => r.e.ent) : [];
+    check('run details (steps, context snapshots, model sessions) older than the window are dropped; the run stays', c.segments > 0 && kinds.includes('agent_session') && !kinds.some((k) => k === 'execution_event' || k === 'context_snapshot' || k === 'model_session'), kinds);
+    compactOtherStreams(log, { historyDays: 90, now: () => now });
+    const nbase = listSegments(ndir).find((f) => f.compact);
+    const nops = nbase ? readSegmentLines(nbase.file).map((r) => r.e.op) : [];
+    check('compaction keeps an event of an op this build does not know, as it is', nops.includes('rate' as never) && nops.includes('create'), nops);
+    await log.dispose();
+  }
+
+  console.log('\n[continuity: hardening — streamed, framed backups]');
+  {
+    const root = tmp('bk2');
+    const log = FileEventLog.open({ root, writer: 'cli', log: quiet, flushMs: 1 });
+    conv(log, 's_b', Date.now());
+    for (let i = 0; i < 50; i++) {
+      say(log, 's_b', `m_b${i}`, `line ${i} ${'x'.repeat(200)}`, Date.now());
+    }
+    await log.flush();
+    const blobs = new BlobStore(root);
+    blobs.put('a blob in the backup');
+    const dir = tmp('bk2-out');
+    const sealedFile = (await writeBackup({ log, blobs, dir, file: path.join(dir, 's.lpbackup'), passphrase: 'pw for backup', kdfN: 2 ** 14 })).file;
+    const head = fs.readFileSync(sealedFile).subarray(0, 6).toString('utf8');
+    const target = tmp('bk2-restore');
+    const tlog = FileEventLog.open({ root: target, writer: 'cli', log: quiet, flushMs: 1 });
+    const r = await restoreBackup({ log: tlog, blobs: new BlobStore(target), file: sealedFile, passphrase: 'pw for backup' });
+    check('backup: encrypted backups are framed (LPBK2) and restore as a stream', head === 'LPBK2\n' && r.imported === 51 && r.blobs === 1, { head, r });
+    const cut = path.join(dir, 'cut.lpbackup');
+    const full = fs.readFileSync(sealedFile);
+    fs.writeFileSync(cut, full.subarray(0, full.length - 10));
+    let cutErr = '';
+    await readBackup(cut, 'pw for backup').catch((e: Error) => (cutErr = e.message));
+    check('backup: a cut-short encrypted backup is detected, not half-restored', /cut short|damaged/.test(cutErr), cutErr);
+    // 1.7.0's single-object format is still read.
+    const kdf = newKdf({ N: 2 ** 14 });
+    const dek = await deriveKek('old pw', kdf);
+    const key = { keyId: crypto.createHash('sha256').update(kdf.salt).digest('hex').slice(0, 32), dek };
+    const lines = [JSON.stringify({ kind: 'header', v: 1, deviceId: 'dev_OLD', createdAt: 1, streams: [] }), JSON.stringify(ev('dev_OLD1.1', 1, '000000000001-0000-dev_OLD1', 'conversation', 's_old', 'create', { title: 'from 1.7.0' }))];
+    const v1 = path.join(dir, 'v1.lpbackup');
+    fs.writeFileSync(v1, Buffer.concat([Buffer.from(`LPBK1\n${JSON.stringify(kdf)}\n`), seal(key as never, 'localpilot-backup', `${lines.join('\n')}\n`)]));
+    const r1 = await restoreBackup({ log: tlog, blobs: new BlobStore(target), file: v1, passphrase: 'old pw' });
+    check('backup: a 1.7.0 encrypted backup (LPBK1) still restores', r1.imported === 1 && r1.refused.length === 0, r1);
+    await tlog.dispose();
+    await log.dispose();
+  }
+
+  console.log('\n[continuity: hardening — blob re-use vs GC, one automatic backup at a time]');
+  {
+    let now = Date.UTC(2026, 0, 1);
+    const root = tmp('blob-gc');
+    const blobs = new BlobStore(root, () => now);
+    const sha = blobs.put('re-used attachment');
+    fs.utimesSync(blobs.pathOf(sha), new Date(now - 30 * DAY), new Date(now - 30 * DAY));
+    blobs.put('re-used attachment'); // attached again: the event referencing it is not indexed yet
+    const gone = blobs.gc(new Set(), 7);
+    check('blob: putting an existing blob refreshes it, so a GC before the index catches up keeps it', blobs.has(sha) && gone.removed === 0);
+    now += 0;
+    const log = FileEventLog.open({ root, writer: 'cli', log: quiet, flushMs: 1 });
+    conv(log, 's_auto', Date.now());
+    await log.flush();
+    const index = new LocalIndexClient({ root, deviceId: log.device.deviceId, ownStream: log.stream, sqlJs: SQL });
+    await index.ready;
+    const ret = new Retention({ log, index, blobs, settings: () => ({ trashRetentionDays: 30, historyDays: 90 }) });
+    const mk = () => new DataManager({ root, log, index, blobs, migration: {} as Migration, retention: ret, backup: () => ({ enabled: true, intervalDays: 1, keep: 4 }) });
+    const [b1, b2] = await Promise.all([mk().autoBackup(), mk().autoBackup()]);
+    check('automatic backup: two processes due at once write one backup', [b1, b2].filter(Boolean).length === 1 && listBackups(path.join(root, 'backups')).length === 1);
+    await index.dispose();
+    await log.dispose();
+  }
+
+  console.log('\n[continuity: hardening — lock files for shared files]');
+  {
+    const dir = tmp('locks');
+    const file = path.join(dir, 'seen.json');
+    fs.writeFileSync(`${file}.lock`, 'someone');
+    const t0 = Date.now();
+    const ran = withFileLock(file, () => 'ran', { waitMs: 80 });
+    check('withFileLock: waits for a held lock (then runs rather than hang)', ran === 'ran' && Date.now() - t0 >= 70 && fs.existsSync(`${file}.lock`));
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(`${file}.lock`, old, old);
+    let inside = false;
+    withFileLock(file, () => (inside = fs.readFileSync(`${file}.lock`, 'utf8') !== 'someone'));
+    check('withFileLock: a stale lock is broken, held while fn runs, removed after', inside && !fs.existsSync(`${file}.lock`));
+    // Folder keyring compare-and-swap: two changes from the same version, one wins.
+    const fb = new FolderBackend(tmp('kr-folder'));
+    await fb.put('keyring.json', Buffer.from('{"v":1}'));
+    const etag = (await fb.head('keyring.json'))!.etag!;
+    const results = await Promise.allSettled([fb.put('keyring.json', Buffer.from('{"v":1,"by":"device A"}'), { ifMatch: etag }), fb.put('keyring.json', Buffer.from('{"v":1,"by":"device B, longer"}'), { ifMatch: etag })]);
+    const ok = results.filter((x) => x.status === 'fulfilled').length;
+    const final = String(await fb.get('keyring.json'));
+    check('folder keyring: two compare-and-swaps from one version, exactly one lands', ok === 1 && (final.includes('device A') || final.includes('device B')) && !fs.readdirSync(path.join(fb.root)).some((n) => n.endsWith('.lock')), { ok, final });
+  }
 }

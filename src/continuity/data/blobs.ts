@@ -26,13 +26,22 @@ export class BlobStore {
     return isSha(sha) && fs.existsSync(this.pathOf(sha));
   }
 
-  /** Stores the bytes (no-op when present) and returns their sha256. */
+  /**
+   * Stores the bytes and returns their sha256. A blob already present is touched instead (its time moves to now), so
+   * a GC that runs before the event that re-uses it is indexed sees it as young and keeps it.
+   */
   put(data: Uint8Array | string): string {
     const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data);
     const sha = sha256(buf);
     const file = this.pathOf(sha);
     if (fs.existsSync(file)) {
-      return sha;
+      try {
+        const t = new Date(this.now());
+        fs.utimesSync(file, t, t);
+        return sha;
+      } catch {
+        // removed meanwhile (a GC): written again below
+      }
     }
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
@@ -106,6 +115,9 @@ export class BlobStore {
     for (const b of this.list()) {
       if (!referenced.has(b.sha) && b.mtimeMs < cutoff) {
         try {
+          if (fs.statSync(this.pathOf(b.sha)).mtimeMs >= cutoff) {
+            continue; // re-used (put) since it was listed
+          }
           fs.rmSync(this.pathOf(b.sha), { force: true });
           removed++;
           bytes += b.bytes;

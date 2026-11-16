@@ -75,6 +75,8 @@ export class ConversationManager {
   private readonly remote = new Emitter<RemoteChange>();
   /** Remote changes to chats that were in use: applied when `reloadIfIdle` is called (after the run). */
   private readonly waiting = new Map<string, RemoteChange>();
+  /** Chats deleted for good elsewhere while in use here: their files go when `reloadIfIdle` finds them idle. */
+  private readonly purgeWaiting = new Set<string>();
   readonly onRemoteChange = this.remote.event;
   summarize?: (prompt: string, text: string) => Promise<string>;
   private sub?: { dispose(): void };
@@ -226,9 +228,24 @@ export class ConversationManager {
 
   /** File cleanup for a purged conversation (registered as a retention purge hook). */
   async cleanupPurged(id: string): Promise<void> {
+    this.purgeWaiting.delete(id);
     this.o.bridge.forget(id);
     await this.o.store.purge(id);
     fs.rmSync(path.join(this.o.root, 'drafts', `${id}.json`), { force: true });
+  }
+
+  /**
+   * The same, unless the chat is in use here (a run, an open editor): then its files go when it is idle
+   * (`reloadIfIdle`). Returns true when they went now.
+   */
+  async cleanupPurgedWhenIdle(id: string): Promise<boolean> {
+    if (this.o.store.has(id) && this.o.store.inUse(id)) {
+      this.purgeWaiting.add(id);
+      this.waiting.delete(id);
+      return false;
+    }
+    await this.cleanupPurged(id);
+    return true;
   }
 
   // ---------------------------------------------------------------------------------------------- open
@@ -557,7 +574,7 @@ export class ConversationManager {
         // A chat of this project from another device: added so it can be listed and continued here.
         mine = mine === null ? await this.currentProject() : mine;
         const row = mine ? await this.index.conversation(id) : undefined;
-        if (row && this.adoptable(row, mine, me) && (await this.load(id))) {
+        if (row && this.adoptable(row, mine, me, (await this.writers([id])).get(id)) && (await this.load(id))) {
           this.remote.fire({ id, device: row.lastDevice ?? '', local: false, kind: 'updated', applied: true });
         }
         continue;
@@ -571,9 +588,10 @@ export class ConversationManager {
       // an explicit purge counts).
       if (!row) {
         const [gone] = await this.index.query<{ id: string }>('purgedConversations', { ids: [id] });
-        if (gone && !this.o.store.inUse(id)) {
-          await this.cleanupPurged(id);
-          this.remote.fire({ id, device: '', local: false, kind: 'updated', applied: true });
+        if (gone) {
+          // In use here: its files go once the chat is idle (`reloadIfIdle`).
+          const now = await this.cleanupPurgedWhenIdle(id);
+          this.remote.fire({ id, device: '', local: false, kind: 'updated', applied: now });
         }
         continue;
       }
@@ -603,6 +621,14 @@ export class ConversationManager {
 
   /** After a run ends: applies a remote change that waited for the chat to be idle. */
   async reloadIfIdle(id: string, force = false): Promise<boolean> {
+    if (this.purgeWaiting.has(id)) {
+      if (!force && this.o.store.inUse(id)) {
+        return false;
+      }
+      await this.cleanupPurged(id);
+      this.remote.fire({ id, device: '', local: false, kind: 'updated', applied: true });
+      return true;
+    }
     const w = this.waiting.get(id);
     if (!w || (!force && this.o.store.inUse(id))) {
       return false;
@@ -637,9 +663,22 @@ export class ConversationManager {
     return f && this.o.projects ? (await this.o.projects.resolve(f).catch(() => undefined))?.id : undefined;
   }
 
-  /** A chat of this project last written by another device, live (not archived or in Trash), not in the store yet. */
-  private adoptable(r: ConversationRow, project: string | undefined, me: string): boolean {
-    return !!project && r.projectId === project && !!r.lastDevice && r.lastDevice !== me && !r.trashedAt && !r.archived && !this.o.store.has(r.id);
+  /** The stream that wrote each conversation last (another process of this device, or this one). */
+  private async writers(ids: string[]): Promise<Map<string, string>> {
+    if (!ids.length) {
+      return new Map();
+    }
+    const rows = await this.index.query<{ id: string; stream: string }>('conversationWriters', { ids }).catch(() => []);
+    return new Map(rows.map((r) => [r.id, r.stream]));
+  }
+
+  /**
+   * A chat of this project, live (not archived or in Trash), not in the store yet, last written by another device or by
+   * another process of this one (a CLI session, another window); never one this process wrote itself.
+   */
+  private adoptable(r: ConversationRow, project: string | undefined, me: string, writer?: string): boolean {
+    const elsewhere = !!r.lastDevice && (r.lastDevice !== me || (!!writer && writer !== this.o.log.stream));
+    return !!project && r.projectId === project && elsewhere && !r.trashedAt && !r.archived && !this.o.store.has(r.id);
   }
 
   /**
@@ -656,8 +695,9 @@ export class ConversationManager {
     let n = 0;
     for (let offset = 0; ; ) {
       const page = await this.index.history({ projectId: project, offset, limit: 200 });
+      const writers = await this.writers(page.rows.filter((r) => r.lastDevice === me && !this.o.store.has(r.id)).map((r) => r.id));
       for (const r of page.rows) {
-        if (this.adoptable(r, project, me) && (await this.load(r.id))) {
+        if (this.adoptable(r, project, me, writers.get(r.id)) && (await this.load(r.id))) {
           n++;
         }
       }

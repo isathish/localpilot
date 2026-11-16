@@ -1,10 +1,13 @@
-// Trash purge, version-history window, compaction and blob GC (design §10, §5.6–5.7). Runs at start-up and every 24 h.
-// Purge is terminal: a durable `purge` event, then the hooks other modules registered (CONVERSATION removes the JSON
-// cache, archive, traces, drafts and checkpoint refs), then redaction of the purged payloads in this process's stream.
-// Pure Node.
+// Trash purge, version-history window, compaction and blob GC (design §10, §5.6–5.7, §26). Runs at start-up and every
+// 24 h. Purge is terminal: a durable `purge` event, then the hooks other modules registered (CONVERSATION removes the
+// JSON cache, archive, traces, drafts and checkpoint refs), then redaction of the purged payloads in every local stream
+// no live process writes (this process's own, ended processes', other devices' copies, compacted bases). A purge that
+// arrives through sync is redacted the same way (`redactRemote`). Each pass also redacts this process's stream for
+// every purge the index knows (purges made by other live processes reach it this way), compacts this stream and every
+// stream nobody writes, and drops run details older than the window. Pure Node.
 import type { EntityKind } from '../events';
 import type { BlobStore } from './blobs';
-import { compactOwnStream, redactOwnStream } from './compaction';
+import { compactOtherStreams, compactOwnStream, redactEverywhere, redactOwnStream } from './compaction';
 import type { FileEventLog, LogLike } from './eventLog';
 import type { IndexClient } from './index/indexClient';
 
@@ -50,6 +53,13 @@ export class Retention {
       this.o.log.append(it.ent, it.id, 'purge', { at: this.now(), reason }, { durable: true });
     }
     await this.o.log.flush();
+    await this.cleanup(items);
+    await this.o.index.catchUp().catch(() => 0);
+    await this.redact(new Set(items.map((i) => i.id)));
+    return items.length;
+  }
+
+  private async cleanup(items: { ent: EntityKind; id: string }[]): Promise<void> {
     for (const it of items) {
       for (const h of this.hooks) {
         try {
@@ -59,9 +69,31 @@ export class Retention {
         }
       }
     }
-    await this.o.index.catchUp().catch(() => 0);
-    await redactOwnStream(this.o.log, new Set(items.map((i) => i.id))).catch((e) => this.o.logger?.warn(`continuity: redaction: ${String(e)}`));
-    return items.length;
+  }
+
+  private async redact(ids: ReadonlySet<string>): Promise<number> {
+    try {
+      const r = await redactEverywhere(this.o.log, ids);
+      if (r.deferred.length) {
+        this.o.logger?.info(`continuity: redaction of ${r.deferred.length} stream(s) written by other processes is left to them (next retention pass): ${r.deferred.join(', ')}`);
+      }
+      return r.redacted;
+    } catch (e) {
+      this.o.logger?.warn(`continuity: redaction: ${String(e)}`);
+      return 0;
+    }
+  }
+
+  /**
+   * Purges that arrived from another device (sync): their files go (the hooks) and their content is redacted from every
+   * local stream, as for a purge made here.
+   */
+  async redactRemote(items: { ent: EntityKind; id: string }[]): Promise<number> {
+    if (!items.length) {
+      return 0;
+    }
+    await this.cleanup(items);
+    return this.redact(new Set(items.map((i) => i.id)));
   }
 
   /** Everything in Trash, now. */
@@ -86,9 +118,24 @@ export class Retention {
     }
     r.versions = await this.o.index.pruneVersions(Math.max(7, s.historyDays));
     await this.o.log.flush();
-    const c = compactOwnStream(this.o.log, { historyDays: Math.max(7, s.historyDays), now: this.now });
-    if (c.segments) {
-      r.compacted = c.segments;
+    // Purges made elsewhere (another process, another device) reach this process's stream here.
+    const purged = new Set(await this.o.index.query<string>('purgedEntities', {}).catch(() => [] as string[]));
+    if (purged.size) {
+      r.redacted = await redactOwnStream(this.o.log, purged).catch((e) => {
+        this.o.logger?.warn(`continuity: redaction: ${String(e)}`);
+        return 0;
+      });
+    }
+    const days = Math.max(7, s.historyDays);
+    const c = compactOwnStream(this.o.log, { historyDays: days, now: this.now, purged });
+    let others = { streams: 0, segments: 0 };
+    try {
+      others = compactOtherStreams(this.o.log, { historyDays: days, now: this.now, purged });
+    } catch (e) {
+      this.o.logger?.warn(`continuity: compaction of other streams: ${String(e)}`);
+    }
+    if (c.segments || others.segments) {
+      r.compacted = c.segments + others.segments;
       // Bodies of compacted events moved: the index re-reads the log.
       await this.o.index.rebuild();
     }
@@ -96,8 +143,10 @@ export class Retention {
     return r;
   }
 
-  /** Removes blobs no event references any more (older than 7 days). */
+  /** Removes blobs no event references any more (older than 7 days); the index catches up first. */
   async gc(): Promise<{ removed: number; bytes: number }> {
+    await this.o.log.flush();
+    await this.o.index.catchUp().catch(() => 0);
     const refs = new Set(await this.o.index.query<string>('referencedBlobs', {}));
     return this.o.blobs.gc(refs, 7);
   }

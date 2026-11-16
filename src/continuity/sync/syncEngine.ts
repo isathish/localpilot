@@ -16,7 +16,9 @@ import { SealError } from '../data/crypto/envelope';
 import { changePassphrase, createKeyring, DataKey, KeyringFile, rotateKey, unlockKeyring, WrongPassphraseError } from '../data/crypto/keyring';
 import type { SecretBox } from '../data/crypto/secretBox';
 import { loadDataKeys, storeDataKeys } from '../data/crypto/secretBox';
-import { Emitter, FileEventLog, Subscribable } from '../data/eventLog';
+import { Emitter, FileEventLog, streamLastSeq, Subscribable } from '../data/eventLog';
+import { RUN_DETAIL_KINDS } from '../data/compaction';
+import { Hlc } from '../hlc';
 import type { IndexClient } from '../data/index/indexClient';
 import { Lease, leaseIsFree } from '../data/lease';
 import { DEFAULT_RULES, EntityState, noteEdit, reduce } from '../data/reducer';
@@ -25,7 +27,7 @@ import { BackendError, BackendKind, CheckResult, reasonOf, SyncBackend, SyncBack
 import { createBackend } from './backends/create';
 import { ConflictEffects, ConflictService } from './conflicts';
 import { DeviceRegistry, DeviceRow } from './devices';
-import { blobRefs, categoryOfEntity, DEFAULT_CATEGORIES, normalizeCategories, SyncCategories, SyncCategory, withholdReason } from './merge';
+import { blobRefs, categoryOfEntity, categoryOfEvent, DEFAULT_CATEGORIES, normalizeCategories, SyncCategories, SyncCategory, withholdReason } from './merge';
 import {
   baseKey,
   blobKey,
@@ -169,7 +171,15 @@ export interface SyncEngineOptions {
   blobBudgetBytes?: number;
   /** Prompts, preferences, checkpoint contents (extras.ts): log local changes before the push, apply after the pull. */
   extras?: SyncExtra[];
+  /** Entities another device purged (pulled this cycle): their files go and their content is redacted here too. */
+  onRemotePurge?: (items: { ent: EventEnvelope['ent']; id: string }[]) => Promise<void>;
 }
+
+/** Entity ids withheld per category before the list becomes "everything of the category" (`['*']`). */
+const WITHHELD_CAP = 5000;
+
+/** The state fields another process changes outside a cycle (pause, resume, turn off, join, unlock). */
+const controlSig = (s: SyncStateFile): string => JSON.stringify([s.remoteId ?? null, s.keyIds, s.current ?? null, s.paused ?? null, s.needsPassphrase ?? null]);
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -223,6 +233,10 @@ export class SyncEngine {
   private lastStatus = '';
   private backendCache?: { sig: string; backend: SyncBackend };
   private pulledOnce = false;
+  /** The control fields as the running cycle read them (`saveState` merges what changed since). */
+  private controlAtStart?: string;
+  /** Sync was turned off (or moved to another remote) by another process during this cycle. */
+  private abandoned = false;
 
   constructor(private readonly o: SyncEngineOptions) {
     this.dir = path.join(o.root, 'sync');
@@ -274,11 +288,53 @@ export class SyncEngine {
     }
   }
 
-  private saveState(): void {
+  private writeState(): void {
     fs.mkdirSync(this.dir, { recursive: true });
     const tmp = `${this.stateFile}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
     fs.writeFileSync(tmp, `${JSON.stringify(this.st, null, 1)}\n`);
     fs.renameSync(tmp, this.stateFile);
+  }
+
+  /**
+   * Saves the state. During a cycle, what another process changed meanwhile (Pause, Resume, Turn off, a join) is merged
+   * in rather than overwritten: the file is read again and its control fields win. Sync turned off (or set up on another
+   * remote) elsewhere ends this cycle's writes altogether.
+   */
+  private saveState(): void {
+    if (this.syncing && this.controlAtStart !== undefined) {
+      if (this.abandoned) {
+        return;
+      }
+      const disk = this.readState();
+      if (controlSig(disk) !== this.controlAtStart) {
+        if (disk.remoteId !== this.st.remoteId) {
+          this.st = disk;
+          this.abandoned = true;
+          return;
+        }
+        this.st.keyIds = [...new Set([...this.st.keyIds, ...disk.keyIds])];
+        this.st.paused = disk.paused;
+        this.st.needsPassphrase = disk.needsPassphrase;
+        this.st.current = disk.current ?? this.st.current;
+        if (!disk.paused) {
+          this.st.lastError = disk.lastError;
+        }
+      }
+      this.controlAtStart = controlSig(this.st);
+    }
+    this.writeState();
+  }
+
+  /** Applies a control change (pause, resume) to the state on disk, not to a stale copy of it. */
+  private control(change: (s: SyncStateFile) => void): void {
+    if (!this.syncing) {
+      this.st = this.readState();
+    }
+    change(this.st);
+    this.writeState();
+    if (this.syncing) {
+      this.controlAtStart = controlSig(this.st);
+    }
   }
 
   /** Re-reads state another process (the lease holder) wrote. */
@@ -526,8 +582,12 @@ export class SyncEngine {
       }
     }
     this.keys.clear();
+    if (this.syncing) {
+      this.abandoned = true; // this process's own cycle: it writes nothing more
+    }
     this.st = emptyState();
-    this.saveState();
+    // Written whole and outside any cycle's merge: a cycle running in another process sees it and stops writing.
+    this.writeState();
     this.resetBackend();
     this.emitStatus();
   }
@@ -620,15 +680,15 @@ export class SyncEngine {
 
   pause(): void {
     this.scheduler.pause();
-    this.st.paused = { reason: 'user', message: 'Paused', at: this.now };
-    this.saveState();
+    this.control((s) => (s.paused = { reason: 'user', message: 'Paused', at: this.now }));
     this.emitStatus();
   }
 
   resume(): void {
-    this.st.paused = undefined;
-    this.st.lastError = undefined;
-    this.saveState();
+    this.control((s) => {
+      s.paused = undefined;
+      s.lastError = undefined;
+    });
     this.resetBackend();
     this.scheduler.resume();
     this.emitStatus();
@@ -672,6 +732,8 @@ export class SyncEngine {
       return true;
     }
     this.st = this.readState();
+    this.controlAtStart = controlSig(this.st);
+    this.abandoned = false;
     this.syncing = true;
     this.emitStatus();
     const t0 = this.now;
@@ -740,6 +802,10 @@ export class SyncEngine {
         await this.o.index.catchUp().catch(() => 0);
         this.appliedEmitter.fire({ events: down, devices: pulled.devices });
       }
+      if (pulled.purges.length && this.o.onRemotePurge) {
+        // Deleted for good on another device: gone from every local stream copy here too.
+        await this.o.onRemotePurge(pulled.purges).catch((e) => this.o.warn?.(`sync: redaction of remote purges: ${(e as Error).message}`));
+      }
       if (down || !this.pulledOnce) {
         this.pulledOnce = true;
         for (const x of this.o.extras ?? []) {
@@ -787,6 +853,11 @@ export class SyncEngine {
       return paused || reason === 'auth' || reason === 'forbidden';
     } finally {
       this.syncing = false;
+      this.controlAtStart = undefined;
+      if (this.abandoned) {
+        this.abandoned = false;
+        this.st = this.readState();
+      }
       lease.release();
       this.emitStatus();
       void this.refreshConflicts();
@@ -813,16 +884,7 @@ export class SyncEngine {
     if (stream === this.o.log.stream) {
       return this.o.log.lastSequence;
     }
-    const files = listSegments(this.streamDir(stream));
-    const segs = files.filter((f) => !f.compact);
-    for (let i = segs.length - 1; i >= 0; i--) {
-      const lines = readSegmentLines(segs[i].file);
-      if (lines.length) {
-        return lines[lines.length - 1].e.seq;
-      }
-    }
-    const base = files.find((f) => f.compact);
-    return base ? -base.segment : 0;
+    return streamLastSeq(this.streamDir(stream));
   }
 
   private cats(s: SyncSettings): string {
@@ -876,7 +938,7 @@ export class SyncEngine {
         const kept = entries.filter((x) => !x.why).map((x) => x.e);
         const objKey = baseKey(stream, cut);
         const body = sealObject(key, objKey, encodeEvents(kept));
-        await backend.put(objKey, body);
+        await this.putOwn(backend, objKey, body, entries.map((x) => x.e), true);
         bytes += body.length;
         bases[stream] = cut;
         for (const e of kept) {
@@ -927,11 +989,14 @@ export class SyncEngine {
         }
         own.pending = chunks.map((c) => ({ from: c.from, to: c.to, sig }));
         this.saveState();
+        if (chunks.length) {
+          await this.checkNoOtherWriter(backend, stream, chunks);
+        }
         for (const c of chunks) {
           const out = c.events.map((e) => this.outgoing(e, s, withheld));
           const objKey = chunkKey(stream, c.from, c.to);
           const body = sealObject(key, objKey, encodeEvents(out));
-          await backend.put(objKey, body);
+          await this.putOwn(backend, objKey, body, c.events, false);
           bytes += body.length;
           events += out.filter((e) => !isWithheld(e)).length;
           advanced[stream] = c.to;
@@ -950,7 +1015,7 @@ export class SyncEngine {
     }
     // Remember what was withheld (re-sent when its category is turned on).
     for (const [cat, ids] of withheld) {
-      this.st.withheld[cat] = [...new Set([...(this.st.withheld[cat] ?? []), ...ids])];
+      this.noteWithheld(cat, ids);
     }
     // Blobs of what was sent (attachments within the size cap; git keeps them under 5 MB).
     const done = new Set(this.st.uploadedBlobs);
@@ -1001,13 +1066,87 @@ export class SyncEngine {
     return { events, bytes, advanced, bases, blobs: sent };
   }
 
+  /**
+   * Uploads an object of one of this device's streams without overwriting another writer's: created only when absent;
+   * an existing one is replaced only when it holds our own events (a retry, a key rotation, another category set). One
+   * holding other events under our names means another computer writes as this device (a copied data folder).
+   */
+  private async putOwn(backend: SyncBackend, objKey: string, body: Buffer, mine: EventEnvelope[], base: boolean): Promise<void> {
+    try {
+      await backend.put(objKey, body, { ifAbsent: true });
+      return;
+    } catch (e) {
+      if (!(e instanceof BackendError && e.code === 'precondition')) {
+        throw e;
+      }
+    }
+    const cur = await backend.get(objKey);
+    if (cur && Buffer.from(cur).equals(body)) {
+      return;
+    }
+    if (cur) {
+      this.assertOurs(objKey, cur, mine, base);
+    }
+    await backend.put(objKey, body);
+  }
+
+  /** Throws (sync pauses) when a remote object of our stream holds events this device did not write. */
+  private assertOurs(objKey: string, raw: Uint8Array, mine: EventEnvelope[], base: boolean, onlyShared = false): void {
+    let theirs: EventEnvelope[];
+    try {
+      theirs = decodeEvents(openObject(this.keyOf, objKey, raw).toString('utf8'));
+    } catch {
+      return; // unreadable (damaged, or a key we lack): ours to replace
+    }
+    // A base has one entry per entity (its ids are positions), a chunk one line per event.
+    const known = new Map(mine.map((e) => [base ? e.eid : e.id, e.hlc]));
+    for (const e of theirs) {
+      const h = known.get(base ? e.eid : e.id);
+      if (onlyShared && h === undefined) {
+        continue;
+      }
+      if (h !== e.hlc) {
+        throw new Paused(
+          'device-clone',
+          `Another computer is syncing as this device (${this.o.log.device.deviceId}; a copy of this data folder?). Sync is paused here so neither overwrites the other: on one of them, move device.json out of the data folder and restart, so it syncs as a new device.`
+        );
+      }
+    }
+  }
+
+  /** Before new chunks go up: a remote chunk of this stream that overlaps them under another name must be ours too. */
+  private async checkNoOtherWriter(backend: SyncBackend, stream: string, chunks: { from: number; to: number; events: EventEnvelope[] }[]): Promise<void> {
+    const first = chunks[0].from;
+    const last = chunks[chunks.length - 1].to;
+    const names = new Set(chunks.map((c) => chunkKey(stream, c.from, c.to)));
+    for (const x of await backend.list(streamPrefix(stream))) {
+      const p = parseStreamObject(x.key);
+      if (!p || p.kind !== 'chunk' || names.has(x.key) || p.to < first || p.from > last) {
+        continue;
+      }
+      const raw = await backend.get(x.key);
+      if (!raw) {
+        continue;
+      }
+      this.assertOurs(x.key, raw, chunks.flatMap((c) => c.events), false, true);
+      return; // one overlapping object tells
+    }
+  }
+
   // ---------------------------------------------------------------------------------------------- pull
 
-  private async pull(backend: SyncBackend, s: SyncSettings): Promise<{ events: number; bytes: number; devices: string[] }> {
+  /**
+   * Other devices' files, then their streams. Each stream is pulled on its own: one that is damaged, out of order or
+   * written by a newer LocalPilot in a way this one cannot store is skipped and reported, the others still sync. A
+   * device removed with "Remove device" is not pulled past the moment it was removed (and can never undo that itself).
+   */
+  private async pull(backend: SyncBackend, s: SyncSettings): Promise<{ events: number; bytes: number; devices: string[]; purges: { ent: EventEnvelope['ent']; id: string }[] }> {
     const me = this.o.log.device.deviceId;
     let events = 0;
     let bytes = 0;
     const from = new Set<string>();
+    const purges = new Map<string, EventEnvelope['ent']>();
+    const revoked = await this.revocations();
     const list = await backend.list('devices/');
     for (const entry of list) {
       const m = /^devices\/(dev_[\w-]+)\.json\.lpe$/.exec(entry.key);
@@ -1036,39 +1175,77 @@ export class SyncEngine {
           lastSeen: file.lastSeen,
           heads: Object.fromEntries(Object.entries(file.streams ?? {}).map(([k, v]) => [k, v.head])),
           bases: Object.fromEntries(Object.entries(file.streams ?? {}).filter(([, v]) => v.base).map(([k, v]) => [k, v.base!])),
-          revokedAt: file.revokedAt,
+          revokedAt: file.revokedAt ?? known?.revokedAt,
           etag: entry.etag,
         };
       }
       const dev = this.st.devices[id];
+      const revokedAt = revoked.get(id) ?? dev?.revokedAt;
+      let held = 0;
       for (const [stream, head] of Object.entries(dev?.heads ?? {})) {
         if (!stream.startsWith(`${id}.`)) {
           continue; // a device only publishes its own streams
         }
         const local = this.localLast(stream);
-        if (head <= local) {
+        if (head <= local || (revokedAt !== undefined && this.reported.has(`revoked-stop:${stream}:${local}`))) {
           continue;
         }
-        const r = await this.pullStream(backend, stream, local, s);
-        events += r.events;
-        bytes += r.bytes;
-        if (r.events) {
-          from.add(id);
+        try {
+          const r = await this.pullStream(backend, stream, local, s, { revokedAt, purges });
+          events += r.events;
+          bytes += r.bytes;
+          held += r.held;
+          if (r.held) {
+            this.reported.add(`revoked-stop:${stream}:${this.localLast(stream)}`); // not downloaded again by this process
+          }
+          if (r.events) {
+            from.add(id);
+          }
+        } catch (e) {
+          // This stream only: the next one (and the next cycle) go on.
+          this.damaged(`${streamPrefix(stream)}*`, stream, e);
         }
       }
+      if (held && !this.reported.has(`revoked:${id}:${held}`)) {
+        this.reported.add(`revoked:${id}:${held}`);
+        const msg = `Skipped ${held} change(s) from ${dev?.name || id}: it was removed from sync on ${new Date(revokedAt!).toISOString().slice(0, 10)}`;
+        this.o.warn?.(`sync: ${msg}`);
+        await this.o.index.syncEvent({ at: this.now, kind: 'skipped', remote: backend.label, error: msg }).catch(() => undefined);
+      }
     }
-    return { events, bytes, devices: [...from] };
+    return { events, bytes, devices: [...from], purges: [...purges].map(([id, ent]) => ({ ent, id })) };
   }
 
   private localLast(stream: string): number {
     return this.streamLast(stream);
   }
 
-  private async pullStream(backend: SyncBackend, stream: string, local: number, s: SyncSettings): Promise<{ events: number; bytes: number }> {
+  /**
+   * Imports what a removed device wrote before its removal: the events up to (not past) the first one stamped later
+   * (the copy stays gapless), and never a change to its own registration (it cannot list itself again).
+   */
+  private untilRevoked(list: EventEnvelope[], revokedAt: number | undefined): { keep: EventEnvelope[]; held: number } {
+    if (revokedAt === undefined) {
+      return { keep: list, held: 0 };
+    }
+    const sorted = [...list].sort((a, b) => a.seq - b.seq);
+    const stop = sorted.findIndex((e) => Hlc.physical(e.hlc) > revokedAt || (e.ent === 'device' && e.eid === e.dev && (e.p as { revokedAt?: unknown }).revokedAt === null));
+    return stop < 0 ? { keep: sorted, held: 0 } : { keep: sorted.slice(0, stop), held: sorted.slice(stop).filter((e) => !isWithheld(e)).length };
+  }
+
+  private async pullStream(backend: SyncBackend, stream: string, local: number, s: SyncSettings, o: { revokedAt?: number; purges: Map<string, EventEnvelope['ent']> }): Promise<{ events: number; bytes: number; held: number }> {
     const objs = (await backend.list(streamPrefix(stream))).map((e) => ({ e, p: parseStreamObject(e.key) })).filter((x) => x.p && x.p.stream === stream);
     let last = local;
     let events = 0;
     let bytes = 0;
+    let held = 0;
+    const notePurges = (list: EventEnvelope[]) => {
+      for (const ev of list) {
+        if (ev.op === 'purge' && !isWithheld(ev)) {
+          o.purges.set(ev.eid, ev.ent);
+        }
+      }
+    };
     // A compacted base when this device is behind it (a new device, or chunks the owner replaced).
     const chunks = objs.filter((x) => x.p!.kind === 'chunk').map((x) => ({ key: x.e.key, from: (x.p as { from: number }).from, to: x.p!.to })).sort((a, b) => a.from - b.from || a.to - b.to);
     const bases = objs.filter((x) => x.p!.kind === 'base').map((x) => ({ key: x.e.key, to: x.p!.to })).sort((a, b) => b.to - a.to);
@@ -1083,12 +1260,17 @@ export class SyncEngine {
           list = decodeEvents(openObject(this.keyOf, base.key, raw).toString('utf8'));
         } catch (e) {
           this.damaged(base.key, stream, e);
-          return { events, bytes };
+          return { events, bytes, held };
+        }
+        if (o.revokedAt !== undefined && list.some((ev) => Hlc.physical(ev.hlc) > o.revokedAt!)) {
+          // A base made after the removal folds in what came later: none of it is taken.
+          return { events, bytes, held: held + list.length };
         }
         if (this.o.log.importBase(stream, base.to, list)) {
           events += list.length;
           last = base.to;
           this.queueBlobs(list, s);
+          notePurges(list);
           for (const ev of list) {
             this.observe(ev);
           }
@@ -1114,17 +1296,23 @@ export class SyncEngine {
         this.damaged(c.key, stream, e);
         break;
       }
-      const r = await this.o.log.importRemote(stream, list);
-      events += list.filter((ev) => ev.seq > last && !isWithheld(ev)).length;
+      const cut = this.untilRevoked(list, o.revokedAt);
+      held += cut.held;
+      const r = await this.o.log.importRemote(stream, cut.keep);
+      events += cut.keep.filter((ev) => ev.seq > last && !isWithheld(ev)).length;
       if (r.imported) {
-        last = Math.max(last, ...list.map((ev) => ev.seq));
-        this.queueBlobs(list, s);
-        for (const ev of list) {
+        last = Math.max(last, ...cut.keep.map((ev) => ev.seq));
+        this.queueBlobs(cut.keep, s);
+        notePurges(cut.keep.filter((ev) => ev.seq > local));
+        for (const ev of cut.keep) {
           this.observe(ev);
         }
       }
+      if (cut.held) {
+        break; // nothing after the removal
+      }
     }
-    return { events, bytes };
+    return { events, bytes, held };
   }
 
   /** HLC skew of another device beyond 10 minutes is reported once (clock-skew). */
@@ -1220,6 +1408,38 @@ export class SyncEngine {
   // ---------------------------------------------------------------------------------------------- categories
 
   /**
+   * Remembers entities withheld from a category (re-sent when it is turned on). The list is a set, capped: past
+   * WITHHELD_CAP ids it becomes `['*']` (everything of the category is re-sent), so sync/state.json stays small.
+   */
+  private noteWithheld(cat: SyncCategory, ids: Iterable<string>): void {
+    const cur = this.st.withheld[cat];
+    if (cur?.[0] === '*') {
+      return;
+    }
+    const set = new Set(cur ?? []);
+    for (const id of ids) {
+      set.add(id);
+    }
+    this.st.withheld[cat] = set.size > WITHHELD_CAP ? ['*'] : [...set];
+  }
+
+  /** Devices removed with "Remove device" and when (the index's registry, and their remote files). */
+  private async revocations(): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    for (const [id, d] of Object.entries(this.st.devices)) {
+      if (typeof d.revokedAt === 'number') {
+        out.set(id, d.revokedAt);
+      }
+    }
+    for (const r of await this.o.index.query<{ id: string; revoked_at: number | null }>('revokedDevices', {}).catch(() => [])) {
+      if (typeof r.revoked_at === 'number') {
+        out.set(r.id, Math.min(r.revoked_at, out.get(r.id) ?? Infinity));
+      }
+    }
+    return out;
+  }
+
+  /**
    * Re-sends entities withheld while their category was off: their current state as written by this device, as one
    * create each (field clocks kept in `__clocks`, as compaction does), so last-writer-wins still holds everywhere.
    */
@@ -1228,11 +1448,16 @@ export class SyncEngine {
     if (!turnedOn.length) {
       return 0;
     }
-    const ids = new Set(turnedOn.flatMap((c) => this.st.withheld[c] ?? []));
+    // `['*']`: more were withheld than the list keeps, so everything of the category is sent.
+    const whole = new Set(turnedOn.filter((c) => this.st.withheld[c]?.[0] === '*'));
+    const ids = new Set(turnedOn.flatMap((c) => this.st.withheld[c] ?? []).filter((x) => x !== '*'));
     const states = new Map<string, EntityState>();
     const all: EventEnvelope[] = [];
     for (const stream of this.ownStreams()) {
       for (const { e } of readStreamDir(this.streamDir(stream), 1)) {
+        if (whole.size && !e.local && !isWithheld(e) && whole.has(categoryOfEvent(e) as SyncCategory)) {
+          ids.add(e.eid);
+        }
         if (ids.has(e.eid)) {
           all.push(e);
         }
@@ -1279,7 +1504,8 @@ export class SyncEngine {
 
   /**
    * Daily: when this device compacted a stream locally past what the remote has as a base, upload the base and delete
-   * the own chunks it covers (never other devices' objects).
+   * the own chunks it covers (never other devices' objects). Then other devices' newer bases replace what they cover in
+   * the local copies of their streams (so those copies stop growing); the index is rebuilt when one was installed.
    */
   private async housekeeping(backend: SyncBackend, s: SyncSettings): Promise<void> {
     const key = this.currentKey();
@@ -1293,15 +1519,19 @@ export class SyncEngine {
       if (cut > own.uploaded || (own.base ?? 0) >= cut) {
         continue;
       }
+      const withheld = new Map<SyncCategory, string[]>();
       const kept = readSegmentLines(base.file)
         .map((r) => r.e)
         .filter((e) => {
           const why = withholdReason(e, s.categories);
           if (why && why !== 'local') {
-            (this.st.withheld[why as SyncCategory] ??= []).push(e.eid);
+            (withheld.get(why as SyncCategory) ?? withheld.set(why as SyncCategory, []).get(why as SyncCategory)!).push(e.eid);
           }
           return !why;
         });
+      for (const [c, ids] of withheld) {
+        this.noteWithheld(c, ids);
+      }
       const objKey = baseKey(stream, cut);
       await backend.put(objKey, sealObject(key, objKey, encodeEvents(kept)));
       for (const e of await backend.list(streamPrefix(stream))) {
@@ -1312,9 +1542,74 @@ export class SyncEngine {
       }
       own.base = cut;
     }
-    for (const c of Object.keys(this.st.withheld) as SyncCategory[]) {
-      this.st.withheld[c] = [...new Set(this.st.withheld[c])];
+    if (await this.acceptRemoteBases(backend)) {
+      await this.o.index.rebuild().catch((e) => this.o.warn?.(`sync housekeeping: index rebuild: ${(e as Error).message}`));
     }
+  }
+
+  /**
+   * Installs other devices' compacted bases over the local copies of their streams where the base is newer than the
+   * local one and the local copy already reaches it (a copy that does not was handled by the pull). Returns how many.
+   */
+  private async acceptRemoteBases(backend: SyncBackend): Promise<number> {
+    const me = this.o.log.device.deviceId;
+    const revoked = await this.revocations();
+    let purged: Set<string> | undefined;
+    let n = 0;
+    for (const [id, dev] of Object.entries(this.st.devices)) {
+      if (id === me) {
+        continue;
+      }
+      for (const [stream, to] of Object.entries(dev.bases ?? {})) {
+        if (!stream.startsWith(`${id}.`)) {
+          continue;
+        }
+        const local = listSegments(this.streamDir(stream));
+        const localCut = local[0]?.compact ? -local[0].segment : 0;
+        if (to <= localCut || this.localLast(stream) < to) {
+          continue;
+        }
+        try {
+          const objKey = baseKey(stream, to);
+          const raw = await backend.get(objKey);
+          if (!raw) {
+            continue;
+          }
+          const list = decodeEvents(openObject(this.keyOf, objKey, raw).toString('utf8'));
+          const at = revoked.get(id);
+          if (at !== undefined && list.some((e) => Hlc.physical(e.hlc) > at)) {
+            continue; // written after the device was removed
+          }
+          // Only a base that keeps everything the local copy has (a base made after its owner turned a category off
+          // leaves that category's entities out): anything else would delete data here.
+          purged ??= new Set(await this.o.index.query<string>('purgedEntities', {}).catch(() => [] as string[]));
+          const inBase = new Set(list.map((e) => e.eid));
+          const gone = (e: EventEnvelope) => {
+            const conv = (e.p as { conversationId?: unknown }).conversationId;
+            return purged!.has(e.eid) || (typeof conv === 'string' && purged!.has(conv)) || RUN_DETAIL_KINDS.has(e.ent);
+          };
+          let complete = true;
+          for (const { e } of readStreamDir(this.streamDir(stream), 1)) {
+            if (e.seq > to) {
+              break;
+            }
+            if (!isWithheld(e) && !inBase.has(e.eid) && !gone(e)) {
+              complete = false;
+              break;
+            }
+          }
+          if (!complete) {
+            continue;
+          }
+          if (this.o.log.importBase(stream, to, list, { replace: true })) {
+            n++;
+          }
+        } catch (e) {
+          this.damaged(baseKey(stream, to), stream, e);
+        }
+      }
+    }
+    return n;
   }
 
   /** Uploads every own stream again from the start (after a remote object of this device was damaged). */

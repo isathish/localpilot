@@ -1,14 +1,15 @@
 // The append-only event log (design §5.2–5.4). One data root per machine; each writing process owns one stream
 // (`<deviceId>.<n>`, claimed with a lease) and appends to it; streams of other processes and devices are read-only here
 // (`importRemote` adds to local copies of remote streams for sync and backup restore). Pure Node: no vscode.
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { EntityKind, EventEnvelope, EventLoc, MAX_LINE_BYTES, Op, SCHEMA_VERSIONS, validateEnvelope } from '../events';
 import { Hlc } from '../hlc';
 import { newId } from '../ids';
-import { Lease, leaseIsFree } from './lease';
-import { lastEvent, listSegments, readEventAt, readStreamDir, repairTail, SEGMENT_MAX_AGE_MS, SEGMENT_MAX_BYTES, segmentFile } from './segment';
+import { Lease, leaseIsFree, withFileLock } from './lease';
+import { compactName, lastEvent, listSegments, readEventAt, readStreamDir, repairTail, SEGMENT_MAX_AGE_MS, SEGMENT_MAX_BYTES, segmentFile } from './segment';
 
 export interface DeviceInfo {
   v: 1;
@@ -16,6 +17,14 @@ export interface DeviceInfo {
   name: string;
   platform: string;
   createdAt: number;
+  /**
+   * The machine this identity belongs to (`machineFingerprint`). A data folder copied to another machine keeps its
+   * device.json; that machine mints an identity of its own (kept in `others`), so two machines never write streams
+   * under one device id. Missing in 1.7.0 files: bound to the first machine that opens it.
+   */
+  host?: string;
+  /** Identities of other machines that opened this data folder (a copy, or a folder on a shared drive), by fingerprint. */
+  others?: Record<string, { deviceId: string; name: string; platform: string; createdAt: number }>;
 }
 
 export interface StreamInfo {
@@ -92,6 +101,8 @@ export interface OpenLogOptions {
   host?: string;
   pid?: number;
   segmentMaxBytes?: number;
+  /** Tests: the machine fingerprint (default `machineFingerprint()`), to play a copied data folder. */
+  fingerprint?: string;
 }
 
 /** A process-wide lock for `importRemote` into a stream nobody owns. */
@@ -99,10 +110,73 @@ const importing = new Set<string>();
 
 const noLog: LogLike = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
-/** Reads (or creates, exclusively) the data root's device identity. Throws when the file exists but is corrupt. */
-export function readOrCreateDevice(root: string, name?: string, now = Date.now): DeviceInfo {
+/** Where the machine id lives: outside every data folder, so copying a data folder does not copy it. */
+export function machineIdFile(): string {
+  return process.env.LOCALPILOT_MACHINE_ID_FILE || path.join(os.homedir(), '.localpilot', 'machine-id');
+}
+
+const fingerprints = new Map<string, string>();
+
+/**
+ * This machine and user: a random id kept in `machineIdFile()` (created once), the OS user and the platform, hashed.
+ * The host name is left out on purpose (macOS changes it with the network).
+ */
+export function machineFingerprint(): string {
+  const file = machineIdFile();
+  const cached = fingerprints.get(file);
+  if (cached) {
+    return cached;
+  }
+  const readId = (): string => {
+    try {
+      return fs.readFileSync(file, 'utf8').trim();
+    } catch {
+      return '';
+    }
+  };
+  let id = readId();
+  if (!id) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${crypto.randomBytes(16).toString('hex')}\n`, { flag: 'wx' });
+    } catch {
+      // a read-only home, or another process created it just now
+    }
+    id = readId();
+  }
+  let user = '';
+  try {
+    user = os.userInfo().username;
+  } catch {
+    user = process.env.USER ?? process.env.USERNAME ?? '';
+  }
+  const fp = crypto.createHash('sha256').update(`${id}\u0000${user}\u0000${process.platform}`).digest('hex').slice(0, 16);
+  fingerprints.set(file, fp);
+  return fp;
+}
+
+function writeJsonAtomic(file: string, v: unknown): void {
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(v, null, 2)}\n`);
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * Reads (or creates, exclusively) the data root's device identity for this machine. Throws when the file exists but is
+ * corrupt. A device.json made on another machine (a copied data folder) gives this machine a device id of its own; the
+ * streams of the other id stay readable as that device's history (`o.log` is told).
+ */
+export function readOrCreateDevice(root: string, name?: string, now = Date.now, o: { fingerprint?: string; log?: LogLike } = {}): DeviceInfo {
   const file = path.join(root, 'device.json');
   fs.mkdirSync(root, { recursive: true });
+  const fp = o.fingerprint ?? machineFingerprint();
+  const mine = (d: DeviceInfo): DeviceInfo | undefined => {
+    if (d.host === fp) {
+      return d;
+    }
+    const other = d.others?.[fp];
+    return other && /^dev_[\w-]+$/.test(other.deviceId) ? { v: 1, ...other, host: fp } : undefined;
+  };
   const read = (): DeviceInfo | undefined => {
     let raw: string;
     try {
@@ -118,19 +192,35 @@ export function readOrCreateDevice(root: string, name?: string, now = Date.now):
   };
   const existing = read();
   if (existing) {
-    return existing;
+    const m = mine(existing);
+    if (m) {
+      return m;
+    }
+    return withFileLock(file, () => {
+      const cur = read() ?? existing;
+      const again = mine(cur);
+      if (again) {
+        return again;
+      }
+      if (!cur.host) {
+        // A 1.7.0 identity: it belongs to this machine from now on.
+        writeJsonAtomic(file, { ...cur, host: fp });
+        return { ...cur, host: fp };
+      }
+      const d = { deviceId: newId('dev', now()), name: name || os.hostname(), platform: `${process.platform}-${process.arch}`, createdAt: now() };
+      writeJsonAtomic(file, { ...cur, others: { ...(cur.others ?? {}), [fp]: d } });
+      o.log?.warn(`continuity: ${file} was made on another machine (a copied data folder?): this machine writes as a new device ${d.deviceId}; the streams of ${cur.deviceId} stay as that device's history`);
+      return { v: 1, ...d, host: fp };
+    });
   }
-  const d: DeviceInfo = { v: 1, deviceId: newId('dev', now()), name: name || os.hostname(), platform: `${process.platform}-${process.arch}`, createdAt: now() };
+  const d: DeviceInfo = { v: 1, deviceId: newId('dev', now()), name: name || os.hostname(), platform: `${process.platform}-${process.arch}`, createdAt: now(), host: fp };
   try {
     fs.writeFileSync(file, `${JSON.stringify(d, null, 2)}\n`, { flag: 'wx' });
     return d;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
       // Another process created it first: use theirs.
-      const theirs = read();
-      if (theirs) {
-        return theirs;
-      }
+      return readOrCreateDevice(root, name, now, o);
     }
     throw e;
   }
@@ -144,15 +234,16 @@ interface Pending {
 
 export class FileEventLog implements EventLog {
   readonly device: DeviceInfo;
-  readonly stream: string;
+  private streamId = '';
   private readonly streamsDir: string;
-  private readonly ownDir: string;
-  private readonly lease: Lease;
+  private ownDir = '';
+  private lease!: Lease;
   private readonly hlc: Hlc;
   private readonly now: () => number;
   private readonly log: LogLike;
   private readonly flushMs: number;
   private readonly maxBytes: number;
+  private readonly opts: OpenLogOptions;
   private lastSeq = 0;
   private activeSegment = 0;
   private activeSize = 0;
@@ -164,22 +255,55 @@ export class FileEventLog implements EventLog {
   private disposed = false;
   private readonly emitter = new Emitter<EventEnvelope[]>();
   readonly onAppend = this.emitter.event;
+  private readonly rotateEmitter = new Emitter<{ from: string; to: string }>();
+  /** The stream changed: another process took this one over (its lease was lost); see `ensureLease`. */
+  readonly onRotate = this.rotateEmitter.event;
   /** Events dropped by crash repair when the stream was opened (bytes). */
-  readonly repairedBytes: number;
+  repairedBytes = 0;
   private readonly exitHook = () => this.flushSync();
 
   private constructor(readonly root: string, o: OpenLogOptions, device: DeviceInfo, stream: string, lease: Lease) {
     this.device = device;
-    this.stream = stream;
-    this.lease = lease;
+    this.opts = o;
     this.now = o.now ?? Date.now;
     this.log = o.log ?? noLog;
     this.flushMs = o.flushMs ?? 250;
     this.maxBytes = o.segmentMaxBytes ?? SEGMENT_MAX_BYTES;
     this.streamsDir = path.join(root, 'streams');
-    this.ownDir = path.join(this.streamsDir, stream);
     this.hlc = new Hlc(device.deviceId, this.now);
-    // Crash repair + where to continue.
+    this.attach(stream, lease);
+    // Stay ahead of every stamp already on this machine (other processes' streams).
+    for (const s of safeReaddir(this.streamsDir)) {
+      if (s !== stream) {
+        const segs = listSegments(path.join(this.streamsDir, s)).filter((f) => !f.compact);
+        const last = segs.length ? lastEvent(segs[segs.length - 1].file) : undefined;
+        if (last) {
+          this.hlc.observe(last.hlc);
+        }
+      }
+    }
+    process.once('exit', this.exitHook);
+  }
+
+  /** This process's stream (`<deviceId>.<n>`). */
+  get stream(): string {
+    return this.streamId;
+  }
+
+  /** The pid in this stream's lease (this process, or the one tests play). */
+  get writerPid(): number {
+    return this.lease.pid;
+  }
+
+  /** Makes `stream` ours: crash repair of its active segment, where to continue. */
+  private attach(stream: string, lease: Lease): void {
+    this.streamId = stream;
+    this.lease = lease;
+    this.ownDir = path.join(this.streamsDir, stream);
+    this.lastSeq = 0;
+    this.activeSegment = 0;
+    this.activeSize = 0;
+    this.activeOpenedAt = 0;
     const files = listSegments(this.ownDir).filter((f) => !f.compact);
     const active = files[files.length - 1];
     let repaired = 0;
@@ -208,32 +332,23 @@ export class FileEventLog implements EventLog {
     const base = listSegments(this.ownDir).find((f) => f.compact);
     if (base && -base.segment > this.lastSeq) {
       this.lastSeq = -base.segment;
-    }
-    this.repairedBytes = repaired;
-    // Stay ahead of every stamp already on this machine (other processes' streams).
-    for (const s of safeReaddir(this.streamsDir)) {
-      if (s !== stream) {
-        const segs = listSegments(path.join(this.streamsDir, s)).filter((f) => !f.compact);
-        const last = segs.length ? lastEvent(segs[segs.length - 1].file) : undefined;
-        if (last) {
-          this.hlc.observe(last.hlc);
-        }
+      // A segment the base covers entirely is never appended to: the next event starts a new one.
+      if (this.activeSegment && this.activeSegment <= this.lastSeq && !lastEvent(segmentFile(this.ownDir, this.activeSegment))) {
+        this.activeSegment = 0;
       }
     }
-    process.once('exit', this.exitHook);
+    this.repairedBytes += repaired;
   }
 
-  /**
-   * Opens the data root: device identity, a stream of our own (the lowest free `<deviceId>.<n>`), crash repair of
-   * its active segment. Synchronous file work only (activation budget). Throws when the root is unusable.
-   */
-  static open(o: OpenLogOptions): FileEventLog {
-    const root = path.resolve(o.root);
-    const device = readOrCreateDevice(root, o.deviceName, o.now);
+  /** The lowest free stream of this device, claimed (`<deviceId>.<n>`). */
+  private static claimStream(root: string, device: DeviceInfo, o: OpenLogOptions, skip?: string): { id: string; lease: Lease } {
     const streamsDir = path.join(root, 'streams');
     fs.mkdirSync(streamsDir, { recursive: true });
     for (let n = 1; n < 1000; n++) {
       const id = `${device.deviceId}.${n}`;
+      if (id === skip) {
+        continue;
+      }
       const dir = path.join(streamsDir, id);
       const leaseFile = path.join(dir, 'lease.json');
       if (fs.existsSync(dir) && !leaseIsFree(leaseFile, { now: o.now, host: o.host })) {
@@ -242,10 +357,54 @@ export class FileEventLog implements EventLog {
       fs.mkdirSync(dir, { recursive: true });
       const lease = new Lease(leaseFile, { kind: o.writer, now: o.now, host: o.host, pid: o.pid });
       if (lease.tryClaim()) {
-        return new FileEventLog(root, o, device, id, lease);
+        return { id, lease };
       }
     }
     throw new Error('no free log stream (999 streams are in use)');
+  }
+
+  /**
+   * Opens the data root: device identity, a stream of our own (the lowest free `<deviceId>.<n>`), crash repair of
+   * its active segment. Synchronous file work only (activation budget). Throws when the root is unusable.
+   */
+  static open(o: OpenLogOptions): FileEventLog {
+    const root = path.resolve(o.root);
+    const device = readOrCreateDevice(root, o.deviceName, o.now, { fingerprint: o.fingerprint, log: o.log });
+    const { id, lease } = FileEventLog.claimStream(root, device, o);
+    return new FileEventLog(root, o, device, id, lease);
+  }
+
+  /**
+   * Before writing: is the stream still ours? A lease another process took (this one looked dead: a laptop asleep
+   * longer than the stale age on a shared drive, a deleted lease file) means two writers on one stream. The log then
+   * moves to a stream of its own and re-stamps what it has not written yet; what it wrote before stays where it is.
+   */
+  private ensureLease(): void {
+    if (this.lease.verify()) {
+      return;
+    }
+    const from = this.streamId;
+    const { id, lease } = FileEventLog.claimStream(this.root, this.device, this.opts, from);
+    this.attach(id, lease);
+    this.log.warn(`continuity: stream ${from} was taken over by another process; this process now writes ${id}`);
+    for (const p of this.pending) {
+      const seq = ++this.lastSeq;
+      const e = p.e;
+      e.seq = seq;
+      e.id = `${id}:${seq}`;
+      e.stream = id;
+      p.line = JSON.stringify(e);
+      const bytes = Buffer.byteLength(p.line) + 1;
+      if (!this.activeSegment || (this.activeSize > 0 && this.activeSize + bytes > this.maxBytes)) {
+        this.activeSegment = seq;
+        this.activeSize = 0;
+        this.activeOpenedAt = this.now();
+      }
+      p.segment = this.activeSegment;
+      locs.set(p.e, { stream: id, segment: this.activeSegment, offset: this.activeSize, length: bytes - 1 });
+      this.activeSize += bytes;
+    }
+    this.rotateEmitter.fire({ from, to: id });
   }
 
   append(ent: EntityKind, eid: string, op: Op, p: object, o: AppendOptions = {}): EventEnvelope {
@@ -321,13 +480,15 @@ export class FileEventLog implements EventLog {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
+    if (!this.pending.length) {
+      return;
+    }
+    // One writer per stream: never append to a stream whose lease another process holds now.
+    this.ensureLease();
     const batch = this.pending;
     const durable = this.pendingDurable;
     this.pending = [];
     this.pendingDurable = false;
-    if (!batch.length) {
-      return;
-    }
     const groups = new Map<number, string[]>();
     for (const b of batch) {
       (groups.get(b.segment) ?? groups.set(b.segment, []).get(b.segment)!).push(b.line);
@@ -351,6 +512,13 @@ export class FileEventLog implements EventLog {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
+    }
+    if (this.pending.length) {
+      try {
+        this.ensureLease();
+      } catch {
+        // no stream to move to: write where we are (nothing better at exit)
+      }
     }
     const batch = this.pending;
     this.pending = [];
@@ -413,103 +581,126 @@ export class FileEventLog implements EventLog {
       return { imported: 0, skipped: events.length };
     }
     const dir = path.join(this.streamsDir, stream);
-    if (fs.existsSync(path.join(dir, 'lease.json')) && !leaseIsFree(path.join(dir, 'lease.json'))) {
-      throw new Error(`stream ${stream} is being written by another process on this machine`);
-    }
     if (importing.has(dir)) {
       throw new Error(`stream ${stream} is being imported already`);
     }
     importing.add(dir);
     try {
-      fs.mkdirSync(dir, { recursive: true });
-      const files = listSegments(dir);
-      const segs = files.filter((f) => !f.compact);
-      const active = segs[segs.length - 1];
-      let last = active ? repairTail(active.file).last : undefined;
-      for (let i = segs.length - 2; !last && i >= 0; i--) {
-        last = lastEvent(segs[i].file);
-      }
-      const base = files.find((f) => f.compact);
-      let lastSeq = Math.max(last?.seq ?? 0, base ? -base.segment : 0);
-      const sorted = [...events].sort((a, b) => a.seq - b.seq);
-      const fresh = sorted.filter((e) => e.seq > lastSeq);
-      for (const e of fresh) {
-        const bad = validateEnvelope(e);
-        if (bad || e.stream !== stream) {
-          throw new Error(`invalid event ${e?.id}: ${bad ?? 'wrong stream'}`);
+      // The stream's lease keeps out its writer, another process's import, compaction and redaction meanwhile.
+      const r = withStreamLease(dir, 'import', () => {
+        const files = listSegments(dir);
+        const segs = files.filter((f) => !f.compact);
+        const active = segs[segs.length - 1];
+        let last = active ? repairTail(active.file).last : undefined;
+        for (let i = segs.length - 2; !last && i >= 0; i--) {
+          last = lastEvent(segs[i].file);
         }
-        if (e.seq !== lastSeq + 1) {
-          throw new Error(`gap in stream ${stream}: expected seq ${lastSeq + 1}, got ${e.seq}`);
-        }
-        lastSeq = e.seq;
-      }
-      if (fresh.length) {
-        let segment = active?.segment ?? fresh[0].seq;
-        let size = active ? fs.statSync(active.file).size : 0;
-        let buf: string[] = [];
-        const write = () => {
-          if (buf.length) {
-            fs.appendFileSync(segmentFile(dir, segment), `${buf.join('\n')}\n`);
-            buf = [];
-          }
-        };
+        const base = files.find((f) => f.compact);
+        let lastSeq = Math.max(last?.seq ?? 0, base ? -base.segment : 0);
+        const sorted = [...events].sort((a, b) => a.seq - b.seq);
+        const fresh = sorted.filter((e) => e.seq > lastSeq);
         for (const e of fresh) {
-          const line = JSON.stringify(e);
-          const bytes = Buffer.byteLength(line) + 1;
-          if (size > 0 && size + bytes > this.maxBytes) {
-            write();
-            segment = e.seq;
-            size = 0;
+          const bad = validateEnvelope(e);
+          if (bad || e.stream !== stream) {
+            throw new Error(`invalid event ${e?.id}: ${bad ?? 'wrong stream'}`);
           }
-          buf.push(line);
-          size += bytes;
-          this.hlc.observe(e.hlc);
+          if (e.seq !== lastSeq + 1) {
+            throw new Error(`gap in stream ${stream}: expected seq ${lastSeq + 1}, got ${e.seq}`);
+          }
+          lastSeq = e.seq;
         }
-        write();
-        const fd = fs.openSync(segmentFile(dir, segment), 'r');
-        try {
-          fs.fdatasyncSync(fd);
-        } catch {
-          // best effort
-        } finally {
-          fs.closeSync(fd);
+        if (fresh.length) {
+          // A segment the base covers entirely is not appended to.
+          const reuse = active && (!base || active.segment > -base.segment || (last && last.seq > -base.segment));
+          let segment = reuse ? active.segment : fresh[0].seq;
+          let size = reuse ? fs.statSync(active.file).size : 0;
+          let buf: string[] = [];
+          const write = () => {
+            if (buf.length) {
+              fs.appendFileSync(segmentFile(dir, segment), `${buf.join('\n')}\n`);
+              buf = [];
+            }
+          };
+          for (const e of fresh) {
+            const line = JSON.stringify(e);
+            const bytes = Buffer.byteLength(line) + 1;
+            if (size > 0 && size + bytes > this.maxBytes) {
+              write();
+              segment = e.seq;
+              size = 0;
+            }
+            buf.push(line);
+            size += bytes;
+            this.hlc.observe(e.hlc);
+          }
+          write();
+          const fd = fs.openSync(segmentFile(dir, segment), 'r');
+          try {
+            fs.fdatasyncSync(fd);
+          } catch {
+            // best effort
+          } finally {
+            fs.closeSync(fd);
+          }
         }
+        return { imported: fresh.length, skipped: events.length - fresh.length };
+      });
+      if (!r) {
+        throw new Error(`stream ${stream} is being written by another process on this machine`);
       }
-      return { imported: fresh.length, skipped: events.length - fresh.length };
+      return r;
     } finally {
       importing.delete(dir);
     }
   }
 
   /**
-   * Installs a compacted base of a stream this process does not write (backup restore, sync of a new device): only when
-   * the local copy has nothing beyond the base yet. Local segments the base covers are removed.
+   * Installs a compacted base of a stream this process does not write (backup restore, sync of a new device). By
+   * default only when the local copy has nothing beyond the base yet; with `replace`, also over a local copy that is
+   * ahead (the owner compacted: its newer base replaces what it covers here; the caller rebuilds the index). Local
+   * segments the base covers entirely are removed; one it covers in part stays and readers skip the covered events.
    */
-  importBase(stream: string, cut: number, events: EventEnvelope[]): boolean {
+  importBase(stream: string, cut: number, events: EventEnvelope[], o: { replace?: boolean } = {}): boolean {
     if (stream === this.stream || !/^dev_[\w-]+\.\d+$/.test(stream)) {
       return false;
     }
     const dir = path.join(this.streamsDir, stream);
-    if (fs.existsSync(path.join(dir, 'lease.json')) && !leaseIsFree(path.join(dir, 'lease.json'))) {
-      return false;
-    }
-    if (streamLastSeq(dir) >= cut) {
-      return false;
-    }
-    fs.mkdirSync(dir, { recursive: true });
-    const target = path.join(dir, `compact-${String(cut).padStart(12, '0')}.jsonl`);
-    const tmp = `${target}.tmp-${process.pid}`;
-    // The base is in place before the segments it covers go: a crash in between leaves both, never neither.
-    const old = listSegments(dir).filter((f) => path.resolve(f.file) !== path.resolve(target));
-    fs.writeFileSync(tmp, events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : ''));
-    fs.renameSync(tmp, target);
-    for (const f of old) {
-      fs.rmSync(f.file, { force: true });
-    }
-    for (const e of events) {
-      this.hlc.observe(e.hlc);
-    }
-    return true;
+    const r = withStreamLease(dir, 'import', () => {
+      const files = listSegments(dir);
+      const curBase = files.find((f) => f.compact);
+      if (curBase && -curBase.segment >= cut) {
+        return false;
+      }
+      const last = streamLastSeq(dir);
+      if (last >= cut && !o.replace) {
+        return false;
+      }
+      const target = path.join(dir, compactName(cut));
+      const tmp = `${target}.tmp-${process.pid}`;
+      const segs = files.filter((f) => !f.compact);
+      // Segments wholly inside the base: the next one starts at or below cut + 1, or (the newest) it ends at the cut.
+      const covered = segs.filter((s, i) => {
+        const next = segs[i + 1];
+        if (next) {
+          return next.segment <= cut + 1;
+        }
+        const end = lastEvent(s.file);
+        return !end || end.seq <= cut;
+      });
+      // The base is in place before what it covers goes: a crash in between leaves both (readers skip the overlap).
+      fs.writeFileSync(tmp, events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : ''));
+      fs.renameSync(tmp, target);
+      for (const f of [...covered, ...(curBase ? [curBase] : [])]) {
+        if (path.resolve(f.file) !== path.resolve(target)) {
+          fs.rmSync(f.file, { force: true });
+        }
+      }
+      for (const e of events) {
+        this.hlc.observe(e.hlc);
+      }
+      return true;
+    });
+    return r === true;
   }
 
   observeHlc(hlc: string): { skewMs?: number } {
@@ -539,6 +730,7 @@ export class FileEventLog implements EventLog {
     process.removeListener('exit', this.exitHook);
     this.lease.release();
     this.emitter.dispose();
+    this.rotateEmitter.dispose();
   }
 }
 
@@ -556,12 +748,30 @@ function safeReaddir(dir: string): string[] {
 export function streamLastSeq(dir: string): number {
   const files = listSegments(dir);
   const segs = files.filter((f) => !f.compact);
+  const base = files.find((f) => f.compact);
+  const cut = base ? -base.segment : 0;
   for (let i = segs.length - 1; i >= 0; i--) {
     const last = lastEvent(segs[i].file);
     if (last) {
-      return last.seq;
+      return Math.max(last.seq, cut);
     }
   }
-  const base = files.find((f) => f.compact);
-  return base ? -base.segment : 0;
+  return cut;
+}
+
+/**
+ * Runs `fn` holding the lease of a stream folder this process does not write (an import, a restore, compaction or
+ * redaction of another stream). Undefined when a live process holds it (its writer, or another importer).
+ */
+export function withStreamLease<T>(dir: string, kind: string, fn: () => T): T | undefined {
+  fs.mkdirSync(dir, { recursive: true });
+  const lease = new Lease(path.join(dir, 'lease.json'), { kind, refreshMs: 0 });
+  if (!lease.tryClaim()) {
+    return undefined;
+  }
+  try {
+    return fn();
+  } finally {
+    lease.release();
+  }
 }

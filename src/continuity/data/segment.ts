@@ -99,6 +99,7 @@ export function readSegmentLines(file: string, onBad?: (offset: number, reason: 
 export function* readStreamDir(streamDir: string, fromSeq = 1): Generator<{ e: EventEnvelope; loc: EventLoc }> {
   const stream = path.basename(streamDir);
   const files = listSegments(streamDir);
+  const cut = files[0]?.compact ? -files[0].segment : 0;
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     const next = files[i + 1];
@@ -110,6 +111,9 @@ export function* readStreamDir(streamDir: string, fromSeq = 1): Generator<{ e: E
       continue; // every event of this segment is before fromSeq
     }
     for (const r of readSegmentLines(f.file)) {
+      if (!f.compact && r.e.seq <= cut) {
+        continue; // also in the base (a base installed over a segment it covers in part, or a crash in between)
+      }
       if (r.e.seq >= fromSeq || (f.compact && fromSeq <= -f.segment)) {
         yield { e: r.e, loc: { stream, segment: f.segment, offset: r.offset, length: r.length } };
       }

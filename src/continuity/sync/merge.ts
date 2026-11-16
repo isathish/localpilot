@@ -4,10 +4,11 @@
 // the same way. Pure.
 import type { EntityKind, EventEnvelope } from '../events';
 
-export type SyncCategory = 'conversations' | 'memory' | 'attachments' | 'agentState' | 'checkpointContents' | 'prompts' | 'preferences';
-export const SYNC_CATEGORIES: readonly SyncCategory[] = ['conversations', 'memory', 'attachments', 'agentState', 'checkpointContents', 'prompts', 'preferences'];
+export type SyncCategory = 'conversations' | 'memory' | 'attachments' | 'agentState' | 'checkpointContents' | 'prompts' | 'preferences' | 'approvals';
+export const SYNC_CATEGORIES: readonly SyncCategory[] = ['conversations', 'memory', 'attachments', 'agentState', 'checkpointContents', 'prompts', 'preferences', 'approvals'];
 export type SyncCategories = Record<SyncCategory, boolean>;
-export const DEFAULT_CATEGORIES: SyncCategories = { conversations: true, memory: true, attachments: true, agentState: true, checkpointContents: false, prompts: true, preferences: true };
+/** Approval levels are opt-in: loosening them on one device would loosen them on every device. */
+export const DEFAULT_CATEGORIES: SyncCategories = { conversations: true, memory: true, attachments: true, agentState: true, checkpointContents: false, prompts: true, preferences: true, approvals: false };
 
 export const CATEGORY_LABELS: Record<SyncCategory, string> = {
   conversations: 'Conversations',
@@ -16,7 +17,8 @@ export const CATEGORY_LABELS: Record<SyncCategory, string> = {
   agentState: 'Agent runs and checkpoints',
   checkpointContents: 'Checkpoint contents',
   prompts: 'Custom commands',
-  preferences: 'Preferences',
+  preferences: 'Preferences (models, thinking level, Auto mode)',
+  approvals: 'Approval levels (loosening them on one device loosens them on all)',
 };
 
 /** The category of an entity's events; `system` always syncs (projects, devices, conflicts, import markers). */
@@ -51,8 +53,19 @@ export function withholdReason(e: EventEnvelope, cats: SyncCategories): string |
   if (e.local) {
     return 'local';
   }
-  const c = categoryOfEntity(e.ent);
+  const c = categoryOfEvent(e);
   return c !== 'system' && !cats[c] ? c : undefined;
+}
+
+/** Preference keys that are approval levels (their own, opt-in category). */
+export const isApprovalKey = (key: unknown): boolean => typeof key === 'string' && key.startsWith('approvals.');
+
+/** The category of one event: its entity's, except approval-level preferences (`approvals`). */
+export function categoryOfEvent(e: Pick<EventEnvelope, 'ent' | 'p'>): SyncCategory | 'system' {
+  if (e.ent === 'preference' && isApprovalKey((e.p as { key?: unknown })?.key)) {
+    return 'approvals';
+  }
+  return categoryOfEntity(e.ent);
 }
 
 export interface BlobRef {

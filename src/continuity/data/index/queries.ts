@@ -198,6 +198,8 @@ export const NAMED_QUERIES = [
   'modelSessions', 'interruptedAgentSessions',
   // SYNC
   'syncDevices', 'checkpointsWithoutContent', 'promptTemplates', 'preferences',
+  // Hardening (§26)
+  'purgedEntities', 'conversationWriters', 'revokedDevices',
 ] as const;
 export type NamedQuery = (typeof NAMED_QUERIES)[number];
 
@@ -745,9 +747,9 @@ export function named(db: Db, name: NamedQuery, p: Record<string, unknown>, fts:
     case 'conversationIds':
       return db.all<{ id: string }>('SELECT id FROM conversations WHERE purged = 0 ORDER BY updated_at DESC').map((r) => r.id);
     case 'runningAgentSessions':
-      return db.all("SELECT * FROM agent_sessions WHERE outcome = 'running' ORDER BY started_at DESC");
+      return db.all("SELECT a.*, e.state AS state FROM agent_sessions a LEFT JOIN entity_clocks e ON e.id = a.id WHERE a.outcome = 'running' ORDER BY a.started_at DESC");
     case 'agentSessions':
-      return db.all('SELECT * FROM agent_sessions WHERE conversation_id = ? ORDER BY started_at DESC', [s('conversationId')]);
+      return db.all('SELECT a.*, e.state AS state FROM agent_sessions a LEFT JOIN entity_clocks e ON e.id = a.id WHERE a.conversation_id = ? ORDER BY a.started_at DESC', [s('conversationId')]);
     case 'executionEvents':
       return db.all('SELECT * FROM execution_events WHERE agent_session_id = ? ORDER BY seq', [s('agentSessionId')]);
     case 'checkpoints':
@@ -908,6 +910,24 @@ export function named(db: Db, name: NamedQuery, p: Record<string, unknown>, fts:
           events: Number(db.get<{ n: number }>('SELECT count(*) AS n FROM entity_events')?.n ?? 0),
         },
       ];
+    case 'purgedEntities':
+      // Entities purged here or on another device (redaction of every local stream, compaction, backups).
+      return db.all<{ id: string }>(`SELECT id FROM entity_clocks WHERE state LIKE '%"purged":"%'`).map((r) => r.id);
+    case 'conversationWriters': {
+      // The stream of each conversation's newest event (who wrote it last: another process of this device, or this one).
+      const ids = (Array.isArray(p.ids) ? p.ids : []).map(String).slice(0, 2000);
+      if (!ids.length) {
+        return [];
+      }
+      return db.all(
+        `SELECT e.id AS id, e.stream AS stream FROM entity_events e JOIN (SELECT id, max(hlc) AS hlc FROM entity_events WHERE ent = 'conversation' AND id IN (${ids.map(() => '?').join(',')}) GROUP BY id) m
+           ON m.id = e.id AND m.hlc = e.hlc`,
+        ids
+      );
+    }
+    case 'revokedDevices':
+      // SYNC: devices removed with "Remove device" (and when).
+      return db.all('SELECT id, revoked_at FROM sync_devices WHERE revoked_at IS NOT NULL');
     default:
       throw new Error(`unknown query ${String(name)}`);
   }

@@ -26,6 +26,7 @@ import { SessionManager } from './session/sessionManager';
 import type { CaptureMode } from './session/runBridge';
 import { SyncEngine, SyncEngineOptions, SyncSettings } from './sync/syncEngine';
 import { CheckpointContentsExtra, PreferenceAccess, PreferencesExtra, PromptsExtra } from './sync/extras';
+import { normalizeCategories } from './sync/merge';
 
 export interface ContinuitySettings {
   /** Empty = default (`~/.localpilot/continuity`, or `$LOCALPILOT_DATA_DIR/continuity`). */
@@ -216,7 +217,7 @@ export class Continuity implements Disposable {
     }
     const purge = retention.onPurge(async (ent, id) => {
       if (ent === 'conversation') {
-        await manager.cleanupPurged(id);
+        await manager.cleanupPurgedWhenIdle(id);
       }
     });
     // Chats changed while this process was away (another window, the CLI, a restored backup) are reloaded.
@@ -430,10 +431,12 @@ export class Continuity implements Disposable {
       info: o.info,
       passphraseHint: o.passphraseHint,
       blobBudgetBytes: o.blobBudgetBytes,
+      // A purge made on another device: its files go and its content is redacted from every local stream here too.
+      onRemotePurge: async (items) => void (await this.parts?.retention.redactRemote(items)),
       extras: [
         new PromptsExtra({ log, index, root: this.dataDir, dir: o.promptsDir, warn: o.warn }),
         new CheckpointContentsExtra({ log, index, blobs, warn: o.warn }),
-        ...(o.preferences ? [new PreferencesExtra({ log, index, root: this.dataDir, access: o.preferences })] : []),
+        ...(o.preferences ? [new PreferencesExtra({ log, index, root: this.dataDir, access: o.preferences, categories: () => normalizeCategories(o.settings().categories) })] : []),
       ],
       // A resolution changes memory files and chat branches through their managers when they are attached.
       effects:

@@ -1,10 +1,10 @@
 // Crash recovery (design §13 "VS Code crashes during an agent task", SESSION brief item 4): agent sessions still marked
-// `running` whose writer is gone (its stream's lease is free, or it is this process's own stream and the run is not in
-// progress here) are patched to `interrupted`. What the Run interrupted card shows about such a run ("What ran",
-// "Changed files") is read here too. Pure Node (no vscode).
+// `running` whose writer is gone (its stream's lease is free or now held by another process than the run's writer, or it
+// is this process's own stream and the run is not in progress here) are patched to `interrupted`. What the Run
+// interrupted card shows about such a run ("What ran", "Changed files") is read here too. Pure Node (no vscode).
 import * as path from 'path';
 import type { IndexClient } from '../data/index/indexClient';
-import { leaseIsFree } from '../data/lease';
+import { leaseHeldBy } from '../data/lease';
 import type { RunLog } from './runBridge';
 
 export interface AgentSessionRow {
@@ -18,6 +18,8 @@ export interface AgentSessionRow {
   endedAt?: number;
   outcome: 'running' | 'ok' | 'error' | 'stopped' | 'interrupted';
   writer?: string;
+  /** The writer process (a stream id is reused by the next process once its writer died). */
+  writerPid?: number;
   filesTouched: string[];
   promptTokens?: number;
   completionTokens?: number;
@@ -101,6 +103,7 @@ export function agentSessionRow(r: Record<string, unknown>): AgentSessionRow {
     endedAt: num(r.ended_at),
     outcome: (str(r.outcome) ?? 'running') as AgentSessionRow['outcome'],
     writer: str(r.writer),
+    writerPid: num(parse<{ fields?: { writerPid?: unknown } }>(r.state, {}).fields?.writerPid),
     filesTouched: parse<string[]>(r.files_touched, []),
     promptTokens: num(r.prompt_tokens),
     completionTokens: num(r.completion_tokens),
@@ -178,11 +181,12 @@ export interface WriterCheck {
 }
 
 /**
- * Whether the writer of a `running` agent session is gone: on this machine, its stream's lease is free (or it is this
- * process's stream and the run is not in progress here). Other devices' runs are never judged here (that device will
- * mark them when it starts again), so `false`.
+ * Whether the writer of a `running` agent session is gone: on this machine, its stream's lease is free, or held by
+ * another process than the run's writer (a stream id is reused once its writer died: compared by pid, and by when the
+ * lease was claimed against when the run started), or it is this process's stream and the run is not in progress here.
+ * Other devices' runs are never judged here (that device will mark them when it starts again), so `false`.
  */
-export function writerGone(row: Pick<AgentSessionRow, 'id' | 'writer'>, w: WriterCheck): boolean {
+export function writerGone(row: Pick<AgentSessionRow, 'id' | 'writer'> & Partial<Pick<AgentSessionRow, 'writerPid' | 'startedAt'>>, w: WriterCheck): boolean {
   const writer = row.writer;
   if (!writer) {
     return true;
@@ -194,7 +198,7 @@ export function writerGone(row: Pick<AgentSessionRow, 'id' | 'writer'>, w: Write
   if (device !== w.deviceId) {
     return false;
   }
-  return leaseIsFree(path.join(w.root, 'streams', writer, 'lease.json'), { now: w.now });
+  return !leaseHeldBy(path.join(w.root, 'streams', writer, 'lease.json'), row.writerPid, row.startedAt || undefined, { now: w.now });
 }
 
 /** Patches every `running` agent session whose writer is gone to `interrupted`; returns their ids. */

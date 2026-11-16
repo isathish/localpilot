@@ -112,19 +112,32 @@ export function createContextHooks(svc: ContextService, o: { sink?: ContextSink;
  * Connects the CONTEXT module once continuity is open: the service, the agent hooks, the mentions and the history
  * tools. Returns a disposable (or a no-op when continuity is degraded).
  */
-export function attachContext(c: Continuity, o: { runner: AgentRunner; workspace: WorkspaceContext; memory?: MemoryStore; tools: ToolRegistry; sink?: ContextSink; defaultFolder: () => string | undefined; prepare?: (s: Session) => void; log: { warn(m: string): void; debug(m: string): void } }): { dispose(): void } {
+export function attachContext(c: Continuity, o: { runner: AgentRunner; workspace: WorkspaceContext; memory?: MemoryStore; tools: ToolRegistry; sink?: ContextSink; defaultFolder: () => string | undefined; prepare?: (s: Session) => void; log: { warn(m: string): void; debug(m: string): void }; /** Settings changed (the history tools follow relatedConversations). */ onSettingsChanged?: (cb: () => void) => { dispose(): void } }): { dispose(): void } {
   const svc = c.attachContext({ defaultFolder: o.defaultFolder });
   if (!svc) {
     return { dispose: () => undefined };
   }
   o.runner.contextHooks = createContextHooks(svc, { sink: o.sink, prepare: o.prepare ?? ((s) => c.bridge?.prepare(s)), log: (m) => o.log.debug(m) });
-  const toolsReg = o.tools.registerAll(historyTools(() => (c.context === svc ? svc.related : undefined), (sid) => svc.projectOf(sid)));
+  // The history tools are offered only while related conversations are on (`localpilot.continuity.relatedConversations`).
+  let toolsReg: { dispose(): void } | undefined;
+  const syncTools = () => {
+    const on = getConfig().continuity.relatedConversations;
+    if (on && !toolsReg) {
+      toolsReg = o.tools.registerAll(historyTools(() => (c.context === svc ? svc.related : undefined), (sid) => svc.projectOf(sid)));
+    } else if (!on && toolsReg) {
+      toolsReg.dispose();
+      toolsReg = undefined;
+    }
+  };
+  syncTools();
+  const cfgSub = o.onSettingsChanged?.(syncTools);
   const deps = async () => ({ root: o.defaultFolder(), projectId: await svc.projectOf().catch(() => undefined), memory: o.memory ? (n: string) => o.memory!.mention(n) : undefined, chat: (r: string) => svc.related.chatBlock(r) });
   o.workspace.mentionResolvers.set('context', async (name) => svc.library.resolve(name, await deps()));
   o.workspace.mentionResolvers.set('chat', async (ref) => svc.related.chatBlock(ref, { projectId: await svc.projectOf().catch(() => undefined) }));
   return {
     dispose: () => {
-      toolsReg.dispose();
+      cfgSub?.dispose();
+      toolsReg?.dispose();
       o.workspace.mentionResolvers.delete('context');
       o.workspace.mentionResolvers.delete('chat');
       if (o.runner.contextHooks) {

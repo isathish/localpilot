@@ -431,7 +431,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       // Memory (1.7): note files become events, six memory types, conversation and task memory, #memory: mentions.
       context.subscriptions.push(attachMemory(c, { memory, runner, workspace, log, projectFolders: () => (vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === 'file').map((f) => f.uri.fsPath), onFoldersChanged: (cb) => vscode.workspace.onDidChangeWorkspaceFolders(cb) }));
       // Context (1.7): snapshots of what the model saw, the context library, related chats, the local-only policy.
-      context.subscriptions.push(attachContext(c, { runner, workspace, memory, tools, sink: { post: (m) => controller.publish(m) }, defaultFolder: () => workspace.root, log }));
+      context.subscriptions.push(attachContext(c, { runner, workspace, memory, tools, sink: { post: (m) => controller.publish(m) }, defaultFolder: () => workspace.root, log, onSettingsChanged: (cb) => vscode.workspace.onDidChangeConfiguration((e) => (e.affectsConfiguration('localpilot.continuity.relatedConversations') ? cb() : undefined)) }));
       // Sessions (1.7): agent runs, what they did, checkpoints and model sessions; drafts of partial answers; crash recovery.
       const sessions = attachSessions(c, { runner, checkpoints, recovery: healing.store, traces: controller.traces, sessionOf: (id) => (store.has(id) ? store.get(id) : undefined), models: () => providers.cachedModels(), log });
       context.subscriptions.push(sessions);

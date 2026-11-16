@@ -192,6 +192,8 @@ export interface AgentSessionFields {
   endedAt?: number;
   outcome: 'running' | 'ok' | 'error' | 'stopped' | 'interrupted';
   writer: string;
+  /** The writing process (crash recovery tells a reused stream id from the run's own writer). */
+  writerPid?: number;
   worktree?: WorktreeInfo;
   recovery?: { phase: string; attempt: number; category?: string };
   filesTouched?: string[];
@@ -352,8 +354,9 @@ export function validateEnvelope(e: unknown): string | undefined {
   if (typeof x.dev !== 'string' || typeof x.ent !== 'string' || typeof x.eid !== 'string' || !x.eid) {
     return 'missing dev/ent/eid';
   }
-  if (!OPS.includes(x.op as Op)) {
-    return `unknown op ${String(x.op)}`;
+  // An op this build does not know (a newer LocalPilot's) is well-formed: kept in the log, never applied (`isKnown`).
+  if (typeof x.op !== 'string' || !/^[a-z][a-z_]{0,31}$/.test(x.op)) {
+    return `bad op ${String(x.op)}`;
   }
   if (typeof x.sv !== 'number' || x.sv < 1) {
     return 'bad sv';
@@ -364,7 +367,6 @@ export function validateEnvelope(e: unknown): string | undefined {
   return undefined;
 }
 
-/** Whether this build can apply the event (known entity, schema version it understands). */
 /**
  * SYNC: the stand-in a writer uploads for an event it does not sync (marked `local`, or its sync category is off), so
  * the remote copy of the stream stays gapless. Same id, seq and HLC; the payload is only `{ __withheld: reason }`.
@@ -379,8 +381,9 @@ export function isWithheld(e: Pick<EventEnvelope, 'p'>): boolean {
   return !!e.p && typeof e.p === 'object' && typeof (e.p as { __withheld?: unknown }).__withheld === 'string';
 }
 
-export function isKnown(e: Pick<EventEnvelope, 'ent' | 'sv'>): boolean {
-  return ENTITY_KINDS.includes(e.ent) && e.sv <= SCHEMA_VERSIONS[e.ent];
+/** Whether this build can apply the event (known entity and op, a schema version it understands). */
+export function isKnown(e: Pick<EventEnvelope, 'ent' | 'sv'> & { op?: string }): boolean {
+  return ENTITY_KINDS.includes(e.ent) && e.sv <= SCHEMA_VERSIONS[e.ent] && (e.op === undefined || OPS.includes(e.op as Op));
 }
 
 /**

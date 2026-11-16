@@ -101,7 +101,13 @@ export class DataManager {
 
   /** Writes a backup now (to `file`, else backups/<stamp>.lpbackup) and keeps the newest `backup.keep`. */
   async backup(o: { passphrase?: string; file?: string } = {}): Promise<BackupResult> {
-    const r = await writeBackup({ log: this.o.log, blobs: this.o.blobs, dir: this.backupsDir, file: o.file, passphrase: o.passphrase, now: this.now, appVersion: this.o.appVersion });
+    // Purged here or anywhere else: their content stays out of the backup (without the index, the log is scanned).
+    const purged = await this.o.index
+      .catchUp()
+      .then(() => this.o.index.query<string>('purgedEntities', {}))
+      .then((ids) => new Set(ids))
+      .catch(() => undefined);
+    const r = await writeBackup({ log: this.o.log, blobs: this.o.blobs, dir: this.backupsDir, file: o.file, passphrase: o.passphrase, now: this.now, appVersion: this.o.appVersion, purged });
     if (!o.file) {
       pruneBackups(this.backupsDir, this.o.backup().keep);
     }
@@ -150,16 +156,24 @@ export class DataManager {
     if (!s.enabled) {
       return undefined;
     }
-    const last = listBackups(this.backupsDir)[0];
-    if (last && this.now() - last.at < Math.max(1, s.intervalDays) * DAY) {
+    const due = () => {
+      const last = listBackups(this.backupsDir)[0];
+      return !last || this.now() - last.at >= Math.max(1, s.intervalDays) * DAY;
+    };
+    if (!due()) {
       return undefined;
     }
-    const lease = new Lease(path.join(this.backupsDir, 'lease.json'), { kind: 'backup', now: this.now, refreshMs: 0 });
+    // Refreshed while the backup runs (a big one outlives the stale age), so no other process starts a second one.
+    const lease = new Lease(path.join(this.backupsDir, 'lease.json'), { kind: 'backup', now: this.now, refreshMs: 15_000 });
     fs.mkdirSync(this.backupsDir, { recursive: true });
     if (!lease.tryClaim()) {
       return undefined;
     }
     try {
+      // Another process may have finished one between our check and the claim.
+      if (!due()) {
+        return undefined;
+      }
       const r = await this.backup();
       this.o.logger?.info(`continuity: automatic backup ${path.basename(r.file)} (${r.events} events)`);
       return r;

@@ -17,6 +17,7 @@ const secretsDir = path.join(path.dirname(telemetryDir), 'secrets');
 export default defineConfig({
 	files: 'out/test/**/*.test.js',
 	workspaceFolder,
-	env: { LOCALPILOT_TELEMETRY_DIR: telemetryDir, LOCALPILOT_SKILL_CATALOG: skillCatalog, LOCALPILOT_WORKTREES_DIR: worktreesDir, LOCALPILOT_KEYCHAIN: 'none', LOCALPILOT_SECRETS_PASSPHRASE: 'test-passphrase', LOCALPILOT_SECRETS_DIR: secretsDir },
+	// The secret store and the continuity machine id (device binding) stay out of the real keychain and ~/.localpilot.
+	env: { LOCALPILOT_TELEMETRY_DIR: telemetryDir, LOCALPILOT_SKILL_CATALOG: skillCatalog, LOCALPILOT_WORKTREES_DIR: worktreesDir, LOCALPILOT_KEYCHAIN: 'none', LOCALPILOT_SECRETS_PASSPHRASE: 'test-passphrase', LOCALPILOT_SECRETS_DIR: secretsDir, LOCALPILOT_MACHINE_ID_FILE: path.join(path.dirname(telemetryDir), 'machine-id') },
 	mocha: { timeout: 20_000 },
 });

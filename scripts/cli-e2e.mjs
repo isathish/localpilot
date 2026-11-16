@@ -686,7 +686,9 @@ try {
   fs.mkdirSync(remoteDir, { recursive: true });
   const devHome = (n) => { const h = path.join(home, `sync-home-${n}`); fs.mkdirSync(h, { recursive: true }); return { HOME: h, USERPROFILE: h, APPDATA: path.join(h, 'AppData', 'Roaming'), XDG_CONFIG_HOME: path.join(h, '.config') }; };
   const pass = { LOCALPILOT_SYNC_PASSPHRASE: 'e2e sync passphrase' };
-  const envA = { ...devHome('a'), LOCALPILOT_DATA_DIR: data16, ...pass };
+  // Device A is the machine that used data16 above (with the default test HOME): same machine id, so the same device
+  // identity (a data folder opened on another machine gets an identity of its own).
+  const envA = { ...devHome('a'), LOCALPILOT_DATA_DIR: data16, LOCALPILOT_MACHINE_ID_FILE: path.join(home, '.localpilot', 'machine-id'), ...pass };
   const envB = { ...devHome('b'), LOCALPILOT_DATA_DIR: path.join(home, 'sync-data-b'), ...pass };
   r = await cli(['sync', 'setup', '--backend', 'folder', '--folder', remoteDir, '--device-name', 'Laptop'], { env: envA });
   const remoteFiles = () => { const out = []; const walk = (d) => { for (const n of fs.existsSync(d) ? fs.readdirSync(d) : []) { const f = path.join(d, n); if (fs.statSync(f).isDirectory()) { walk(f); } else { out.push(f); } } }; walk(remoteDir); return out; };

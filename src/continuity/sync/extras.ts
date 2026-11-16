@@ -17,7 +17,7 @@ import type { BlobStore } from '../data/blobs';
 import type { FileEventLog } from '../data/eventLog';
 import type { IndexClient } from '../data/index/indexClient';
 import { stableId } from '../ids';
-import type { SyncCategory } from './merge';
+import { isApprovalKey, SyncCategories, SyncCategory } from './merge';
 
 export interface SyncExtra {
   readonly category: SyncCategory;
@@ -179,12 +179,14 @@ export class PreferencesExtra implements SyncExtra {
   readonly category = 'preferences' as const;
   private readonly seen: Seen;
 
-  constructor(private readonly o: { log: FileEventLog; index: IndexClient; root: string; access: PreferenceAccess; keys?: readonly string[] }) {
+  constructor(private readonly o: { log: FileEventLog; index: IndexClient; root: string; access: PreferenceAccess; keys?: readonly string[]; categories?: () => SyncCategories }) {
     this.seen = new Seen(o.root, 'preferences-seen');
   }
 
+  /** The keys that sync; approval levels only when their own (opt-in) category is on here. */
   private get keys(): readonly string[] {
-    return this.o.keys ?? [...PREFERENCE_KEYS, FAVORITES_KEY];
+    const all = this.o.keys ?? [...PREFERENCE_KEYS, FAVORITES_KEY];
+    return this.o.categories?.().approvals ? all : all.filter((k) => !isApprovalKey(k));
   }
 
   async beforePush(): Promise<void> {
