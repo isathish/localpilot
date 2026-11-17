@@ -57,8 +57,29 @@
     // pdf-load-options:end
   }
 
+  // The same codicon-style set as the chat, settings and Markdown views (`const I` in media/chat.js, settings.js, mdview.js).
+  const I = {
+    check: '<svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg>',
+    error: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.7M8 11h.01"/></svg>',
+    warn: '<svg viewBox="0 0 16 16"><path d="M8 2.2l6.3 11.3H1.7z"/><path d="M8 6.6v3.2M8 11.7h.01"/></svg>',
+    info: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.3V11M8 5h.01"/></svg>',
+    lock: '<svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>',
+    zoomIn: '<svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M5 7h4M7 5v4"/></svg>',
+    zoomOut: '<svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14M5 7h4"/></svg>',
+    rotate: '<svg viewBox="0 0 16 16"><path d="M12.5 7.5A4.5 4.5 0 1 1 11 4.2M11.5 2v2.5H9"/></svg>',
+    rotateBack: '<svg viewBox="0 0 16 16"><path d="M3.5 7.5A4.5 4.5 0 1 0 5 4.2M4.5 2v2.5H7"/></svg>',
+    up: '<svg viewBox="0 0 16 16"><path d="m4.5 10 3.5-3.5 3.5 3.5"/></svg>',
+    down: '<svg viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5 3.5-3.5"/></svg>',
+    image: '<svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/></svg>',
+    copy: '<svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></svg>',
+    colors: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor"/></svg>',
+    external: '<svg viewBox="0 0 16 16"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5"/></svg>',
+    folder: '<svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"/></svg>',
+    gear: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/></svg>',
+  };
   function toast(text, level) {
-    const t = document.createElement('div'); t.className = `toast ${level || 'info'}`; t.textContent = text;
+    const t = document.createElement('div'); t.className = `toast ${level || 'info'}`; t.setAttribute('role', level === 'error' ? 'alert' : 'status');
+    t.innerHTML = level === 'error' ? I.error : ''; t.appendChild(document.createTextNode(text));
     els.toasts.appendChild(t); setTimeout(() => t.remove(), 2800);
   }
   const fmtMB = (b) => { const mb = b / 1048576; return mb < 1 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`; };
@@ -207,9 +228,12 @@
     panelDismiss = !!o.dismiss;
     panelOpener = o.dismiss && document.activeElement !== document.body ? document.activeElement : null;
     els.panel.removeAttribute('aria-modal');
+    // An icon says what kind of panel it is: a failure unless the caller says otherwise (info, warn, lock).
+    const kind = o.icon || 'error';
+    const ico = `<span class="pico ${kind}" aria-hidden="true">${I[kind] || I.error}</span>`;
     els.panel.innerHTML = o.title
-      ? `<div class="msg"><b id="panelTitle">${esc(o.title)}</b>${html}</div><div class="actions"></div>`
-      : `<div class="msg" id="panelTitle">${html}</div><div class="actions"></div>`;
+      ? `<div class="phead">${ico}<div class="msg"><b id="panelTitle">${esc(o.title)}</b>${html}</div></div><div class="actions"></div>`
+      : `<div class="phead">${ico}<div class="msg" id="panelTitle">${html}</div></div><div class="actions"></div>`;
     const row = els.panel.querySelector('.actions');
     for (const a of actions || []) {
       const b = document.createElement('button'); b.className = a.primary ? 'btn primary' : 'btn'; b.textContent = a.label;
@@ -311,7 +335,7 @@
       setProgress(null);
       const name = (e && e.name) || '';
       if (name === 'PasswordException') {
-        showPanel('This PDF is password-protected.', [{ label: 'Enter password', primary: true, run: () => reload() }, systemViewer]);
+        showPanel('This PDF is password-protected.', [{ label: 'Enter password', primary: true, run: () => reload() }, systemViewer], { icon: 'lock' });
       } else if (name === 'InvalidPDFException') {
         showPanel(`<b>Not a valid PDF.</b><br><span class="muted">${esc(fileName)} could not be read; it may be damaged or not a PDF at all.</span>`, [systemViewer]);
       } else {
@@ -325,7 +349,7 @@
     hideLoading();
     panelOpener = null; panelDismiss = false;
     els.panel.setAttribute('aria-modal', 'true');
-    els.panel.innerHTML = `<div class="msg" id="panelTitle">${fromDisk && !wrong ? 'The file changed on disk. ' : ''}<b>${esc(fileName)}</b> is password-protected.${wrong ? '<div class="err">Incorrect password, try again.</div>' : ''}</div>
+    els.panel.innerHTML = `<div class="phead"><span class="pico lock" aria-hidden="true">${I.lock}</span><div class="msg" id="panelTitle">${fromDisk && !wrong ? 'The file changed on disk. ' : ''}<b>${esc(fileName)}</b> is password-protected.${wrong ? '<div class="err">Incorrect password, try again.</div>' : ''}</div></div>
 <form class="pw"><input type="password" autocomplete="off" placeholder="Password" aria-label="Password" /><button class="btn primary" type="submit">Open</button><button class="btn" type="button" data-cancel>Cancel</button></form>`;
     els.panel.classList.remove('hidden');
     const form = els.panel.querySelector('form');
@@ -333,7 +357,7 @@
     input.focus();
     form.addEventListener('submit', (e) => { e.preventDefault(); const pw = input.value; hidePanel(); update(pw); });
     form.querySelector('[data-cancel]').addEventListener('click', () => {
-      showPanel('This PDF is password-protected.', [{ label: 'Enter password', primary: true, run: () => askPassword(update, false) }, systemViewer]);
+      showPanel('This PDF is password-protected.', [{ label: 'Enter password', primary: true, run: () => askPassword(update, false) }, systemViewer], { icon: 'lock' });
     });
   }
 
@@ -447,9 +471,12 @@
     m.innerHTML = '';
     for (const it of items) {
       if (it === '-') { const hr = document.createElement('div'); hr.className = 'menu-sep'; m.appendChild(hr); continue; }
-      if (it.heading) { const h = document.createElement('div'); h.setAttribute('role', 'presentation'); h.textContent = it.heading; h.style.cssText = 'padding: 4px 10px 2px 26px; font-size: 11px; color: var(--muted);'; m.appendChild(h); continue; }
-      const b = document.createElement('button'); b.setAttribute('role', 'menuitem');
-      b.innerHTML = `<span class="check">${it.checked ? '✓' : ''}</span><span>${esc(it.label)}</span>`;
+      if (it.heading) { const h = document.createElement('div'); h.setAttribute('role', 'presentation'); h.textContent = it.heading; h.className = 'menu-h'; m.appendChild(h); continue; }
+      // A choice (page colours) is a radio item with a check at the end; an action has its icon in front.
+      const radio = it.checked !== undefined;
+      const b = document.createElement('button'); b.setAttribute('role', radio ? 'menuitemradio' : 'menuitem');
+      if (radio) { b.setAttribute('aria-checked', String(!!it.checked)); }
+      b.innerHTML = `<span class="mi" aria-hidden="true">${it.icon ? I[it.icon] : ''}</span><span class="ml">${esc(it.label)}</span>${radio ? `<span class="check" aria-hidden="true">${it.checked ? I.check : ''}</span>` : ''}`;
       b.disabled = !!it.disabled;
       b.addEventListener('click', () => { closeMenu(true); it.run(); });
       m.appendChild(b);
@@ -501,15 +528,15 @@
     const page = viewer.currentPageNumber || 1;
     const hidden = [
       ...(narrow.l.matches ? [
-        { label: 'Previous page', disabled: !pdfDoc || page <= 1, run: () => viewer.previousPage() },
-        { label: 'Next page', disabled: !pdfDoc || page >= viewer.pagesCount, run: () => viewer.nextPage() },
+        { label: 'Previous page', icon: 'up', disabled: !pdfDoc || page <= 1, run: () => viewer.previousPage() },
+        { label: 'Next page', icon: 'down', disabled: !pdfDoc || page >= viewer.pagesCount, run: () => viewer.nextPage() },
         '-',
       ] : []),
       ...(narrow.s.matches ? [
-        { label: 'Zoom in', disabled: !pdfDoc, run: () => viewer.increaseScale() },
-        { label: 'Zoom out', disabled: !pdfDoc, run: () => viewer.decreaseScale() },
-        { label: 'Rotate clockwise', disabled: !pdfDoc, run: () => { viewer.pagesRotation = (viewer.pagesRotation + 90) % 360; } },
-        { label: 'Rotate counter-clockwise', disabled: !pdfDoc, run: () => { viewer.pagesRotation = (viewer.pagesRotation + 270) % 360; } },
+        { label: 'Zoom in', icon: 'zoomIn', disabled: !pdfDoc, run: () => viewer.increaseScale() },
+        { label: 'Zoom out', icon: 'zoomOut', disabled: !pdfDoc, run: () => viewer.decreaseScale() },
+        { label: 'Rotate clockwise', icon: 'rotate', disabled: !pdfDoc, run: () => { viewer.pagesRotation = (viewer.pagesRotation + 90) % 360; } },
+        { label: 'Rotate counter-clockwise', icon: 'rotateBack', disabled: !pdfDoc, run: () => { viewer.pagesRotation = (viewer.pagesRotation + 270) % 360; } },
         '-',
       ] : []),
       ...(narrow.m.matches ? [
@@ -523,15 +550,15 @@
     ];
     return [
       ...hidden,
-      { label: 'Attach page as image', disabled: !pdfDoc, run: () => void attachPageImage() },
-      { label: 'Copy page text', disabled: !pdfDoc, run: () => void copyPageText() },
-      ...(tinted && !narrow.m.matches ? [{ label: 'Show original colours', run: () => setColors('original') }] : []),
+      { label: 'Attach page as image', icon: 'image', disabled: !pdfDoc, run: () => void attachPageImage() },
+      { label: 'Copy page text', icon: 'copy', disabled: !pdfDoc, run: () => void copyPageText() },
+      ...(tinted && !narrow.m.matches ? [{ label: 'Show original colours', icon: 'colors', run: () => setColors('original') }] : []),
       '-',
-      { label: 'Document properties', disabled: !pdfDoc, run: () => void showProperties() },
-      { label: 'Open with system viewer', run: () => post({ type: 'openExternal' }) },
-      { label: 'Reveal in file manager', run: () => post({ type: 'reveal' }) },
+      { label: 'Document properties', icon: 'info', disabled: !pdfDoc, run: () => void showProperties() },
+      { label: 'Open with system viewer', icon: 'external', run: () => post({ type: 'openExternal' }) },
+      { label: 'Reveal in file manager', icon: 'folder', run: () => post({ type: 'reveal' }) },
       '-',
-      { label: 'Viewer settings…', run: () => post({ type: 'openSettings' }) },
+      { label: 'Viewer settings…', icon: 'gear', run: () => post({ type: 'openSettings' }) },
     ];
   });
 
@@ -924,7 +951,7 @@
       ['Keywords', info.Keywords], ['Created', date(info.CreationDate)], ['Modified', date(info.ModDate)], ['Creator', info.Creator], ['Producer', info.Producer],
       ['PDF version', info.PDFFormatVersion], ['Page size', `${Math.round((w / 72) * 25.4)} × ${Math.round((h / 72) * 25.4)} mm`], ['Fast web view', info.IsLinearized ? 'Yes' : 'No'],
     ].filter(([, v]) => v);
-    showPanel(`<table class="props">${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table>`, [{ label: 'Close', run: hidePanel }], { title: 'Document properties', dismiss: true });
+    showPanel(`<table class="props">${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table>`, [{ label: 'Close', run: hidePanel }], { title: 'Document properties', dismiss: true, icon: 'info' });
   }
 
   // Ask about selection: a floating "Ask LocalPilot" pill below the end of a text-layer selection (same as the Markdown reader).
@@ -1007,7 +1034,7 @@
         showPanel(`<b>This PDF is ${esc(fmtMB(m.size))}, larger than your limit of ${esc(fmtMB(m.max))}.</b><br><span class="muted">It can still open page by page.</span>`, [
           { label: 'Open anyway (page by page)', primary: true, run: () => { hidePanel(); post({ type: 'openAnyway' }); } }, systemViewer,
           { label: 'Change limit…', run: () => post({ type: 'openSettings' }) },
-        ]);
+        ], { icon: 'warn' });
         break;
     }
   });

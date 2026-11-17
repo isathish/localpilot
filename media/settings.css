@@ -95,7 +95,8 @@ code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); p
 .scope button.on { background: var(--tint-2); color: var(--fg); }
 .scope button:disabled { opacity: .5; cursor: not-allowed; }
 .scope .short { display: none; }
-@media (max-width: 360px) { .scope .long { display: none; } .scope .short { display: inline; } }
+/* "Workspace" fits down to a 330 px sidebar; below that the short label keeps its tooltip and aria-label. */
+@media (max-width: 330px) { .scope .long { display: none; } .scope .short { display: inline; } }
 .layout { display: flex; flex: 1; min-height: 0; }
 .side { width: 210px; flex: none; padding: 14px 10px; border-right: 1px solid var(--border); position: sticky; top: 55px; align-self: flex-start; max-height: calc(100vh - 55px); overflow: auto; }
 .side a { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 6px; color: var(--fg); font-size: 13px; cursor: pointer; }
@@ -109,7 +110,9 @@ code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); p
 .content { flex: 1; min-width: 0; padding: 20px 28px 60px; max-width: 880px; }
 .content h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: -.01em; }
 .content .lead { margin: 0 0 20px; color: var(--muted); }
-section.sec { animation: fadeUp .18s ease-out; }
+/* A section fades in when the user switches to it (opacity only: nothing moves); state pushes re-render it in place. */
+section.sec.enter { animation: secIn .14s ease-out; }
+@keyframes secIn { from { opacity: 0; } }
 h2.sub { display: flex; align-items: center; gap: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 26px 0 8px; font-weight: 600; }
 h2.sub .count { font-weight: 400; text-transform: none; letter-spacing: 0; }
 h2.sub .act { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
@@ -498,6 +501,45 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .rt .t b { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; line-height: 1.3; }
 .rt .t > span { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }
 .rt .btn { align-self: center; }
+/* Runtimes are a list inside the hardware card (one divider above it), not cards of their own. */
+.rts { gap: 0 16px; margin: 0; padding: 4px 0; border-top: 1px solid var(--border-soft); }
+.rt { border: 0; border-radius: 0; background: none; padding: 6px 14px; }
+.rt:hover { background: none; }
+/* Click-to-copy text (endpoint URLs) and the small copy icon next to a model id. */
+.copy-txt { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; font-family: var(--mono); font-size: 11px; color: var(--muted); border-radius: 4px; text-align: left; overflow-wrap: anywhere; }
+.copy-txt svg { width: 11px; height: 11px; opacity: 0; transition: opacity .12s; }
+.copy-txt:hover { color: var(--fg); } .copy-txt:is(:hover, :focus-visible) svg { opacity: 1; }
+.copy-id { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); opacity: 0; flex: none; }
+.copy-id svg { width: 12px; height: 12px; }
+.copy-id:hover { color: var(--fg); background: var(--tint); }
+.mrow:hover .copy-id, .copy-id:focus-visible { opacity: 1; }
+/* Installed models: switch, mark, name + details + badges, then the actions on the first line. */
+.inst-card { container: inst / inline-size; }
+/* The text block's parts are grid items: the name shares the first line with the actions, details and badges run
+   under both, so a narrow card does not squeeze them into the name's column. */
+.mrow.inst { grid-template-columns: auto auto minmax(0, 1fr) auto; column-gap: 10px; row-gap: 0; }
+.mrow.inst > :is(.toggle, .brand-mark, .mrow-right) { grid-row: 1; }
+.mrow.inst .t { display: contents; }
+.mrow.inst .t > * { grid-column: 3 / -1; }
+/* A long model id wraps instead of hiding behind an ellipsis: the name is what the row is for. */
+.mrow.inst .t > b { grid-column: 3; grid-row: 1; align-self: center; white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }
+.mrow.inst .t b .copy-id { vertical-align: -4px; margin-left: 2px; }
+.mrow.inst .t .tags { justify-content: flex-start; margin-top: 4px; }
+.mrow.inst.off .t > :not(.tags) { opacity: .5; }
+.mrow.inst .mrow-right { grid-column: 4; flex-direction: row; align-items: center; }
+.mrow.inst .acts.mdl-acts { grid-template-columns: auto 28px; }
+/* Narrow cards: "Set default" folds to its star (title and aria-label keep the words), leaving the name room. */
+@container inst (max-width: 420px) {
+  .mrow.inst .set-def .lbl { display: none; }
+  .mrow.inst .set-def { width: 28px; padding: 0; justify-content: center; }
+}
+/* Providers: both actions stay on one row, with shorter labels as the panel narrows (titles keep the full text). */
+.prov-bar :is(.l-mid, .l-short) { display: none; }
+@media (max-width: 400px) { .prov-bar .l-long { display: none; } .prov-bar .l-mid { display: inline; } }
+@media (max-width: 330px) { .prov-bar #probe .l-mid { display: none; } .prov-bar #probe .l-short { display: inline; } }
+.prov-bar .btn { white-space: nowrap; }
+/* A scope badge after a page title sits on the title's centre line, not its baseline. */
+.content h1:has(> .badge) { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .job { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "dot t acts"; align-items: center; column-gap: 10px; row-gap: 6px; }
 .job .dot { grid-area: dot; }
 .job .t { grid-area: t; flex: none; }
@@ -551,7 +593,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .brand span { display: none; }
   .top .btn[data-cmd="localpilot.openChat"] { font-size: 0; gap: 0; width: 32px; padding: 0; justify-content: center; }
   .top .btn[data-cmd="localpilot.openChat"] svg { width: 15px; height: 15px; }
-  .side { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 4px; padding: 8px 12px; border-bottom-color: var(--border-soft); position: sticky; top: 52px; background: var(--bg); z-index: 4; width: 100%; max-width: 100%; min-width: 0; }
+  .side { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; scroll-padding-inline: 52px 60px; gap: 4px; padding: 8px 12px; border-bottom-color: var(--border-soft); position: sticky; top: 52px; background: var(--bg); z-index: 4; width: 100%; max-width: 100%; min-width: 0; }
   .layout { min-width: 0; }
   .side::-webkit-scrollbar { display: none; }
   .side a { flex: none; height: 28px; padding: 0 11px; border-radius: 999px; font-size: var(--fs-sm); border: 1px solid transparent; }
@@ -560,9 +602,10 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   /* Edge fades tell the user the pill strip scrolls, only on an edge with more pills past it. They are overlays in the
      strip's own colour, not a mask: a mask would make this sticky header see-through, showing the page scrolled under
      it. The left one sticks to the start of the strip; the right one hangs off the ⋯ button pinned at its end. */
-  .side::before { content: ''; position: sticky; left: -12px; flex: none; width: 28px; margin: 0 -20px 0 -12px; align-self: stretch; background: linear-gradient(90deg, var(--bg) 30%, transparent); z-index: 1; pointer-events: none; opacity: 0; transition: opacity .15s; }
+  /* Wide enough, and solid for most of it, that a pill cut by the edge fades out instead of ending mid-word. */
+  .side::before { content: ''; position: sticky; left: -12px; flex: none; width: 52px; margin: 0 -44px 0 -12px; align-self: stretch; background: linear-gradient(90deg, var(--bg) 50%, transparent); z-index: 1; pointer-events: none; opacity: 0; transition: opacity .15s; }
   .side.fade-l::before { opacity: 1; }
-  .side > .navmore::before { content: ''; position: absolute; top: 0; bottom: 0; right: 100%; width: 28px; background: linear-gradient(90deg, transparent, var(--bg)); pointer-events: none; opacity: 0; transition: opacity .15s; }
+  .side > .navmore::before { content: ''; position: absolute; top: 0; bottom: 0; right: 100%; width: 44px; background: linear-gradient(90deg, transparent, var(--bg) 55%); pointer-events: none; opacity: 0; transition: opacity .15s; }
   .side.fade-r > .navmore::before { opacity: 1; }
   .content { padding: 16px 14px 48px; }
   .content h1 { font-size: 18px; }
@@ -595,6 +638,10 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .setup .foot .btn.brand { margin-left: auto; }
 }
 @media (max-width: 480px) {
+  /* Sidebar widths: only the current section keeps its label; the others are icons (title names them, ⋯ lists them),
+     so the strip shows most sections and an edge never cuts through a word. */
+  .side a:not(.on) { padding: 0 8px; }
+  .side a:not(.on) .lbl { display: none; }
   .scope button { padding: 0 8px; font-size: var(--fs-xs); }
   .field { padding: 11px 12px; }
   .approval-presets { grid-template-columns: 1fr; }
@@ -606,11 +653,6 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 /* Forms stay at a readable measure; the dashboard's charts and tables use the width a large screen has. */
 .content:has(> .dash-sec), .content:has(> * > .dash-sec) { max-width: 1440px; }
 
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-  .spinner { animation: spin 1.5s linear infinite !important; }
-  .dot.busy, .boot-dots i { animation: none !important; opacity: .6; }
-}
 
 /* wizard: one-click setup block */
 .auto-setup { display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px; margin-bottom: 14px; border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent); background: color-mix(in srgb, var(--brand) 8%, transparent); border-radius: var(--radius); flex-wrap: wrap; }
@@ -640,7 +682,7 @@ p.empty { margin: 6px 0 14px; padding: 12px 14px; border: 1px dashed var(--borde
 
 /* ---- skills & subagents */
 .mrow.sk { grid-template-columns: auto auto minmax(0, 1fr) auto; }
-.mrow.sk:not(:has(> .toggle)) { grid-template-columns: auto minmax(0, 1fr) auto; }
+.mrow.sk:not(:has(> .toggle, > .toggle-slot)) { grid-template-columns: auto minmax(0, 1fr) auto; }
 .mrow.sk .t b { font-family: var(--mono); }
 .mrow.sk .t > span { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .mrow.sk.have .t b { color: var(--fg); }
@@ -900,13 +942,14 @@ body.vscode-high-contrast .legend i, body.vscode-high-contrast-light .legend i, 
 }
 .menu.floating { position: fixed; max-height: min(70vh, 420px); overflow-y: auto; }
 .menu.floating button.on { font-weight: 600; box-shadow: inset 2px 0 0 var(--brand); }
-@media (prefers-reduced-motion: reduce) {
-  .side, .side .navall svg, .side button.grp .chev svg { transition: none; }
-}
 
 /* Setup is a flex child of #app: without these, long server URLs set its min-content width and it overflows narrow panels. */
 .setup { width: 100%; min-width: 0; }
 .srv .t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The detected servers read as one list (shared frame, dividers), not a box per server inside the setup card. */
+.detect { gap: 0; border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: hidden; }
+.detect > .srv { border: 0; border-radius: 0; background: none; }
+.detect > .srv + .srv { border-top: 1px solid var(--border-soft); }
 
 
 /* ==== Controls: native VS Code shapes ==== */
@@ -1014,7 +1057,6 @@ body.vscode-light input[type=search]:not(.find-box input), html.light body input
   .tbl.notes td:nth-child(2) { grid-column: 1 / -1; white-space: normal !important; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin: 2px 0 6px; }
   .tbl.notes td:nth-child(3) { grid-column: 1; } .tbl.notes td:last-child { width: auto; }
 }
-@media (prefers-reduced-motion: reduce) { .skl { animation: none; } .field.hit { animation: none; outline: 2px solid var(--accent); } }
 .top:has(.find-list:not(.hidden)) { z-index: 20; }
 /* Narrow headers: the brand gives way first (text, then the version line), so search, scope and chat keep their room. */
 .brand { flex: 0 1 auto; min-width: 0; } .brand > div { min-width: 0; } .brand b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1357,6 +1399,14 @@ code.rec-key.bad { color: var(--error-text); background: color-mix(in srgb, var(
 .rec-iv { border-color: color-mix(in srgb, var(--warn) 45%, var(--border-soft)); }
 .rec-iv-t { min-width: 0; overflow-wrap: anywhere; }
 .rec-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+/* Inside the card's own padding: the actions line up with the text above (no second inset from `.card > .btnrow`). */
+.card > .btnrow.rec-acts { padding-left: 0; padding-right: 0; }
+/* Customize: "New rule…" is one row (name, folder, Create) that wraps on narrow panes, not three stacked full-width controls. */
+.row.cz-new { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 4px; }
+.row.cz-new > #cz-name { flex: 1 1 200px; width: auto; min-width: 0; }
+.row.cz-new > select:not(#cz-name) { flex: 0 1 auto; width: auto; max-width: 100%; min-width: 0; }
+.row.cz-new > .btn { flex: none; }
+.toggle-slot { flex: none; width: 36px; }
 .rec-src { margin: 8px 0 0; }
 .chart.hbars svg { overflow: visible; }
 .chart rect.hb-track { fill: var(--tint); }
@@ -1469,8 +1519,6 @@ li.rule-form { padding: 6px 8px; border: 1px solid var(--focus); border-radius: 
 }
 .sync-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .sync-line .muted { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
-.sync-body .sdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); opacity: .6; }
-.sync-body .sdot.ok { background: var(--ok); opacity: 1; } .sync-body .sdot.busy { background: var(--brand); opacity: 1; } .sync-body .sdot.err { background: var(--error); opacity: 1; }
 .sync-test { display: inline-flex; gap: 6px; align-items: flex-start; overflow-wrap: anywhere; }
 .sync-test svg { width: 13px; height: 13px; flex: none; margin-top: 1px; }
 .sync-test.ok svg { color: var(--ok-text, var(--ok)); } .sync-test.err { color: var(--error-text); }
@@ -1483,7 +1531,6 @@ li.rule-form { padding: 6px 8px; border: 1px solid var(--focus); border-radius: 
 .sync-cat input:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .sync-devices td.act { text-align: right; white-space: nowrap; }
 .sync-keys .btnrow .btn { white-space: nowrap; }
-body.vscode-high-contrast .sync-body .sdot, body.vscode-high-contrast-light .sync-body .sdot { outline: 1px solid var(--border); }
 /* In the two-column Sync layout each card is half width: labels sit above their controls. */
 @media (min-width: 1000px) { .sync-grid .field { grid-template-columns: minmax(0, 1fr); } }
 /* Tab strips that share a row with other controls: the tablist is its own flex group. */
@@ -1505,12 +1552,144 @@ body.vscode-high-contrast .sync-body .sdot, body.vscode-high-contrast-light .syn
 .tbl.secrets-tbl td.act { width: 1%; white-space: nowrap; text-align: right; }
 .tbl.secrets-tbl td.act .btn + .btn { margin-left: 4px; }
 @media (max-width: 760px) {
-  /* Each secret becomes a small card: name, what uses it, source · changed · used, then the actions. */
+  /* Each secret becomes a small card: name with its actions on one line, what uses it, then source · changed · used. */
   .tbl.secrets-tbl, .tbl.secrets-tbl tbody { display: block; }
   .tbl.secrets-tbl thead { display: none; }
-  .tbl.secrets-tbl tr { display: grid; grid-template-columns: repeat(3, auto) minmax(0, 1fr); align-items: center; column-gap: 8px; row-gap: 2px; padding: 9px 12px; border-bottom: 1px solid var(--border-soft); }
+  .tbl.secrets-tbl tr { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 2px; padding: 9px 12px; border-bottom: 1px solid var(--border-soft); }
   .tbl.secrets-tbl tr:last-child { border-bottom: 0; }
   .tbl.secrets-tbl td { display: block; padding: 0; border: 0; max-width: none !important; }
-  .tbl.secrets-tbl td.mono, .tbl.secrets-tbl td:nth-child(2) { grid-column: 1 / -1; max-width: none; }
-  .tbl.secrets-tbl td.act { grid-column: 1 / -1; text-align: left; margin-top: 4px; }
+  .tbl.secrets-tbl td.mono { flex: 1 1 0; min-width: 0; }
+  .tbl.secrets-tbl td.act { order: 1; width: auto; margin: -3px -6px -3px 0; }
+  .tbl.secrets-tbl td:nth-child(2) { order: 2; flex-basis: 100%; }
+  .tbl.secrets-tbl td:nth-child(n+3):not(.act) { order: 3; }
+  .tbl.secrets-tbl td:nth-child(n+4):not(.act) { margin-left: 4px; } /* labelled ("changed …", "used …"), so spacing separates them; a "·" would dangle when the line wraps */
+}
+.tbl.secrets-tbl .nl { display: none; }
+@media (max-width: 760px) { .tbl.secrets-tbl .nl { display: inline; } }
+@media (max-width: 420px) { .tbl.secrets-tbl td.act .t { display: none; } .tbl.secrets-tbl td.act .btn + .btn { margin-left: 0; } }
+.kv.store { margin: 0; }
+
+
+/* ==== Status vocabulary ====
+   One dot everywhere a thing has a state (providers, runtimes, setup servers, MCP servers, downloads, sync, Redis, health):
+   ok = a quiet green dot; warn = amber; err = red with a soft ring (problems get the colour); busy = brand pulse;
+   no state = a hollow grey ring (off, disabled, not running). Same size and centre line in every list. */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1.5px var(--muted); opacity: 1; }
+.dot.ok { background: var(--ok); box-shadow: none; }
+.dot.warn { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
+.dot.err { background: var(--error); box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 22%, transparent); }
+.dot.busy { background: var(--brand); box-shadow: none; animation: dotPulse 1.4s ease-out infinite; }
+@keyframes dotPulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
+.prov.off .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); animation: none; }
+/* Text-height rows (runtimes, Redis lines) put the dot on the first line's centre. */
+.rt .dot { margin-top: 6px; } .redis-line .dot { margin-top: 5px; }
+.hlist li .dot, .rec-cur li .dot { width: 8px; height: 8px; }
+.kpi-s .dot { width: 7px; height: 7px; box-shadow: none; }
+body.vscode-high-contrast .dot:is(.ok, .warn, .err, .busy), body.vscode-high-contrast-light .dot:is(.ok, .warn, .err, .busy) { box-shadow: 0 0 0 1px var(--fg); }
+/* Working = brand: the spinner's moving arc, except on filled buttons where it takes the button's text colour. */
+.spinner { border-color: color-mix(in srgb, var(--muted) 35%, transparent); border-top-color: var(--brand-text); }
+/* A runtime or server that is working says so with its green dot; the text next to it stays quiet. */
+.srv.ok .n { color: var(--muted); }
+
+/* ==== Icons in cards and tiles ==== */
+.ap b { display: flex; align-items: center; gap: 7px; }
+.ap-ic { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; flex: none; background: var(--tint-2); color: var(--muted); transition: background-color .15s, color .15s; }
+.ap-ic svg { width: 13px; height: 13px; }
+.ap.on .ap-ic { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--fg); }
+/* Inline, not flex: a narrow tile still ends a long label with an ellipsis. */
+.kpi-ic svg { width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px; stroke-width: 1.7; color: var(--muted); }
+.kpi-flag svg { margin-right: 6px; }
+.empty-ic { display: block; color: var(--muted); }
+.empty-ic svg { width: 20px; height: 20px; margin: 0 auto 6px; display: block; opacity: .8; }
+/* In a left-aligned note (p.empty) the icon sits beside the sentence instead. */
+p.empty.has-ic { display: flex; align-items: flex-start; gap: 10px; text-align: left; }
+p.empty.has-ic .empty-ic svg { width: 16px; height: 16px; margin: 1px 0 0; }
+p.empty.has-ic .btn { margin-left: 6px; vertical-align: middle; }
+/* Back mirrors Continue: the chevron points the way the button goes. */
+.setup .foot .btn.link svg { width: 12px; height: 12px; margin-right: -2px; }
+.dash-more > .btn svg { width: 14px; height: 14px; }
+.side > .navmore > .btn svg { width: 15px; height: 15px; }
+
+/* ==== Audit fixes (layout) ==== */
+/* Screen-reader-only copies (chart data tables, "Reset" in the retry table) are absolutely positioned; a scrolled or
+   card-clipped parent must hold them, or they widen the whole document (a horizontal scrollbar at 260–360 px). */
+.chart, .tblwrap { position: relative; }
+table.sr-only { display: block; }
+/* The search results never spill past the window edge on a very narrow pane. */
+.find-list { min-width: min(260px, calc(100vw - 24px)); }
+/* Pull by name: the input keeps a usable width and Pull wraps under it instead of being cut off. */
+.gal-pull-row { flex-wrap: wrap; }
+.gal-pull-row input { flex: 1 1 150px; }
+.gal-pull-row > select { max-width: 100%; }
+/* Command rules and Tools: the lead text and rows sit inside the card's padding, like every field. */
+.rules-card { padding: 12px 16px 14px; }
+.tools-card > .desc { padding: 12px 16px 4px; margin: 0; }
+@media (max-width: 480px) { .rules-card { padding: 11px 12px 12px; } .tools-card > .desc { padding: 11px 12px 4px; } }
+/* An empty state inside a card is the card's content: no second (dashed) box inside the first. */
+.card > .empty, .card > .rules > li.empty { border: 0; border-radius: 0; }
+/* Providers: the model count ends the action row instead of floating in its middle. */
+.prov-bar > .muted:last-child { flex: 0 1 auto; text-align: right; }
+/* Advanced → Tools: one compact, right-aligned button per row (not stretched across the control column). */
+.field.tool-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.field.tool-row > .ctl { align-items: flex-end; }
+.field.tool-row > .ctl .btn { min-width: 92px; justify-content: center; }
+/* Marketplace: the Installed filter is a control, not a banner. */
+#mk-show { width: auto; max-width: 100%; }
+/* Sortable table headers: SVG arrows (no text glyphs); the active one points the sort direction. */
+.th-sort .arr { display: inline-grid; place-items: center; }
+.th-sort .arr svg { width: 11px; height: 11px; stroke-width: 1.8; }
+.th-sort .arr.up svg { transform: rotate(180deg); }
+/* Disclosures in the recovery cards use the panel's chevron, turning down when open (not the browser's triangle). */
+.rec-more summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; }
+.rec-more summary::-webkit-details-marker { display: none; }
+.rec-more summary svg { width: 11px; height: 11px; transition: transform .15s ease; }
+.rec-more[open] summary svg { transform: rotate(90deg); }
+.rec-more summary:hover { color: var(--fg); }
+/* Self-healing retry table: the failure id under each name is a plain caption, not a stretched chip. */
+.heal-pol-tbl th[scope="row"] .cat { background: none; border: 0; padding: 0; }
+/* Model runtimes: three columns only when each has room for its endpoint (no mid-word URL breaks). */
+.rts { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+.rt .t span { overflow-wrap: break-word; }
+/* Secrets: below 1100 px the row actions are icon-only (named by aria-label), so the Used by and Source columns keep
+   whole words. */
+@media (max-width: 1100px) { .tbl.secrets-tbl td.act .t { display: none; } .tbl.secrets-tbl td.act .btn + .btn { margin-left: 0; } }
+/* Narrow panes: one compact provider per row, so names read whole instead of "Togethe…" or a mid-word wrap; KPI tile
+   names wrap instead of "PENDING INTERVE…". */
+@media (max-width: 380px) {
+  .presets { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .preset { min-height: 0; padding: 7px 10px; }
+}
+@container dash (max-width: 480px) {
+  .kpi-l { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3; }
+}
+
+/* ==== Save state ====
+   Auto-saved fields: the header's "Saved" plus a small tick after the label of the field that was written. It fades out
+   on its own; nothing moves. */
+.saved-tick { display: inline-grid; place-items: center; color: var(--ok-text); animation: savedTick 1.6s ease-out forwards; }
+.saved-tick svg { width: 12px; height: 12px; stroke-width: 2.2; }
+@keyframes savedTick { 0% { opacity: 0; } 12%, 70% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ==== Motion ==== Small, purposeful, never moving content already on screen. */
+.seg button, .scope button, .chip, .btn { transition: background-color .12s, color .12s, border-color .12s, box-shadow .15s; }
+.toggle { transition: background-color .15s; }
+.toggle::after { transition: transform .18s cubic-bezier(.3, .7, .4, 1.2); }
+.prov-head .chev svg, .prov-more .chev, .gal-head-act .btn svg:last-child { transition: transform .15s ease; }
+.progress i { transition: width .3s ease-out; }
+.meter i { transition: width .3s ease-out; }
+/* Clickable cards lift a little on hover: a border and the theme's small shadow (none in high contrast). */
+.ap, .preset, .prov, .gal-tab { transition: border-color .15s, background-color .15s, box-shadow .15s; }
+.ap:hover:not(.on), .preset:not([disabled]):not(.added):hover, .prov:has(> .prov-head:hover) { box-shadow: var(--shadow-sm); }
+/* Copy buttons: the icon turns into a check for a moment. */
+.copied, .copied svg { color: var(--ok-text) !important; opacity: 1 !important; }
+
+/* One guard for every animation and transition in this file: motion collapses to an instant change; the busy indicators
+   keep a slow, non-moving cue (spinner turns slowly, a busy dot stays solid). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  .spinner, .btn.busy svg { animation: spin 1.5s linear infinite !important; animation-duration: 1.5s !important; animation-iteration-count: infinite !important; }
+  .dot.busy, .boot-dots i, .skl, .progress.indet i { animation: none !important; }
+  .boot-dots i { opacity: .6; }
+  .field.hit { animation: none !important; outline: 2px solid var(--accent); }
+  .saved-tick { animation-duration: 1.6s !important; } /* an opacity fade only: nothing moves, and it must still go away */
 }

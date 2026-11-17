@@ -5,6 +5,14 @@
   const api = window.LPChat;
   if (!api) { return; }
   const { post, esc, el, I, timeAgo, md, trapTab } = api;
+  // Icons these pages need that chat.js's set does not carry (Back is the settings view's chevron, More its ⋯), plus
+  // fallbacks so a page never shows an empty button if a name is missing from the shared set.
+  const J = {
+    back: '<svg viewBox="0 0 16 16"><path d="M10 4L6 8l4 4"/></svg>',
+    more: '<svg viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg>',
+    history: I.history || '<svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg>',
+    offline: I.offline || '<svg viewBox="0 0 16 16"><path d="M5.2 12.5H4.5a2.5 2.5 0 0 1-.4-5A4 4 0 0 1 10.7 5M12.4 7.2a2.7 2.7 0 0 1-.9 5.3H8.3M2.5 2.5l11 11"/></svg>',
+  };
   const TITLES = { trash: 'Trash', versions: 'Versions', memory: 'Memory', context: 'Context', checkpoints: 'Checkpoints', sync: 'Sync', compare: 'Compare answers' };
   const root = el('div', 'cpage hidden');
   root.id = 'cpage'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true');
@@ -26,7 +34,7 @@
     const a = document.activeElement; const keep = !a || a === document.body || root.contains(a);
     const was = keep && a && root.contains(a) ? focusKey(a) : '';
     root.innerHTML = '';
-    const head = el('div', 'cp-head', `<button class="cp-back" data-c="back" title="Back (Esc)" aria-label="Back">${I.reply}</button><div class="cp-title"><h2>${esc(title)}</h2>${sub ? `<span class="cp-sub">${sub}</span>` : ''}</div><span class="cp-acts">${actions || ''}</span>`);
+    const head = el('div', 'cp-head', `<button class="cp-back" data-c="back" title="Back (Esc)" aria-label="Back">${J.back}</button><div class="cp-title"><h2>${esc(title)}</h2>${sub ? `<span class="cp-sub">${sub}</span>` : ''}</div><span class="cp-acts">${actions || ''}</span>`);
     const body = el('div', 'cp-body'); body.setAttribute('tabindex', '-1');
     root.append(head, body);
     root.setAttribute('aria-label', title);
@@ -159,11 +167,11 @@
     const vs = (d.versions || []).filter((v) => v.op !== 'patch' || Object.keys(v.fields || {}).some((k) => FIELD[k]));
     for (const v of vs.slice(0, 200)) {
       const restorable = v.op === 'create' || Object.keys(v.fields || {}).some((k) => ['title', 'pinned', 'favorite', 'archived', 'tags', 'activeBranchId'].includes(k));
-      const it = row('', `<span class="cp-main"><span class="cp-name">${describe(v)}</span><span class="cp-meta">${when(v.at)}${v.device ? ` · ${esc(String(v.device).replace(/^dev_/, '').slice(0, 8))}` : ''}</span></span>${restorable ? '<span class="cp-ra"><button class="btn sm ghost" data-c="restore">Restore</button></span>' : ''}`);
+      const it = row('', `<span class="cp-main"><span class="cp-name">${describe(v)}</span><span class="cp-meta">${when(v.at)}${v.device ? ` · ${esc(String(v.device).replace(/^dev_/, '').slice(0, 8))}` : ''}</span></span>${restorable ? `<span class="cp-ra"><button class="btn sm ghost" data-c="restore" title="Put this version back as a new change" aria-label="Restore this version">${I.restore}<span>Restore</span></button></span>` : ''}`);
       it.onclick = (e) => { if (e.target.closest('[data-c="restore"]')) { post({ type: 'restoreVersion', ent: 'conversation', id: d.id, hlc: v.hlc }); } };
       vl.appendChild(it);
     }
-    if (!vs.length) { vl.appendChild(el('div', 'cp-empty', 'No changes recorded yet.')); }
+    if (!vs.length) { vl.appendChild(el('div', 'cp-empty', `${J.history}<p>No changes recorded yet.</p>`)); }
     vsec.appendChild(vl);
     void active;
     body.append(bsec, vsec);
@@ -227,7 +235,7 @@
   }
   function memRow(m, d) {
     const badges = [m.pinned ? '<span class="cp-tag">pinned</span>' : '', m.localOnly ? '<span class="cp-tag" title="Never sent to a cloud model">local only</span>' : '', m.expiresAt ? `<span class="cp-tag${m.expired ? ' warn' : ''}">${esc(expiresIn(m.expiresAt))}</span>` : '', m.source === 'auto' ? '<span class="cp-tag">auto</span>' : ''].join(' ');
-    const it = row('mm-row', `<span class="cp-main"><span class="cp-name">${esc(m.name)} ${badges}</span><span class="cp-meta">${esc(m.summary || '')}</span><span class="cp-meta">${memScope(m, d)} · updated ${when(m.updatedAt)}</span></span><span class="cp-ra"><button class="btn sm ghost" data-c="edit" title="${FILE_TYPES.has(m.type) && m.path ? 'Open the note file' : 'Edit'}" aria-label="Edit ${esc(m.name)}">${I.edit}<span>Edit</span></button><button class="btn sm ghost" data-c="more" title="More actions" aria-label="More actions for ${esc(m.name)}" aria-expanded="${cur.open === m.id}">${I.list}</button></span>`);
+    const it = row('mm-row', `<span class="cp-main"><span class="cp-name">${esc(m.name)} ${badges}</span><span class="cp-meta">${esc(m.summary || '')}</span><span class="cp-meta">${memScope(m, d)} · updated ${when(m.updatedAt)}</span></span><span class="cp-ra"><button class="btn sm ghost" data-c="edit" title="${FILE_TYPES.has(m.type) && m.path ? 'Open the note file' : 'Edit'}" aria-label="Edit ${esc(m.name)}">${I.edit}<span>Edit</span></button><button class="btn sm ghost" data-c="more" title="More actions" aria-label="More actions for ${esc(m.name)}" aria-expanded="${cur.open === m.id}">${J.more}</button></span>`);
     it.setAttribute('role', 'listitem');
     const wrap = el('div', 'mm-item'); wrap.appendChild(it);
     if (cur.open === m.id) {
@@ -294,12 +302,12 @@
     const list = el('div', 'cp-list'); list.setAttribute('role', 'list');
     v.versions.forEach((x) => {
       const what = x.op === 'trash' ? 'Moved to Trash' : x.op === 'restore' ? 'Restored' : x.op === 'purge' ? 'Deleted' : x.op === 'create' ? 'Created' : x.body !== undefined ? 'Text changed' : (x.changes || []).map((k) => ({ localOnly: 'Local only', pinned: 'Pin', name: 'Renamed', expiresAt: 'Expiry', type: 'Type' }[k] || k)).join(' · ') || 'Changed';
-      const it = row(cur.vsel === x.hlc ? 'on' : '', `<span class="cp-main"><span class="cp-name">${esc(what)}</span><span class="cp-meta">${when(x.at)} · ${esc(String(x.device || '').replace(/^dev_/, '').slice(0, 8))}</span></span>${x.body !== undefined ? '<span class="cp-ra"><button class="btn sm ghost" data-c="show">Compare</button><button class="btn sm ghost" data-c="restore">Restore</button></span>' : ''}`);
+      const it = row(cur.vsel === x.hlc ? 'on' : '', `<span class="cp-main"><span class="cp-name">${esc(what)}</span><span class="cp-meta">${when(x.at)} · ${esc(String(x.device || '').replace(/^dev_/, '').slice(0, 8))}</span></span>${x.body !== undefined ? `<span class="cp-ra"><button class="btn sm ghost" data-c="show" title="Compare with the current note" aria-label="Compare with the current note">${I.compare || I.diff}<span>Compare</span></button><button class="btn sm ghost" data-c="restore" title="Put this version back" aria-label="Restore this version">${I.restore}<span>Restore</span></button></span>` : ''}`);
       it.setAttribute('role', 'listitem');
       it.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) { return; } if (b.dataset.c === 'show') { cur.vsel = x.hlc; memVersions(d); } else { memAct('restoreVersion', { id: v.id, hlc: x.hlc }); b.disabled = true; } };
       list.appendChild(it);
     });
-    if (!v.versions.length) { list.appendChild(el('div', 'cp-empty', 'No changes recorded yet.')); }
+    if (!v.versions.length) { list.appendChild(el('div', 'cp-empty', `${J.history}<p>No changes recorded yet.</p>`)); }
     body.appendChild(list);
     const pick = withBody.find((x) => x.hlc === cur.vsel);
     if (pick) {
@@ -478,7 +486,7 @@
   const SYNC_LINE = { off: 'Sync is off', idle: 'Up to date', syncing: 'Syncing…', offline: 'Offline', paused: 'Paused', error: 'Sync failed', unavailable: 'Sync is not available' };
   const CF_KIND = { field: 'Changed on two devices', 'text-merge': 'Edited on two devices', 'branch-split': 'Continued on two devices', 'trash-vs-edit': 'Deleted on one device, edited on another', 'remote-damaged': 'Damaged on the storage', 'clock-skew': 'Clock ahead' };
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
-  function syncDot(st) { return st.state === 'off' || st.state === 'unavailable' ? 'off' : st.conflicts || st.state === 'error' || st.state === 'offline' || (st.state === 'paused' && st.reason !== 'user') ? 'err' : st.state === 'syncing' ? 'busy' : st.state === 'idle' ? 'ok' : 'off'; }
+  function syncDot(st) { return st.state === 'off' || st.state === 'unavailable' ? 'off' : st.state === 'error' || (st.state === 'paused' && st.reason !== 'user') ? 'err' : st.conflicts || st.state === 'offline' ? 'warn' : st.state === 'syncing' ? 'busy' : st.state === 'idle' ? 'ok' : 'off'; }
   function syncAct(action, extra) { post({ type: 'syncAction', action, ...(extra || {}) }); }
   function fmtSize(b) { return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`; }
   function cfActions(c) {
@@ -585,7 +593,8 @@
   }
   function off(page, why) {
     const body = frame(TITLES[page] || page);
-    body.innerHTML = `<div class="cp-empty"><p>${why === 'starting' ? 'Conversation storage is still starting — try again in a moment.' : `Conversation storage is off: ${esc(why)}`}</p></div>`;
+    body.innerHTML = `<div class="cp-empty">${why === 'starting' ? '<span class="spinner"></span>' : J.offline}<p>${why === 'starting' ? 'Conversation storage is still starting — try again in a moment.' : `Conversation storage is off: ${esc(why)}`}</p><button class="btn sm" data-c="retry">${I.refresh}<span>Try again</span></button></div>`;
+    body.querySelector('[data-c="retry"]').onclick = () => { loading(page); request(); };
   }
 
   function compare(m) {

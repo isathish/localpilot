@@ -372,37 +372,36 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 <body>
 <script type="application/json" id="pdf-config">${config}</script>
 <header id="bar" class="bar" role="toolbar" aria-label="PDF toolbar">
-  <button id="sidebarToggle" class="ib" title="Sidebar (outline and thumbnails)" aria-pressed="false"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/></svg></button>
+  <button id="sidebarToggle" class="ib" title="Sidebar (outline and thumbnails)" aria-label="Sidebar" aria-pressed="false"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/></svg></button>
   <span class="sep"></span>
-  <button id="prev" class="ib" title="Previous page (p)"><svg viewBox="0 0 16 16"><path d="m4.5 10 3.5-3.5 3.5 3.5"/></svg></button>
-  <button id="next" class="ib" title="Next page (n)"><svg viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5 3.5-3.5"/></svg></button>
+  <button id="prev" class="ib" title="Previous page (p)" aria-label="Previous page"><svg viewBox="0 0 16 16"><path d="m4.5 10 3.5-3.5 3.5 3.5"/></svg></button>
+  <button id="next" class="ib" title="Next page (n)" aria-label="Next page"><svg viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5 3.5-3.5"/></svg></button>
   <span class="pagebox"><input id="page" type="number" min="1" value="1" aria-label="Page" title="Page (Ctrl+G)" /><span id="total" class="muted">/ –</span></span>
   <span class="sep"></span>
-  <button id="zoomOut" class="ib" title="Zoom out (Ctrl+-)"><svg viewBox="0 0 16 16"><path d="M4 8h8"/></svg></button>
+  <button id="zoomOut" class="ib" title="Zoom out (Ctrl+-)" aria-label="Zoom out"><svg viewBox="0 0 16 16"><path d="M4 8h8"/></svg></button>
   <select id="zoom" title="Zoom. Reset zoom (Ctrl+0)" aria-label="Zoom">
     <option value="default" id="zoomDefault">Default (Auto)</option>
     <option value="auto">Auto</option><option value="page-width">Page width</option><option value="page-fit">Page fit</option><option value="page-actual">Actual size</option>
     <option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option>
     <option value="custom" id="zoomCustom" hidden></option>
   </select>
-  <button id="zoomIn" class="ib" title="Zoom in (Ctrl+=)"><svg viewBox="0 0 16 16"><path d="M4 8h8M8 4v8"/></svg></button>
-  <button id="rotate" class="ib" title="Rotate clockwise (r)"><svg viewBox="0 0 16 16"><path d="M12.5 7.5A4.5 4.5 0 1 1 11 4.2M11.5 2v2.5H9"/></svg></button>
+  <button id="zoomIn" class="ib" title="Zoom in (Ctrl+=)" aria-label="Zoom in"><svg viewBox="0 0 16 16"><path d="M4 8h8M8 4v8"/></svg></button>
+  <button id="rotate" class="ib" title="Rotate clockwise (r)" aria-label="Rotate clockwise"><svg viewBox="0 0 16 16"><path d="M12.5 7.5A4.5 4.5 0 1 1 11 4.2M11.5 2v2.5H9"/></svg></button>
   <span class="spacer"></span>
-  <button id="colors" class="ib" title="Page colours" aria-haspopup="menu" aria-expanded="false" aria-controls="menu"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor"/></svg></button>
-  <button id="findToggle" class="ib" title="Find (Ctrl+F)"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg></button>
-  <button id="ask" class="ask" title="Ask LocalPilot about this PDF" aria-label="Ask LocalPilot about this PDF"><svg viewBox="0 0 16 16"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"/></svg><span>Ask</span></button>
-  <button id="more" class="ib" title="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="menu"><svg viewBox="0 0 16 16"><path d="M4 8h.01M8 8h.01M12 8h.01" stroke-width="2.2"/></svg></button>
+  <button id="colors" class="ib" title="Page colours" aria-label="Page colours" aria-haspopup="menu" aria-expanded="false" aria-controls="menu"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor"/></svg></button>
+  <button id="findToggle" class="ib" title="Find (Ctrl+F)" aria-label="Find in document" aria-pressed="false"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></button>
+  <button id="ask" class="ask" title="Ask LocalPilot about this PDF" aria-label="Ask LocalPilot about this PDF"><svg viewBox="0 0 16 16"><path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h7A1.5 1.5 0 0 1 13 4.5v5A1.5 1.5 0 0 1 11.5 11H9l-3 2.5V11H4.5A1.5 1.5 0 0 1 3 9.5z"/></svg><span>Ask</span></button>
+  <button id="more" class="ib" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="menu"><svg viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
 </header>
 <div id="findbar" class="findbar hidden" role="search">
   <input id="findInput" type="search" placeholder="Find in document" aria-label="Find in document" />
-  <button id="findPrev" class="ib" title="Previous match (Shift+Enter)"><svg viewBox="0 0 16 16"><path d="m4.5 10 3.5-3.5 3.5 3.5"/></svg></button>
-  <button id="findNext" class="ib" title="Next match (Enter)"><svg viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5 3.5-3.5"/></svg></button>
-  <label><input id="findCase" type="checkbox" /> Match case</label>
-  <label><input id="findWord" type="checkbox" /> Whole words</label>
-  <label><input id="findAll" type="checkbox" checked /> Highlight all</label>
+  <button id="findPrev" class="ib" title="Previous match (Shift+Enter)" aria-label="Previous match"><svg viewBox="0 0 16 16"><path d="m4.5 10 3.5-3.5 3.5 3.5"/></svg></button>
+  <button id="findNext" class="ib" title="Next match (Enter)" aria-label="Next match"><svg viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5 3.5-3.5"/></svg></button>
   <span id="findCount" class="muted" aria-live="polite"></span>
-  <span class="spacer"></span>
-  <button id="findClose" class="ib" title="Close (Esc)"><svg viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button>
+  <button id="findClose" class="ib" title="Close (Esc)" aria-label="Close find"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+  <span class="findopts"><label><input id="findCase" type="checkbox" /> Match case</label>
+  <label><input id="findWord" type="checkbox" /> Whole words</label>
+  <label><input id="findAll" type="checkbox" checked /> Highlight all</label></span>
 </div>
 <div id="progress" class="progress hidden"><div></div></div>
 <div id="layout" class="layout">

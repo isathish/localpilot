@@ -30,13 +30,38 @@
   /** Settles when the current document's Mermaid diagrams are drawn (an export waits for it). */
   let mermaidDone = Promise.resolve();
 
-  const ICON_COPY = '<svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>';
+  // The same codicon-style set as the chat and settings views (media/chat.js, media/settings.js `const I`), so one action has one icon.
+  const I = {
+    copy: '<svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></svg>',
+    check: '<svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></svg>',
+    download: '<svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M3 12.5h10"/></svg>',
+    link: '<svg viewBox="0 0 16 16"><path d="M6.8 9.2a2.8 2.8 0 0 0 4 0l2-2a2.8 2.8 0 0 0-4-4l-.9.9M9.2 6.8a2.8 2.8 0 0 0-4 0l-2 2a2.8 2.8 0 0 0 4 4l.9-.9"/></svg>',
+    code: '<svg viewBox="0 0 16 16"><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5"/></svg>',
+    image: '<svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="6" cy="7" r="1.2"/><path d="M13.5 10.5l-3-3-4 4-1.5-1.5-2.5 2.5"/></svg>',
+    file: '<svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3M6 8h4M6 10.5h4"/></svg>',
+    warn: '<svg viewBox="0 0 16 16"><path d="M8 2.2l6.3 11.3H1.7z"/><path d="M8 6.6v3.2M8 11.7h.01"/></svg>',
+    error: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.7M8 11h.01"/></svg>',
+    info: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.3V11M8 5h.01"/></svg>',
+    tip: '<svg viewBox="0 0 16 16"><path d="M6 11.5h4M6.5 13.5h3M8 2a4 4 0 0 0-2.3 7.3c.5.4.8.9.8 1.5v.7h3v-.7c0-.6.3-1.1.8-1.5A4 4 0 0 0 8 2z"/></svg>',
+    important: '<svg viewBox="0 0 16 16"><path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h7A1.5 1.5 0 0 1 13 4.5v5A1.5 1.5 0 0 1 11.5 11H9l-3 2.5V11H4.5A1.5 1.5 0 0 1 3 9.5z"/><path d="M8 5v2.6M8 9.2h.01"/></svg>',
+    caution: '<svg viewBox="0 0 16 16"><path d="M5.6 2h4.8L14 5.6v4.8L10.4 14H5.6L2 10.4V5.6z"/><path d="M8 5v3.6M8 10.8h.01"/></svg>',
+  };
+  const ICON_COPY = I.copy;
 
   function toast(text, level) {
-    const t = document.createElement('div'); t.className = `toast ${level || 'info'}`; t.textContent = text;
+    const t = document.createElement('div'); t.className = `toast ${level || 'info'}`; t.setAttribute('role', level === 'error' ? 'alert' : 'status');
+    t.innerHTML = level === 'error' ? I.error : ''; t.appendChild(document.createTextNode(text));
     els.toasts.appendChild(t); setTimeout(() => t.remove(), 2600);
   }
   const copyText = (text, what) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), () => toast('Could not copy', 'error'));
+  /** Copy from a button: its icon turns into a check for 1.2 s (as in the chat and settings views); a failure still toasts. */
+  function copyFrom(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      const ic = btn.querySelector('svg'); if (!ic || btn.classList.contains('copied')) { return; }
+      const was = ic.outerHTML; ic.outerHTML = I.check; btn.classList.add('copied');
+      setTimeout(() => { const now = btn.querySelector('svg'); if (now) { now.outerHTML = was; } btn.classList.remove('copied'); }, 1200);
+    }, () => toast('Could not copy', 'error'));
+  }
   const slug = (s) => String(s).toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 80) || 'section';
 
   // Same rules as parseLinkTarget in src/ui/markdown/render.ts (a test checks the two agree).
@@ -83,9 +108,15 @@
       const box = document.createElement('div');
       box.className = `markdown-alert markdown-alert-${kind.toLowerCase()}`;
       if (bq.hasAttribute('data-line')) { box.setAttribute('data-line', bq.getAttribute('data-line')); }
-      box.innerHTML = `<p class="markdown-alert-title">${ALERTS[kind]}</p>`;
+      box.innerHTML = `<p class="markdown-alert-title">${I[{ NOTE: 'info', TIP: 'tip', IMPORTANT: 'important', WARNING: 'warn', CAUTION: 'caution' }[kind]]}${ALERTS[kind]}</p>`;
       while (bq.firstChild) { box.appendChild(bq.firstChild); }
       bq.replaceWith(box);
+    }
+    // The engine's own alert titles (no icon of their own) get the same icons.
+    for (const t of article.querySelectorAll('.markdown-alert-title')) {
+      if (t.querySelector('svg')) { continue; }
+      const k = (/markdown-alert-(note|tip|important|warning|caution)/.exec(t.parentElement.className) || [])[1];
+      if (k) { t.insertAdjacentHTML('afterbegin', I[{ note: 'info', tip: 'tip', important: 'important', warning: 'warn', caution: 'caution' }[k]]); }
     }
     // Heading ids + outline.
     const heads = [...article.querySelectorAll(headingSel())];
@@ -124,14 +155,14 @@
       const head = document.createElement('div'); head.className = 'code-head';
       const lineEl = [pre, code].find((el) => el && blockLine(el) !== undefined);
       const dl = lineEl ? blockLine(lineEl) : undefined;
-      head.innerHTML = `<span class="lang">${esc(lang || 'text')}</span>${view.pathRef && dl !== undefined ? '<button class="cp ref" title="Copy as path:line">path:line</button>' : ''}<button class="cp" title="Copy code">${ICON_COPY}<span>Copy</span></button>`;
-      head.querySelector('.cp:not(.ref)').onclick = () => copyText((code || pre).textContent, 'Code');
+      head.innerHTML = `<span class="lang">${esc(lang || 'text')}</span>${view.pathRef && dl !== undefined ? `<button class="cp ref" title="Copy as path:line" aria-label="Copy as path:line">${I.link}<span>path:line</span></button>` : ''}<button class="cp" title="Copy code" aria-label="Copy code">${ICON_COPY}<span>Copy</span></button>`;;
+      const cp = head.querySelector('.cp:not(.ref)'); cp.onclick = () => copyFrom(cp, (code || pre).textContent);
       const ref = head.querySelector('.ref');
       if (ref) {
         // data-line is the fence line; the code starts on the next one (both 0-based, the reference is 1-based).
         const first = dl + 2 + view.lineOffset;
         const n = Math.max(1, (code || pre).textContent.replace(/\n$/, '').split('\n').length);
-        ref.onclick = () => copyText(`${view.pathRef}:${first}${n > 1 ? `-${first + n - 1}` : ''}`, 'Reference');
+        ref.onclick = () => copyFrom(ref, `${view.pathRef}:${first}${n > 1 ? `-${first + n - 1}` : ''}`);
       }
       if (lineEl) { wrap.setAttribute('data-line', String(dl)); lineEl.removeAttribute('data-line'); }
       pre.replaceWith(wrap); wrap.appendChild(head); wrap.appendChild(pre);
@@ -272,8 +303,8 @@
         fig.querySelector('.mermaid-svg')?.remove();
         fig.querySelector('.fig-bar')?.remove();
         let e = fig.querySelector('.mermaid-error');
-        if (!e) { e = document.createElement('div'); e.className = 'mermaid-error'; fig.prepend(e); }
-        e.textContent = `Mermaid: ${(err && err.message ? err.message : String(err)).split('\n').slice(0, 4).join(' ')}`;
+        if (!e) { e = document.createElement('div'); e.className = 'mermaid-error'; e.setAttribute('role', 'note'); fig.prepend(e); }
+        e.innerHTML = I.warn; e.append(`Mermaid: ${(err && err.message ? err.message : String(err)).split('\n').slice(0, 4).join(' ')}`);
         if (block) { block.hidden = false; }
       }
       fig.hidden = false;
@@ -281,12 +312,12 @@
   }
   function figureBar(fig) {
     const bar = document.createElement('div'); bar.className = 'fig-bar';
-    bar.innerHTML = '<button data-act="src" title="Copy the Mermaid source">Copy source</button><button data-act="svg" title="Copy the diagram as SVG">Copy SVG</button><button data-act="save" title="Save the diagram as an SVG file">Save SVG…</button>';
+    bar.innerHTML = `<button data-act="src" title="Copy the Mermaid source">${I.code}<span>Copy source</span></button><button data-act="svg" title="Copy the diagram as SVG">${I.copy}<span>Copy SVG</span></button><button data-act="save" title="Save the diagram as an SVG file">${I.download}<span>Save SVG…</span></button>`;
     bar.addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) { return; }
       const svg = () => (fig.querySelector('.mermaid-svg svg') || {}).outerHTML || '';
-      if (b.dataset.act === 'src') { copyText(fig.dataset.source || '', 'Source'); }
-      else if (b.dataset.act === 'svg') { copyText(svg(), 'SVG'); }
+      if (b.dataset.act === 'src') { copyFrom(b, fig.dataset.source || ''); }
+      else if (b.dataset.act === 'svg') { copyFrom(b, svg()); }
       else { post({ type: 'saveAs', svg: svg(), name: `${els.title.textContent.replace(/\.(md|markdown)$/i, '')}-diagram` }); }
     });
     return bar;
@@ -306,7 +337,7 @@
     img.dataset.missing = '1';
     const ph = document.createElement('span'); ph.className = 'img-missing';
     const name = decodeURIComponent((img.getAttribute('src') || '').split(/[?#]/)[0].split('/').pop() || 'image');
-    ph.textContent = `Image not found: ${img.alt || name}`;
+    ph.innerHTML = I.image; ph.append(`Image not found: ${img.alt || name}`);
     ph.title = img.getAttribute('src') || '';
     img.replaceWith(ph);
   }, true);
@@ -570,7 +601,7 @@
   // Error, empty-document and deleted-file states. Buttons post their action as the message type.
   function stateCard(kind, title, message, actions) {
     const d = document.createElement('div'); d.className = `state-card ${kind}`; d.setAttribute('role', kind === 'error' ? 'alert' : 'status');
-    d.innerHTML = `${title ? `<div class="sc-title">${esc(title)}</div>` : ''}${message ? `<div class="sc-msg">${esc(message)}</div>` : ''}<div class="sc-acts">${actions.map(([t, label, primary]) => `<button class="btn${primary ? ' primary' : ''}" data-post="${esc(t)}">${esc(label)}</button>`).join('')}</div>`;
+    d.innerHTML = `<span class="sc-ico" aria-hidden="true">${kind === 'error' ? I.error : I.file}</span>${title ? `<div class="sc-title">${esc(title)}</div>` : ''}${message ? `<div class="sc-msg">${esc(message)}</div>` : ''}<div class="sc-acts">${actions.map(([t, label, primary]) => `<button class="btn${primary ? ' primary' : ''}" data-post="${esc(t)}">${esc(label)}</button>`).join('')}</div>`;
     d.addEventListener('click', (e) => { const b = e.target.closest('button[data-post]'); if (b) { post({ type: b.dataset.post }); } });
     return d;
   }
@@ -579,7 +610,7 @@
     if (!on) { if (b) { b.remove(); } return; }
     if (b) { return; }
     b = document.createElement('div'); b.id = 'deleted'; b.className = 'banner'; b.setAttribute('role', 'status');
-    b.innerHTML = '<span class="bn-msg">This file was deleted or moved. You are reading the last version.</span><span class="bn-acts"><button class="btn" data-post="saveAs">Save a copy…</button><button class="btn" data-post="close">Close</button></span>';
+    b.innerHTML = `${I.warn}<span class="bn-msg">This file was deleted or moved. You are reading the last version.</span><span class="bn-acts"><button class="btn" data-post="saveAs">Save a copy…</button><button class="btn" data-post="close">Close</button></span>`;
     b.addEventListener('click', (e) => { const x = e.target.closest('button[data-post]'); if (x) { post({ type: x.dataset.post }); } });
     $('layout').before(b);
   }
@@ -624,8 +655,9 @@
       if (props && open) { props.open = open.open; }
       els.save.title = m.isFile ? 'Save a copy as…' : 'Save as…';
       els.open.title = m.isFile ? 'Open in editor' : 'Open as a new Markdown document';
-      els.morePop.querySelector('[data-act="save"]').textContent = els.save.title;
-      els.morePop.querySelector('[data-act="open"]').textContent = els.open.title;
+      els.morePop.querySelector('[data-act="save"] span').textContent = els.save.title;
+      els.morePop.querySelector('[data-act="open"] span').textContent = els.open.title;
+      els.save.setAttribute('aria-label', els.save.title.replace(/…$/, '')); els.open.setAttribute('aria-label', els.open.title);
       els.doc.title = m.isFile ? 'Double-click a block to open the source at that line' : '';
       const article = els.doc.querySelector('article');
       decorate(article);

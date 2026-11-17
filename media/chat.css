@@ -81,7 +81,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .tab.active { background: var(--tint-2); color: var(--fg); font-weight: 500; border-color: var(--border-soft); }
 .tab.active .ind { color: var(--fg); }
 .tab .spin { width: 10px; height: 10px; border: 1.5px solid var(--brand); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
-.tab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 25%, transparent); }
+.tab.unread .ind { color: var(--fg); }
 /* One quiet "running" marker everywhere a spinner would just add noise (tabs, background strip, worker lanes): a brand dot that breathes. */
 .dot.live { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); flex: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 22%, transparent); animation: breathe 1.6s ease-in-out infinite; }
 @keyframes breathe { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 10%, transparent); opacity: .75; } }
@@ -195,7 +195,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 #messages.scrolled.below { -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 22px), transparent); }
 .turn { position: relative; padding: 6px 12px; min-width: 0; }
 /* Only turns that genuinely appear animate; a transcript rebuild (end of turn, mode change) must not blink. */
-.turn.fresh, .turn.live { animation: fadeUp .18s ease-out; }
+.turn.fresh { animation: fadeUp .18s ease-out; }
 .turn.user { margin: 6px 12px 4px; padding: 9px 12px; background: var(--tint); border: 1px solid var(--border-soft); border-radius: var(--radius-lg); border-top-right-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .turn.user .att { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
 .turn.user .imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
@@ -267,7 +267,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .step > summary:hover { background: var(--tint); }
 .step .ico { width: 16px; height: 16px; display: inline-grid; place-items: center; flex: none; color: var(--muted); align-self: flex-start; margin-top: 3px; }
 .step .ico svg { width: 14px; height: 14px; }
-.step.ok .ico { color: var(--muted); } .step.error .ico { color: var(--error-text); } .step.running .ico { color: var(--fg); }
+.step.ok .ico { color: var(--muted); } .step.error .ico { color: var(--error-text); } .step.running .ico { color: var(--brand-text); }
 .step.running .ico svg { animation: spin 1s linear infinite; }
 .step .label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .step .label b { font-weight: 500; color: var(--fg); }
@@ -283,10 +283,11 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .step.thinking .content { font-family: inherit; font-size: var(--fs-sm); color: var(--muted); border: none; border-left: 1px solid var(--border-soft); background: none; border-radius: 0; }
 .step.thinking .ico { color: var(--muted); }
 .step.thinking.running .content { max-height: 180px; font-style: italic; mask-image: linear-gradient(to bottom, transparent 0, #000 28px); }
-.step.finished .ico { color: var(--ok-text); } .step.finished.error .ico { color: var(--error-text); }
+.step.finished .ico { color: var(--muted); } .step.finished.error .ico { color: var(--error-text); }
 /* resource chips */
 .fchip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; margin: 0 1px; height: 20px; padding: 0 7px 0 5px; border: 1px solid transparent; border-radius: 5px; background: var(--tint); color: var(--fg); font-size: 11.5px; vertical-align: middle; cursor: pointer; min-width: 0; }
 .fchip:hover { background: var(--tint-2); color: var(--link); }
+.fchip:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 .fchip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fchip svg { width: 12px; height: 12px; color: var(--muted); }
 .fchip .lang { font-style: normal; font-family: var(--mono); font-size: 8.5px; font-weight: 700; letter-spacing: .02em; line-height: 13px; padding: 0 3px; border-radius: 3px; background: var(--tint-2); color: var(--muted); text-transform: lowercase; }
@@ -310,7 +311,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 /* work strip: what the agent is doing now, how much it has done, for how long — then "Worked for …" that folds the steps */
 .work { display: flex; align-items: center; gap: 8px; min-height: 26px; margin: 0 0 4px; padding: 2px 6px 2px 4px; font-size: var(--fs-sm); color: var(--muted); border-radius: var(--radius-sm); user-select: none; }
 .work .ico { width: 16px; height: 16px; display: inline-grid; place-items: center; flex: none; color: var(--fg); } .work .ico svg { width: 14px; height: 14px; }
-.work.running .ico svg { animation: spin 1s linear infinite; }
+.work.running .ico { color: var(--brand-text); } .work.running .ico svg { animation: spin 1s linear infinite; }
 .work .phase { font-weight: 500; color: var(--fg); white-space: nowrap; flex: none; }
 .work.running .phase { color: var(--fg); }
 .work .facts { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -318,7 +319,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .work .time { flex: none; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; opacity: .85; }
 .work .chev { display: none; flex: none; opacity: .5; transition: transform .15s; } .work .chev svg { width: 12px; height: 12px; }
 .work.done { cursor: pointer; } .work.done:hover { background: var(--tint); }
-.work.done .ico { color: var(--ok-text); } .work.done.failed .ico { color: var(--error-text); }
+.work.done .ico { color: var(--muted); } .work.done.failed .ico { color: var(--error-text); }
 .work.done .chev { display: inline-flex; transform: rotate(90deg); } .turn.folded > .work.done .chev { transform: none; }
 .turn.folded > .steps, .turn.folded > .note { display: none; }
 /* web search hits: title · domain · snippet, each a link */
@@ -417,7 +418,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .card-head .rtag.byyou { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .card-head .rtag.byyou.pending::before { content: "✎ "; }
 @container messages (max-width: 360px) { .card-head .rtag .w, .card-head .rtag .by { display: none; } .card-head .rtag.byyou:not(.pending)::after { content: "✎"; } .card-head .rtag.byyou.pending::before { content: "✎"; } }
-.card.running .card-head .ico svg { animation: spin 1s linear infinite; }
+.card.running .card-head .ico { color: var(--brand-text); } .card.running .card-head .ico svg { animation: spin 1s linear infinite; }
 .card.error .card-head { color: var(--error-text); }
 .card .diff { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; overflow: auto; max-height: 360px; }
 .card .diff .ln { display: flex; white-space: pre; min-width: max-content; }
@@ -430,7 +431,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .card .term { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; padding: 8px 10px; white-space: pre-wrap; max-height: 320px; overflow: auto; color: var(--fg-2); }
 .card .term.collapsed { display: none; }
 .card .exit { flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; padding: 0 7px; line-height: 18px; border-radius: 9px; background: var(--tint-2); font-variant-numeric: tabular-nums; }
-.card .exit.bad { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); } .card .exit.good { color: var(--ok-text); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.card .exit.bad { color: var(--error-text); background: color-mix(in srgb, var(--error) 14%, transparent); } .card .exit.good { color: var(--muted); background: none; padding: 0; font-weight: 400; }
 .note { margin: 6px 0; padding: 6px 10px; font-size: var(--fs-sm); color: var(--muted); border: 1px dashed var(--border); border-radius: var(--radius-sm); }
 .note.skills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .note.skills .lbl { margin-right: 2px; }
@@ -473,6 +474,8 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .btn:hover { background: var(--tint); }
 .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; } .btn.primary:hover { background: var(--accent-hover); }
 .btn.ghost { border-color: transparent; color: var(--muted); font-weight: 400; } .btn.ghost:hover { color: var(--fg); }
+/* Small buttons get small icons; the panels that size their own (.tool-fail, .rec-acts …) come later and win. */
+.btn.sm svg { width: 12px; height: 12px; } .notice .row .btn svg, .boot-hint .btn svg { width: 13px; height: 13px; }
 .btn.danger { color: var(--error-text); }
 .btn kbd { font-family: var(--mono); font-size: 9.5px; line-height: 14px; min-width: 14px; text-align: center; padding: 0 3px; border-radius: 3px; background: color-mix(in srgb, currentColor 14%, transparent); opacity: .85; margin-left: 2px; }
 
@@ -488,11 +491,22 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .approval .actions .btn { min-width: 0; flex: 0 1 auto; white-space: nowrap; }
 .btn .long { display: inline; }
 .btn .short { display: none; }
-.approval .khint { padding: 0 10px 8px; margin-top: -2px; text-align: right; font-size: var(--fs-xs); color: var(--muted); }
+.approval .khint { padding: 0 10px 8px; margin-top: -2px; text-align: left; font-size: var(--fs-xs); color: var(--muted); }
 .approval .khint kbd { font-family: var(--mono); font-size: 10px; padding: 0 3px; border-radius: 3px; background: var(--tint-2); color: var(--fg-2); }
-/* The key hints stay visible down to 330 px, so labels shorten first. */
+/* Two groups: allow (primary first, right-aligned) and the quiet deny group (left). Below 420 px they always sit on two
+   rows, allow row on top, so the layout never depends on label widths and no button is left alone on a line. */
+.approval .actions:has(> .pri) { flex-direction: row-reverse; flex-wrap: wrap; justify-content: flex-start; align-items: center; row-gap: 4px; }
+.approval .actions .pri { display: flex; flex-direction: row-reverse; gap: 6px; min-width: 0; }
+.approval .actions .sec { display: flex; gap: 2px; margin-right: auto; min-width: 0; }
+.approval .actions .sec .btn { padding: 0 6px; }
+.approval .actions .sec .rsn { font-size: var(--fs-xs); }
+.approval .head .cp { width: 22px; height: 22px; margin: -3px -4px -3px auto; }
+.approval .head .kind + .cp { margin-left: 0; }
+.approval .head .cp svg { color: inherit; width: 13px; height: 13px; }
+/* Labels shorten first; the Y / N / A key hints stay at every width. */
 @container (max-width: 460px) { .approval .actions .btn .long { display: none; } .approval .actions .btn .short { display: inline; } }
-@container (max-width: 330px) { .approval .actions .btn .long { display: none; } .approval .actions .btn .short { display: inline; } .approval .actions .btn kbd { display: none; } .approval .head .kind { display: none; } }
+@container (max-width: 420px) { .approval .actions:has(.split:not(.solo), [data-a="edit"]) .sec { flex-basis: 100%; } .approval .actions .sec { margin-left: -6px; } }
+@container (max-width: 330px) { .approval .head .kind { display: none; } }
 
 /* composer */
 .approval.question { border-color: color-mix(in srgb, var(--brand) 35%, var(--border-soft)); }
@@ -582,12 +596,13 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 #tasks:not(.hidden) + #changes:not(.hidden) { border-top-left-radius: 0; border-top-right-radius: 0; border-top-color: var(--border-soft); }
 .panel-body { list-style: none; margin: 0; padding: 4px 6px 6px; border-top: 1px solid var(--border-soft); max-height: 180px; overflow: auto; }
 .meter { width: 56px; height: 4px; border-radius: 2px; background: var(--tint-2); overflow: hidden; flex: none; margin-right: 4px; }
-.meter i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .3s; }
+.meter i { display: block; height: 100%; width: 0; background: color-mix(in srgb, var(--fg) 45%, transparent); transition: width .3s ease-out, background-color .3s; }
+body.running #tasksMeter i { background: var(--brand); }
 .todo { display: flex; align-items: flex-start; gap: 8px; padding: 3px 4px; border-radius: 4px; }
 .todo .box { width: 14px; height: 14px; border: 1.5px solid var(--muted); border-radius: 4px; display: inline-grid; place-items: center; flex: none; margin-top: 2px; }
 .todo .box svg { width: 10px; height: 10px; stroke-width: 2; }
 /* A dark check on the green fill: white on the light green of dark themes was 2:1. */
-.todo.done .box { background: var(--ok); border-color: var(--ok); color: color-mix(in srgb, var(--ok) 14%, #000); }
+.todo.done .box { background: var(--tint-2); border-color: transparent; color: var(--muted); }
 .todo.done .title { color: var(--muted); }
 .todo.in_progress .box { border-color: var(--brand); color: var(--brand-text); } .todo.in_progress .box .now { width: 6px; height: 6px; border-radius: 2px; background: var(--brand); }
 .todo.skipped .box { color: var(--muted); }
@@ -657,7 +672,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .status { display: flex; align-items: flex-start; gap: 8px; min-height: 18px; padding: 0 4px; font-size: var(--fs-sm); line-height: 18px; color: var(--muted); overflow: hidden; }
 /* Two lines, then an ellipsis: "gemma4:12b is reading the prompt (~7,300 tokens)" stays readable in a narrow sidebar. */
 .status .text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
-.status .spinner { margin-top: 3px; width: 12px; height: 12px; border: 1.5px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+.status .spinner { margin-top: 3px; width: 12px; height: 12px; border: 1.5px solid var(--brand); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
 .box { position: relative; border: 1px solid var(--border-2); border-radius: var(--radius-lg); background: var(--input-bg); display: flex; flex-direction: column; min-width: 0; transition: border-color .12s; }
 .box:focus-within { border-color: var(--focus); }
 .box.drop { border-color: var(--accent); border-style: dashed; }
@@ -756,6 +771,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .stickyuser { box-sh
 .pausedind { display: inline-grid; place-items: center; color: var(--brand-text); } .pausedind svg { width: 11px; height: 11px; stroke-width: 2.2; }
 .tab .ind .pausedind svg { width: 12px; height: 12px; }
 .bgrun.paused .st { color: var(--brand-text); }
+.waitind { display: inline-grid; place-items: center; color: var(--warn-text); } .waitind svg { width: 11px; height: 11px; }
+.bgrun.waiting .st { color: var(--warn-text); }
 /* Per-lane subagent controls, visible while the lane is running. */
 .lanectl { display: none; align-items: center; gap: 2px; flex: none; margin-left: 4px; }
 .step.subagent.running > summary .lanectl { display: inline-flex; }
@@ -802,7 +819,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .stickyuser { box-sh
 .plan-todos { margin: 10px 0 12px; padding: 10px 12px; border-radius: var(--radius); background: var(--tint); }
 .plan-todos .n { font-size: var(--fs-xs); color: var(--muted); margin-bottom: 6px; }
 .plan-todos .todo { display: flex; align-items: flex-start; gap: 9px; padding: 3px 0; font-size: var(--fs-sm); line-height: 1.45; }
-.plan-todos .todo i { flex: none; width: 13px; height: 13px; margin-top: 3px; border: 1.5px solid var(--muted); border-radius: 50%; } .plan-todos .todo.done i { background: var(--ok); border-color: var(--ok); } .plan-todos .todo.done span { text-decoration: line-through; color: var(--muted); }
+.plan-todos .todo i { flex: none; width: 13px; height: 13px; margin-top: 3px; border: 1.5px solid var(--muted); border-radius: 50%; } .plan-todos .todo.done i { background: var(--muted); border-color: var(--muted); opacity: .6; } .plan-todos .todo.done span { text-decoration: line-through; color: var(--muted); }
 .plan-todos .todo em { font-style: normal; font-size: var(--fs-xs); color: var(--muted); margin-left: auto; padding-left: 8px; white-space: nowrap; }
 .plan-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; } .plan-foot .hint { flex: 1 1 170px; font-size: var(--fs-xs); color: var(--muted); }
 /* Narrow cards put the hint on its own line and keep Revise / Build together on the right. */
@@ -1174,7 +1191,10 @@ pre.numbered .t { padding-right: 14px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   /* "Running" stays legible as a static, dimmed glyph instead of an endless spin. */
-  .step.running .ico svg, .tab .spin, .bgrun .spin, .popover .mspin, .status .spinner, .card.running .card-head .ico svg { animation: none !important; opacity: .6; }
+  .step.running .ico svg, .work.running .ico svg, .tab .spin, .bgrun .spin, .popover .mspin, .status .spinner, .card.running .card-head .ico svg, .err-acts .btn.busy svg { animation: none !important; opacity: .6; }
+  /* Entrances, the copy confirmation and the chevrons simply appear in their end state. */
+  .steps .enter, .error-box.enter, .tab.attention .ind, .copied svg { animation: none !important; }
+  .report > summary .chev svg, .meter i { transition: none !important; }
   .dot.live { animation: none !important; }
   .step.running .label > b { background: none; -webkit-background-clip: initial; background-clip: initial; color: var(--fg); animation: none; }
   .typing i, .boot-dots i, .caret { animation: none !important; opacity: .7; }
@@ -1191,11 +1211,14 @@ pre.numbered .t { padding-right: 14px; }
 .afoot .info { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .afoot .info i { font-style: normal; opacity: .6; }
 .afoot .info span { overflow: hidden; text-overflow: ellipsis; }
-.afoot .mdl { color: var(--muted); max-width: 180px; }
+.afoot .mdl { color: var(--muted); max-width: 220px; }
+.afoot .info .mtag { opacity: .75; overflow: visible; }
 .afoot .acts { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; flex: none; }
 /* The icon actions stay quiet until the turn is hovered; the View changes chip keeps full contrast. */
 .afoot .acts > button:not(.chg) { opacity: .6; transition: opacity .12s; }
-.turn:hover .afoot .acts > button, .afoot .acts:focus-within > button { opacity: 1; }
+/* Older answers hide their icons until the turn is hovered or holds focus (still in the Tab order: focus reveals them). */
+.turn.assistant:not(:last-child) .afoot .acts > button:not(.chg) { opacity: 0; }
+:is(.turn:hover, .turn:focus-within) .afoot .acts > button:not(.chg) { opacity: 1; }
 .afoot .acts button { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); color: var(--muted); }
 .afoot .acts button:hover { background: var(--tint-2); color: var(--fg); }
 .afoot .acts button:disabled { opacity: .4; pointer-events: none; }
@@ -1204,9 +1227,12 @@ pre.numbered .t { padding-right: 14px; }
 .afoot .acts button.chg { display: inline-flex; gap: 4px; width: auto; padding: 0 7px 0 5px; border: 1px solid var(--border-soft); border-radius: 12px; color: var(--fg-2, var(--fg)); font: inherit; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .afoot .acts button.chg:hover { border-color: var(--border); background: var(--tint-2); color: var(--fg); }
 .afoot .acts .sep { align-self: center; width: 1px; height: 14px; margin: 0 4px; background: var(--border-soft); }
-@container messages (max-width: 300px) { .afoot .acts button.chg span { display: none; } .afoot .acts button.chg { width: 24px; padding: 0; justify-content: center; } }
-@container messages (max-width: 340px) { .afoot .mdl { max-width: 120px; } }
-@media (hover: none) { .afoot .acts > button { opacity: 1; } }
+@container messages (max-width: 260px) { .afoot .acts button.chg span { display: none; } .afoot .acts button.chg { width: 24px; padding: 0; justify-content: center; } }
+/* Narrow: drop the speed, then the model's size tag and the one-tab diff (the changes panel has it too), before anything ellipsizes. */
+@container messages (max-width: 400px) { .afoot .info .spd, .afoot .info .spd + i, .afoot .info i:has(+ .spd) { display: none; } }
+@container messages (max-width: 340px) { .afoot .mdl { max-width: 140px; } .afoot .acts [data-act="viewChangesDiff"] { display: none; } }
+@container messages (max-width: 320px) { .afoot .info .mtag { display: none; } }
+@media (hover: none) { .afoot .acts > button:not(.chg), .turn.assistant:not(:last-child) .afoot .acts > button:not(.chg) { opacity: 1; } }
 /* Copied: the button itself confirms. */
 button.copied, button.copied:hover { color: var(--ok-text) !important; }
 
@@ -1413,6 +1439,9 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.popover .item.s
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.popover .item, .hist-row, .tab, .ib, .pick, .ctxbtn, .btn.ghost, .aa-grants .grant, .toast button):hover { outline: 1px dashed var(--vscode-contrastActiveBorder, var(--focus)); outline-offset: -1px; }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.afoot .acts, .afoot .acts > button, .afoot .info i, .task-row .rm, .lane .ico, .lane .who, .lane.pending::after, .work .chev, .work .time, .work .facts:not(:empty)::before, .step .meta, .step.explore > summary .label .muted, .step.explore > summary .label .dot, .pill i, .pill .model, .par .lbl i, .report > summary .n, .note.hook i, .aa-head .chev svg, .panel .chev svg, .todo .todo-after, .popover .item.sel .desc, .hist-row .desc.snippet, pre.numbered .n, .a2, .tk-op, .dot.idle, .step.subhost.workers .lane .who, .step.subhost.workers .lane .now, .plan-foot .build kbd) { opacity: 1; }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .toast { border-color: var(--vscode-contrastBorder, var(--border)); }
+/* High contrast clears --tint-2, so a meter's track would vanish: outline it and fill solid so progress reads without colour. */
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.meter, .ctxcard .r.bd .bar, .tr-row .bar) { background: transparent; outline: 1px solid var(--vscode-contrastBorder, var(--border)); outline-offset: 0; }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.meter i, .ctxcard .r.bd .bar::after) { background: var(--fg); }
 /* /clear confirmation above the composer: one quiet row, the destructive button keeps the error colour. */
 .confirm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 6px; padding: 6px 8px; font-size: var(--fs-sm); border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border-soft)); background: color-mix(in srgb, var(--warn) 7%, transparent); border-radius: var(--radius-sm); }
 .confirm-row > svg { flex: none; width: 14px; height: 14px; color: var(--warn); }
@@ -1591,7 +1620,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-co
 /* Work strip: stopped by you (muted, not a failure), paused (timer frozen, inline Resume). */
 .work.done.stopped .ico { color: var(--muted); }
 .work.done.stopped .ico svg { width: 11px; height: 11px; }
-.work.paused .ico { color: var(--muted); } .work.paused .ico svg { animation: none; }
+.work.paused .ico { color: var(--brand-text); } .work.paused .ico svg { animation: none; }
 .work.paused .time { opacity: .55; }
 .work .work-resume { flex: none; height: 22px; padding: 0 8px; font-size: var(--fs-xs); }
 .work .work-resume svg { width: 10px; height: 10px; }
@@ -1607,7 +1636,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-co
 .note.wait .ico, .note.route .ico, .note.retry .ico { display: inline-grid; place-items: center; flex: none; width: 14px; }
 .note.wait .ico svg, .note.retry .ico svg { width: 12px; height: 12px; animation: spin 1.2s linear infinite; }
 .note.retry.ok .ico svg, .note.retry.failed .ico svg { animation: none; }
-.note.retry.ok .ico { color: var(--ok-text); } .note.retry.failed .ico { color: var(--warn-text); }
+.note.retry.ok .ico { color: var(--muted); } .note.retry.failed .ico { color: var(--warn-text); }
 .note.wait .t { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
 .note.wait .lim { opacity: .85; white-space: nowrap; }
 .note.wait.long .lim { color: var(--warn-text); }
@@ -1617,7 +1646,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-co
 .note.route { padding: 4px 8px; border-left: 2px solid var(--warn); border-radius: 0; background: color-mix(in srgb, var(--warn) 6%, transparent); }
 .note.route .ico { color: var(--warn-text); } .note.route .ico svg { width: 12px; height: 12px; }
 .note.route .t { flex: 1 1 180px; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
-.note.route .acts .muted { display: inline-flex; align-items: center; gap: 4px; } .note.route .acts .muted svg { width: 11px; height: 11px; color: var(--ok-text); }
+.note.route .acts .muted { display: inline-flex; align-items: center; gap: 4px; } .note.route .acts .muted svg { width: 11px; height: 11px; color: inherit; }
 .badge.cloud { display: inline-block; padding: 0 5px; line-height: 15px; font-size: 10px; border-radius: 8px; color: var(--link); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--link) 60%, transparent); vertical-align: 1px; }
 /* The model chip carries a warning dot after a fallback answered. */
 .pick.model.rerouted { position: relative; }
@@ -1658,17 +1687,14 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-co
 .approval .split { display: inline-flex; flex: none; }
 .approval .split > .btn { flex: none; }
 .approval .split > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-/* With Edit and the split menu the row no longer fits a narrow panel on one line: let it wrap instead of squeezing. */
-.approval .actions:has([data-a="edit"], .split) { flex-wrap: wrap; }
 .approval .actions [data-a="edit"] { flex: none; }
 .approval .split > .split-more { width: 22px; padding: 0; border-left: none; border-top-left-radius: 0; border-bottom-left-radius: 0; flex: none; }
 .approval .split-more svg { width: 10px; height: 10px; transform: rotate(90deg); }
 .approval .split-more.solo { width: 24px; padding: 0; flex: none; }
 .approval .actions .btn svg { width: 12px; height: 12px; }
-.approval .always { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 2px 5px; }
-.approval .always i { font-style: normal; opacity: .6; }
+.approval .always { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 2px 10px; text-align: left; } /* spacing, not a "·": the link wraps under the reason in a narrow card */
 .approval .always .link { color: var(--link); font-size: var(--fs-xs); padding: 0; } .approval .always .link:hover { text-decoration: underline; }
-@container (max-width: 330px) { .approval [data-a="edit"] .long { display: none; } }
+@container (max-width: 330px) { .approval .actions .btn[data-a="edit"] :is(.long, .short) { display: none; } }
 /* Checklist: failed and skipped items, and items linked to the steps that ran them. */
 .todo.failed .box { border-color: var(--error); color: var(--error-text); }
 .todo.failed .title { color: var(--fg); font-style: normal; }
@@ -1945,3 +1971,71 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .ratecard { backgrou
 body.vscode-high-contrast .relrow .rel, body.vscode-high-contrast-light .relrow .rel { border: 1px solid var(--border); }
 /* Image thumbnails are buttons (Enter / Space open the lightbox). */
 :is(.imgs img, .md-img, .content.shot img, .content.inspect .shot-img):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ---- One status vocabulary, the same shape and colour wherever a run, step, worker, task or tab shows its state:
+   running = spinner (rows) or breathing dot (tabs, lanes), --brand · waiting on you = warn triangle, --warn ·
+   paused = two bars, --brand · done = check, muted · failed = ×, --error · stopped by you = square, muted · queued = hollow dot, muted. */
+.work.waiting .ico { color: var(--warn-text); } .work.waiting .ico svg { animation: none; }
+.tab .ind .doneind { display: inline-grid; place-items: center; } .tab .ind .doneind svg { width: 12px; height: 12px; stroke-width: 2; }
+/* Paused: the composer's status line holds still and shows the pause bars instead of the spinner. */
+body.paused .status .spinner { border: none; border-radius: 0; animation: none; width: 10px; height: 11px; margin: 3px 1px 0; background: linear-gradient(to right, var(--brand) 0 3px, transparent 3px 7px, var(--brand) 7px 10px); }
+/* A failed retry button spins while the request goes out again (it is disabled until the turn answers). */
+.err-acts .btn.busy svg { animation: spin 1s linear infinite; }
+/* Subagent report: a chevron that turns, like every other disclosure in the chat. */
+.report > summary .chev { display: inline-grid; place-items: center; margin-left: -4px; opacity: .7; } .report > summary .chev svg { width: 12px; height: 12px; transition: transform .15s; }
+.report[open] > summary .chev svg { transform: rotate(90deg); }
+/* Dismiss crosses are icons, the same glyph and size as every other close button. */
+.toast .tx svg, .rbanner .x svg { width: 12px; height: 12px; } .rbanner .x { display: inline-grid; place-items: center; flex: none; }
+/* Motion: a row or card that arrives while the agent works fades in once (opacity only, nothing already on screen moves).
+   The class is set by chat.js when the live node is created, never on re-renders, and removed when the fade ends. */
+@keyframes stepIn { from { opacity: 0; } }
+.steps .enter, .error-box.enter { animation: stepIn .14s ease-out; }
+/* Copied: the check pops in place of the copy icon. */
+@keyframes popIn { from { transform: scale(.6); opacity: 0; } }
+.copied svg { animation: popIn .16s ease-out; }
+/* The model is loading / the request is being retried: still LocalPilot working, so the spinner is the brand's. */
+.turn.live .note.wait .ico, .turn.live .note.retry:not(.ok):not(.failed) .ico { color: var(--brand-text); }
+/* ---- Audit pass 3 ---- */
+/* Buttons keep the UI font even inside monospace blocks (test results, terminal cards). */
+.btn { font-family: var(--vscode-font-family); }
+/* A menu takes focus so arrow keys work; its highlighted row is the focus indicator, not a ring around the whole list. */
+.popover:focus, .popover:focus-visible, .popover .list:focus, .popover .list:focus-visible { outline: none; }
+/* "Jump to latest" sits under menus and the context card, and fades in without losing its centring
+   (fadeUp's transform used to replace translateX(-50%), so the pill slid in from the right). */
+.jump { z-index: 58; animation-name: jumpIn; }
+@keyframes jumpIn { from { opacity: 0; transform: translate(-50%, 4px); } to { opacity: 1; transform: translate(-50%, 0); } }
+/* The live answer fades in once when it starts (.fresh, removed by chat.js; see ensureLive), not every time its node is
+   re-attached on a tab switch: .turn.live no longer animates by itself. */
+/* Every spinner turns at the same speed. */
+:is(.tab .spin, .bgrun .spin, .status .spinner, .popover .mspin, .ctx-strip .spinner, .pick.model .spinner, .note.retry svg, .note.hook svg, .rec.running .rec-head .ico svg, .rec-decision svg, .rec-acts .btn.busy svg, .rec-mini.running .ico svg, .note.wait .ico svg, .note.retry .ico svg, #btnImprove.busy svg) { animation-duration: 1s; }
+/* Check marks in recovery chips are icons now, sized to the text. */
+.rchip b, .rec-mini .chips b { display: inline-grid; place-items: center; } .rchip b svg, .rec-mini .chips b svg { width: 10px; height: 10px; stroke-width: 2; }
+.aa-grants .grant .x svg { width: 9px; height: 9px; stroke-width: 2; }
+/* "What ran" turns a chevron like every other disclosure (no native triangle). */
+.rec-ran > summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; } .rec-ran > summary::-webkit-details-marker { display: none; }
+.rec-ran > summary .chev { display: inline-grid; place-items: center; opacity: .7; } .rec-ran > summary .chev svg { width: 11px; height: 11px; transition: transform .15s; }
+.rec-ran[open] > summary .chev svg { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .rec-ran > summary .chev svg { transition: none; } .jump { animation: none; } }
+/* Rerouted model: the dot rides on the chip's chevron, so it stays next to the name when the chip stretches. */
+.pick.model.rerouted::after { content: none; }
+.pick.model.rerouted .chev { position: relative; overflow: visible; }
+.pick.model.rerouted .chev::after { content: ''; position: absolute; top: -2px; right: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 1.5px var(--input-bg, var(--bg)); }
+/* Answer footer: the actions move to their own line before they would run past the edge (branch switcher + many actions). */
+.afoot { flex-wrap: wrap; row-gap: 2px; }
+.afoot .info { flex: 1 1 0; min-width: 32px; }
+.afoot .acts { max-width: 100%; }
+/* Narrow sidebars: the changes head lets its label ellipsize instead of pushing Review / Apply all past the edge,
+   and an approval's key hints step aside (the title keeps them) so Edit + Allow in chat + Once fit. */
+@container (max-width: 300px) {
+  #changesToggle { min-width: 0; flex: 1 1 auto; }
+  .approval .actions .btn kbd { display: none; }
+  .approval .actions .pri { flex-wrap: wrap; justify-content: flex-start; row-gap: 4px; }
+}
+/* Model and other menus: a row's name outranks its tags; tags wrap under it rather than squeeze it to "Clau…".
+   The popover is fixed to the webview, so the webview's own width (a media query) is its container here. */
+@media (max-width: 360px) {
+  .popover[data-menu="models"] .item:has(> .tag) { flex-wrap: wrap; row-gap: 2px; }
+  .popover[data-menu="models"] .item:has(> .tag) > .txt { min-width: 9em; }
+  .popover[data-menu="models"] .item:has(> .tag) > .tag { margin-left: 24px; }
+  .popover[data-menu="models"] .item:has(> .tag) > .tag ~ .tag { margin-left: 0; }
+}

@@ -30,7 +30,7 @@ body{margin:0}
 <body>
 <div id="app">
   <div id="progress" class="progress hidden"></div>
-  <header id="tabbar" class="tabbar"><nav id="tabs" class="tabs" role="tablist"></nav><button id="btnNewTab" class="ib"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button><button id="btnHistory" class="ib badge" data-n="0"><svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg></button></header>
+  <header id="tabbar" class="tabbar"><nav id="tabs" class="tabs" role="tablist"></nav><button id="btnNewTab" class="ib"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button><button id="btnHistory" class="ib badge" data-n="0" aria-label="All chats"><svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg></button></header>
   <div id="bgruns" class="bgruns hidden"></div>
   <div id="offline" class="offline hidden" role="status" aria-live="polite"></div>
   <main id="messages"></main>
@@ -46,16 +46,16 @@ body{margin:0}
       <div id="runHint" class="hints runhint hidden" role="group" aria-label="Sending while the agent runs"></div>
       <div class="row">
         <button id="modeBtn" class="pick mode"><span id="modeIcon" class="ico"></span><span id="modeLabel" class="lbl">Agent</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
-        <button id="modelBtn" class="pick model"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3.5 5A1.5 1.5 0 0 1 5 3.5h6A1.5 1.5 0 0 1 12.5 5v5a1.5 1.5 0 0 1-1.5 1.5H8l-2.5 2v-2H5A1.5 1.5 0 0 1 3.5 10z"/></svg></span><span id="modelLabel" class="lbl">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
+        <button id="modelBtn" class="pick model"><span class="ico"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 6.5h3v3h-3zM6 1.5V4M10 1.5V4M6 12v2.5M10 12v2.5M1.5 6H4M1.5 10H4M12 6h2.5M12 10h2.5"/></svg></span><span id="modelLabel" class="lbl">Auto</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="thinkBtn" class="pick think hidden" title="How hard the model thinks in this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M8 2.5a4 4 0 0 0-2.5 7.1V11h5V9.6A4 4 0 0 0 8 2.5zM6 13h4"/></svg></span><span id="thinkLabel" class="lbl">Think</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <button id="skillsBtn" class="pick skills" title="Skills for this chat"><span class="ico"><svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg></span><span id="skillsLabel" class="lbl">Skills</span><span class="chev"><svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span></button>
         <span class="spacer"></span>
         <button id="btnComposerMore" class="ib" aria-label="More composer actions: prompt library" title="Prompt library and more" aria-haspopup="listbox"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg></button>
-        <button id="btnImage" class="ib"><svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/></svg></button>
+        <button id="btnImage" class="ib" aria-label="Attach image or screenshot"><svg viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/></svg></button>
         <span id="usagePill" class="usage hidden"><span class="tok"></span><span class="cost"></span></span>
         <button id="ctxMeter" class="ctx"><span class="ring"></span><span class="txt">0%</span></button>
-        <button id="btnSend" class="send"><svg viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
-        <button id="btnPause" class="send pause hidden"><svg viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/></svg></button>        <button id="btnStop" class="send stop hidden"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
+        <button id="btnSend" class="send" aria-label="Send"><svg viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
+        <button id="btnPause" class="send pause hidden"><svg viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9" stroke-width="2.2"/></svg></button>        <button id="btnStop" class="send stop hidden" aria-label="Stop"><svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
       </div>
     </div>
     <p id="disclaimer" class="disclaimer hidden">AI can make mistakes. Review generated changes before applying.</p>

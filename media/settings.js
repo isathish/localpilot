@@ -91,6 +91,24 @@
     edit: '<svg viewBox="0 0 16 16"><path d="M10.5 3l2.5 2.5L6 12.5H3.5V10z"/><path d="M9 4.5l2.5 2.5"/></svg>',
     keyboard: '<svg viewBox="0 0 16 16"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M4.5 9.5h7"/></svg>',
     eyeOff: '<svg viewBox="0 0 16 16"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/><path d="M2.5 13.5l11-11"/></svg>',
+    more: '<svg viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg>',
+    back: '<svg viewBox="0 0 16 16"><path d="M10 4L6 8l4 4"/></svg>',
+    clock: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.8V8l2.3 1.5"/></svg>',
+    coin: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M9.7 6c-.3-.6-.9-.9-1.7-.9-.9 0-1.6.5-1.6 1.2 0 1.7 3.3.8 3.3 2.6 0 .7-.7 1.2-1.7 1.2-.8 0-1.4-.3-1.8-.9M8 4v1.1M8 10.9V12"/></svg>',
+    hash: '<svg viewBox="0 0 16 16"><path d="M6.2 2.5l-1.4 11M11.2 2.5l-1.4 11M3 6h10.5M2.5 10H13"/></svg>',
+    layers: '<svg viewBox="0 0 16 16"><path d="M8 2l6 3-6 3-6-3z"/><path d="M2 8l6 3 6-3M2 11l6 3 6-3"/></svg>',
+    hook: '<svg viewBox="0 0 16 16"><circle cx="9.5" cy="3" r="1.3"/><path d="M9.5 4.3v5.2a3 3 0 0 1-6 0V8"/><path d="M2.2 9.3L3.5 8l1.3 1.3"/></svg>',
+    diff: '<svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M8 6v3M6.5 7.5h3M6.5 11.5h3"/></svg>',
+    terminal: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6l2 2-2 2M8.5 10.5h3"/></svg>',
+    // One icon per action, every section: stop (not ×, which closes or removes), power (turn on / off), signal (test or
+    // check a connection; refresh only reloads), puzzle (plugins), bot (subagents), sort / sortDown (table headers).
+    stop: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>',
+    power: '<svg viewBox="0 0 16 16"><path d="M8 2v5.5"/><path d="M4.8 4.3a5 5 0 1 0 6.4 0"/></svg>',
+    signal: '<svg viewBox="0 0 16 16"><path d="M8 12.8h.01"/><path d="M5.6 10.4a3.4 3.4 0 0 1 4.8 0M3.4 8.2a6.5 6.5 0 0 1 9.2 0M1.4 5.9a9.4 9.4 0 0 1 13.2 0"/></svg>',
+    puzzle: '<svg viewBox="0 0 16 16"><path d="M2.5 5.5h2.6a1.6 1.6 0 1 1 3.2 0h2.6v2.6a1.6 1.6 0 1 1 0 3.2v2.6H2.5z"/></svg>',
+    bot: '<svg viewBox="0 0 16 16"><rect x="2.5" y="5" width="11" height="8.5" rx="2"/><path d="M8 2.5V5M6 9h.01M10 9h.01M1 9v1.5M15 9v1.5"/></svg>',
+    sort: '<svg viewBox="0 0 16 16"><path d="M5 6.5L8 3.5l3 3M5 9.5l3 3 3-3"/></svg>',
+    sortDown: '<svg viewBox="0 0 16 16"><path d="M8 3v10M4.5 9.5L8 13l3.5-3.5"/></svg>',
   };
   const SECTIONS = [
     ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['marketplace', 'Marketplace', I.download], ['customize', 'Customize', I.scale], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
@@ -389,9 +407,9 @@
   const vendorMark = (vendor, fallback) => markSpan(VENDORS[String(vendor || '').toLowerCase()] || null, fallback || vendor);
   const APPROVAL = [['ask', 'Ask'], ['always', 'Allow'], ['never', 'Block']];
   const APPROVAL_PRESETS = {
-    safe: { title: 'Careful', desc: 'Ask before every command, edit, delete, network call and MCP tool.', v: { terminal: 'ask', write: 'ask', delete: 'ask', network: 'ask', mcp: 'ask' } },
-    balanced: { title: 'Balanced', desc: 'Edits, web and MCP tools are allowed; ask for terminal commands and deletes. (Default)', v: { terminal: 'ask', write: 'always', delete: 'ask', network: 'always', mcp: 'always' } },
-    autonomous: { title: 'Autonomous', desc: 'Let the agent run commands and edit freely; only deletes need approval.', v: { terminal: 'always', write: 'always', delete: 'ask', network: 'always', mcp: 'always' } },
+    safe: { title: 'Careful', icon: I.lock, desc: 'Ask before every command, edit, delete, network call and MCP tool.', v: { terminal: 'ask', write: 'ask', delete: 'ask', network: 'ask', mcp: 'ask' } },
+    balanced: { title: 'Balanced', icon: I.scale, desc: 'Edits, web and MCP tools are allowed; ask for terminal commands and deletes. (Default)', v: { terminal: 'ask', write: 'always', delete: 'ask', network: 'always', mcp: 'always' } },
+    autonomous: { title: 'Autonomous', icon: I.rocket, desc: 'Let the agent run commands and edit freely; only deletes need approval.', v: { terminal: 'always', write: 'always', delete: 'ask', network: 'always', mcp: 'always' } },
   };
 
   const state = { page: 'settings', section: 'providers', scope: 'user', data: null, probe: null, tests: {}, expanded: null, busy: false, setup: { step: 0, model: '', approvals: 'balanced', inline: false, providers: null }, models: null, modelsRequested: false, jobs: [], cat: { filter: 'fits', q: '', open: {} }, installTarget: {}, runtimes: null, starter: null,
@@ -455,6 +473,14 @@
     t.onmouseenter = hold; t.onmouseleave = resume; t.addEventListener('focusin', hold); t.addEventListener('focusout', () => setTimeout(resume, 0));
     document.getElementById('toasts').appendChild(t); run();
   }
+  /** An empty state: the section's icon over (or, in a `p`, beside) the sentence that says what to do next. */
+  const emptyEl = (icon, html, tag = 'div') => el(tag, 'empty has-ic', `<span class="empty-ic" aria-hidden="true">${icon}</span><span>${html}</span>`);
+  /** Copy feedback on the button itself: its icon turns into a check for a moment. */
+  function copied(b) {
+    const ic = b && b.querySelector('svg'); if (!ic || b.classList.contains('copied')) { return; }
+    const was = ic.outerHTML; ic.outerHTML = I.check; b.classList.add('copied');
+    setTimeout(() => { const now = b.querySelector('svg'); if (now) { now.outerHTML = was; } b.classList.remove('copied'); }, 1200);
+  }
   const S = (key) => (state.data && state.data.settings[key]) || { value: undefined, default: undefined, scope: 'default' };
   const val = (key) => S(key).value;
   /** The value stored in the selected scope (not the merged one), so an edit never copies the other scope's value into it. */
@@ -492,10 +518,20 @@
     state.pendingSave = Date.now();
     post({ type: 'set', key, value, scope: state.scope, id });
   }
-  /** Brief "Saved" acknowledgement in the header after the host confirmed a write. */
-  function flashSaved() {
-    const t = app.querySelector('.top .saved'); if (!t) { return; }
-    t.classList.add('show'); clearTimeout(flashSaved.timer); flashSaved.timer = setTimeout(() => t.classList.remove('show'), 1400);
+  /** Brief "Saved" acknowledgement in the header after the host confirmed a write, plus a small tick after the label of
+   *  the field that changed. A field rebuilt meanwhile (the state push that follows) gets the tick back, mid-fade. */
+  const SAVED_MS = 1600; const savedAt = {};
+  const savedTick = (key) => { const ago = Date.now() - (savedAt[key] || 0); return ago < SAVED_MS ? `<span class="saved-tick" role="img" aria-label="Saved" style="animation-delay:-${ago}ms">${I.check}</span>` : ''; };
+  function flashSaved(key) {
+    const t = app.querySelector('.top .saved');
+    if (t) { t.classList.add('show'); clearTimeout(flashSaved.timer); flashSaved.timer = setTimeout(() => t.classList.remove('show'), 1400); }
+    if (!key) { return; }
+    savedAt[key] = Date.now();
+    for (const f of app.querySelectorAll('.field[data-deps]')) {
+      const lbl = f.dataset.deps === key && f.querySelector(':scope > div > .lbl'); if (!lbl) { continue; }
+      const old = lbl.querySelector('.saved-tick'); if (old) { old.remove(); }
+      lbl.insertAdjacentHTML('beforeend', savedTick(key));
+    }
   }
   /** Resets the scope that defines the value in effect, whichever scope is selected. */
   function reset(key) { const id = ++saveSeq; pendingSaves.set(id, { key, reset: true }); state.pendingSave = Date.now(); post({ type: 'reset', key, scope: S(key).scope === 'workspace' ? 'workspace' : 'user', id }); }
@@ -503,7 +539,7 @@
     const p = pendingSaves.get(m.id); pendingSaves.delete(m.id);
     if (!pendingSaves.size) { state.pendingSave = 0; }
     if (m.ok) {
-      flashSaved();
+      flashSaved(p && p.key);
       // Switching tuning on or off changes what the dashboard's Model tuning card can show.
       if (p && p.key === 'models.autoTune' && state.page === 'settings' && state.section === 'dashboard') { requestDashboard(); }
       if (p && !p.reset && p.scope === 'user' && !USER_ONLY(p.key) && S(p.key).workspaceValue !== undefined) { toast(`Saved to User settings, but this workspace overrides ${p.key} — switch to Workspace to change the value in effect`, 'warn'); }
@@ -560,7 +596,7 @@
     // refreshes just that element instead of the whole page (see refreshComponents).
     f.dataset.deps = key;
     f._rebuild = () => field(key, label, desc, kind, opts);
-    f.innerHTML = `<div><div class="lbl">${esc(label)}${opts.badges || ''}${scopeBadge(key)}${resetBtn(key)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div><div class="ctl"></div>`;
+    f.innerHTML = `<div><div class="lbl">${esc(label)}${opts.badges || ''}${scopeBadge(key)}${resetBtn(key)}${savedTick(key)}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div><div class="ctl"></div>`;
     const ctl = f.querySelector('.ctl');
     // Where the policy decides the value (locked, or held at an approval floor), show what applies, not what is stored.
     const v = effVal(key);
@@ -586,7 +622,7 @@
       // Arrays and objects without a form here: how many entries, and the key opened in settings.json (opts.unit names one entry).
       const n = Array.isArray(v) ? v.length : v && typeof v === 'object' ? Object.keys(v).length : 0;
       const ws = state.scope === 'workspace';
-      const b = el('button', 'btn sm', `${I.external}Edit in settings.json`);
+      const b = el('button', 'btn sm', `${I.edit}Edit in settings.json`);
       b.title = `Open ${ws ? 'the workspace' : 'your User'} settings.json at localpilot.${key}`;
       b.onclick = () => post({ type: 'command', id: ws ? 'workbench.action.openWorkspaceSettingsFile' : 'workbench.action.openSettingsJson', args: ws ? undefined : [{ revealSetting: { key: `localpilot.${key}`, edit: true } }] });
       const r = el('div', 'row json-row'); r.append(el('span', 'muted small', n ? plural(n, opts.unit || 'entry') : 'None set'), b); ctl.appendChild(r);
@@ -861,6 +897,8 @@
    */
   let renderedSection = null;
   let renderedSetupStep = -1;
+  /** The section that last faded in: a state push re-renders the same section in place, without fading it again. */
+  let enteredSection = '';
   function render() {
     if (!state.data) { return; }
     // Rebuilding collapses the document and drops the scroll position; put it back once the page is rebuilt — unless
@@ -971,7 +1009,7 @@
     side.onscroll = () => updateNavFades(side);
     const navOrder = [...NAV_HOME, ...NAV_GROUPS.flatMap((g) => g.items)].map((id) => byId[id]).filter(Boolean);
     const navMore = moreMenu(navOrder.map(([id, label, icon]) => [icon, label, () => { const a = side.querySelector(`[data-sec="${id}"]`); if (a) { go(a); } }]), 'navmore', {
-      html: '⋯', label: 'All sections', floating: true,
+      html: I.more, label: 'All sections', floating: true,
       onOpen: (menu) => {
         menu.querySelectorAll('button').forEach((b, i) => { const on = navOrder[i][0] === state.section; b.classList.toggle('on', on); if (on) { b.setAttribute('aria-current', 'page'); } else { b.removeAttribute('aria-current'); } });
         const cur = menu.querySelector('button.on'); if (cur) { cur.focus({ preventScroll: true }); cur.scrollIntoView({ block: 'nearest' }); }
@@ -1056,7 +1094,7 @@
     const d = state.data;
     app.querySelectorAll('.top .scope button').forEach((b) => {
       b.classList.toggle('on', state.scope === b.dataset.s);
-      if (b.dataset.s === 'workspace') { b.disabled = !d.hasWorkspace; b.title = d.hasWorkspace ? 'Only this folder (.vscode/settings.json) — wins over User' : 'Open a folder to edit workspace settings'; } else { b.title = 'All folders'; }
+      if (b.dataset.s === 'workspace') { b.disabled = !d.hasWorkspace; b.title = d.hasWorkspace ? 'Workspace settings: only this folder (.vscode/settings.json), wins over User' : 'Workspace settings: open a folder to edit them'; } else { b.title = 'User settings: every folder'; }
     });
     const sc = app.querySelector('.top .scope'); if (sc && sc._radioSync) { sc._radioSync(); }
     app.dataset.scope = state.scope;
@@ -1073,6 +1111,7 @@
   function renderSection() {
     if (state.section !== 'dashboard' && state.dash.timer) { stopDashboardTimer(); }
     const sec = el('section', 'sec');
+    if (enteredSection !== state.section) { sec.classList.add('enter'); enteredSection = state.section; }
     ({ providers: secProviders, models: secModels, gallery: secGallery, marketplace: secMarketplace, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, continuity: secContinuity, secrets: secSecrets, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, shortcuts: secShortcuts, advanced: secAdvanced }[state.section] || secProviders)(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
@@ -1113,13 +1152,15 @@
     sec.querySelector('h1').insertAdjacentHTML('beforeend', scopeBadge('providers'));
     if (state.scope === 'user' && S('providers').workspaceValue !== undefined) {
       const note = el('div', 'empty', 'This workspace’s <code>.vscode/settings.json</code> defines its own provider list, which replaces the User list shown here. ');
-      const go = el('button', 'btn sm', 'Edit workspace providers');
+      const go = el('button', 'btn sm', `${I.edit}Edit workspace providers`);
       go.onclick = () => { state.scope = 'workspace'; render(); };
       note.appendChild(go); sec.appendChild(note);
     }
     const list = providersList();
     const bar = el('div', 'btnrow');
-    bar.innerHTML = `<button class="btn primary" id="probe">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check all connections</button><button class="btn" data-cmd="localpilot.refreshModels">${I.cpu}Refresh model list</button><span class="spacer"></span><span class="muted small">${plural(enabledModels().length, 'model')} available</span>`;
+    const probeLbl = '<span class="l-long">Check all connections</span><span class="l-mid">Check connections</span><span class="l-short">Check all</span>';
+    bar.className = 'btnrow prov-bar';
+    bar.innerHTML = `<button class="btn primary" id="probe" title="Check that every provider answers">${state.busy ? '<span class="spinner"></span>' : I.signal}${probeLbl}</button><button class="btn" data-cmd="localpilot.refreshModels" title="Refresh the model list from every provider">${I.refresh}<span class="l-long">Refresh model list</span><span class="l-mid">Refresh models</span></button><span class="spacer"></span><span class="muted small">${plural(enabledModels().length, 'model')} available</span>`;
     bar.querySelector('#probe').onclick = () => { state.busy = true; state.probedSig = providerSig(list); state.probedAt = Date.now(); render(); post({ type: 'probe' }); };
     sec.appendChild(bar);
     // Configured providers, local first: the split shows at a glance which models keep code on this machine.
@@ -1133,7 +1174,7 @@
       sec.appendChild(org);
     }
     const wrap = el('div', 'prov-list'); wrap.dataset.deps = 'providers';
-    if (!list.length && !orgProv.length) { wrap.appendChild(el('div', 'empty', 'No providers yet. Add one below: Ollama is the quickest local start, a cloud API needs only a key.')); }
+    if (!list.length && !orgProv.length) { wrap.appendChild(emptyEl(I.server, 'No providers yet. Add one below: Ollama is the quickest local start, a cloud API needs only a key.')); }
     const mixed = list.some(isCloud) && list.some((p) => !isCloud(p));
     for (const [cloud, label, hint] of [[false, 'Local', 'code stays on this machine'], [true, 'Cloud', 'prompts and code are sent to the provider']]) {
       const items = list.filter((p) => isCloud(p) === cloud && !orgIds.has(p.id));
@@ -1226,13 +1267,13 @@
     panel.append(blurb, presets);
     add.appendChild(panel);
     const custom = el('div', 'btnrow add-custom');
-    custom.innerHTML = `<span class="muted small">Not listed? Any server with an OpenAI-compatible <code>/v1</code> API works.</span><span class="spacer"></span><button class="btn sm" id="custom">${I.plug}Custom endpoint</button>`;
+    custom.innerHTML = `<span class="muted small">Not listed? Any server with an OpenAI-compatible <code>/v1</code> API works.</span><span class="spacer"></span><button class="btn sm" id="custom">${I.plus}Custom endpoint</button>`;
     custom.querySelector('#custom').onclick = () => addPreset(CUSTOM_PRESET);
     add.appendChild(custom);
     sec.appendChild(add);
     sec.appendChild(el('h2', 'sub', 'Huge MoE models (colibri)'));
     const coli = el('div', 'btnrow');
-    coli.innerHTML = `<span class="muted small">A running colibri is detected automatically. <b>Start</b> installs colibri if needed (clone, engine, a model that fits) and starts it in a terminal.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.stopColibri">${I.x}Stop</button><button class="btn sm primary" data-cmd="localpilot.startColibri">${I.bolt}Start colibri</button>`;
+    coli.innerHTML = `<span class="muted small">A running colibri is detected automatically. <b>Start</b> installs colibri if needed (clone, engine, a model that fits) and starts it in a terminal.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.stopColibri" title="Stop the running colibri server">${I.stop}Stop</button><button class="btn sm primary" data-cmd="localpilot.startColibri" title="Install colibri if needed and start it in a terminal">${I.play}Start colibri</button>`;
     sec.appendChild(card(
       el('div', 'field wide', '<div><div class="desc"><a data-url="https://github.com/JustVugg/colibri">colibri</a> runs very large mixture-of-experts models (GLM-5.2, DeepSeek V4 Flash, Qwen3-Coder-30B…) by keeping the dense part in RAM and streaming experts from disk.</div></div>'),
       field('colibri.path', 'colibri folder', 'A checkout (with <code>c/coli</code>) or an unpacked release. Empty = <code>coli</code> on PATH, then <code>~/colibri</code>; Start colibri offers to install it.', 'text', { placeholder: '~/colibri', wide: true }),
@@ -1256,7 +1297,7 @@
     const stale = !state.probe || sig !== state.probedSig || Date.now() - (state.probedAt || 0) > 60_000;
     if (list.length && stale && !state.busy) {
       state.probedSig = sig; state.probedAt = Date.now(); state.busy = true;
-      bar.querySelector('#probe').innerHTML = '<span class="spinner"></span>Check all connections';
+      bar.querySelector('#probe').innerHTML = `<span class="spinner"></span>${probeLbl}`;
       for (const d of sec.querySelectorAll('.prov:not(.off) .dot:not(.ok):not(.err)')) { d.className = 'dot busy'; }
       post({ type: 'probe' });
     }
@@ -1436,7 +1477,7 @@
     const c = el('div', 'prov managed');
     c.dataset.prov = p.id;
     const badges = `${ks.warn ? `<span class="badge warn" title="Requests are rejected until the key is set">${esc(ks.warn)}</span>` : h ? healthBadge(h) : n ? `<span class="badge">${esc(n)}</span>` : ''}${lockIcon('Endpoint, headers and API version are set by your organization')}`;
-    c.innerHTML = `<div class="prov-head"><span class="dot ${ks.warn ? 'err' : status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b title="${esc(p.displayName || p.id)}">${esc(p.displayName || p.id)}</b><span title="${esc(p.baseUrl)}">${esc(hostOfUrl(p.baseUrl) || p.baseUrl)} · ${API_LABEL[p.type] || 'OpenAI API'}</span></div><div class="prov-meta">${badges}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+    c.innerHTML = `<div class="prov-head"><span class="dot ${ks.warn ? 'warn' : status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b title="${esc(p.displayName || p.id)}">${esc(p.displayName || p.id)}</b><span title="${esc(p.baseUrl)}">${esc(hostOfUrl(p.baseUrl) || p.baseUrl)} · ${API_LABEL[p.type] || 'OpenAI API'}</span></div><div class="prov-meta">${badges}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
     disclosure(c.querySelector('.prov-head'), open, `${p.displayName || p.id} settings`, () => { state.expanded = open ? null : p.id; render(); });
     if (!open) { return c; }
     const body = el('div', 'prov-body');
@@ -1458,7 +1499,7 @@
     const commitKey = () => { const v = keyIn.value.trim(); if (stored && !v) { return; } if ((key || '') !== v) { saveKey(v); } };
     keyIn.onchange = commitKey; keyIn.onblur = commitKey;
     const keyCtl = el('div', 'btnrow'); keyCtl.style.margin = '0'; keyCtl.appendChild(keyIn);
-    if (key) { const forget = el('button', 'btn sm', 'Remove'); forget.title = 'Remove your API key for this provider'; forget.onclick = () => saveKey(''); keyCtl.appendChild(forget); }
+    if (key) { const forget = el('button', 'btn sm', `${I.trash}Remove`); forget.title = 'Remove your API key for this provider'; forget.onclick = () => saveKey(''); keyCtl.appendChild(forget); }
     const envBtn = keyEnvButton(p, key); if (envBtn) { keyCtl.appendChild(envBtn); }
     const keyRow = el('div', 'field'); keyRow.innerHTML = `<div><div class="lbl">Your API key</div><div class="desc">${ks.note ? `<b>${ks.note}</b> ` : ''}Kept in LocalPilot's encrypted secret store, which the <code>localpilot</code> CLI shares (Data &amp; system → Secrets).</div></div>`;
     const kc = el('div', 'ctl'); kc.appendChild(keyCtl); keyRow.appendChild(kc);
@@ -1468,7 +1509,7 @@
     if (p.headers && Object.keys(p.headers).length) { body.appendChild(row('Headers', 'Sent with every request; values are not shown.', ro(Object.keys(p.headers).join(', ')))); }
     if (p.apiVersion) { body.appendChild(row('Azure api-version', '', ro(p.apiVersion))); }
     const foot = el('div', 'prov-foot');
-    foot.innerHTML = `<button class="btn primary" id="test">${I.bolt}Test connection</button><span class="spacer"></span>`;
+    foot.innerHTML = `<button class="btn primary" id="test">${I.signal}Test connection</button><span class="spacer"></span>`;
     foot.querySelector('#test').onclick = () => { state.tests[p.id] = null; const d = c.querySelector('.dot'); d.className = 'dot busy'; post({ type: 'test', provider: { ...p, apiKey: key } }); };
     body.appendChild(foot);
     if (probe) { body.appendChild(el('div', `prov-result ${probe.ok ? 'ok' : 'err'}`, probe.ok ? `${I.check} Connected in ${probe.latencyMs} ms` : `${I.x} ${esc(probe.error || 'Unreachable')}`)); }
@@ -1497,7 +1538,7 @@
       p.enabled === false ? '<span class="badge">disabled</span>' : '',
       providerPolicyBlock(p) ? `<span class="badge err" title="${esc(providerPolicyBlock(p))}">blocked by policy</span>${lockIcon(providerPolicyBlock(p))}` : '',
     ].join('');
-    c.innerHTML = `<div class="prov-head"><span class="dot ${ks.warn && p.enabled !== false ? 'err' : status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b title="${esc(p.displayName || p.id)}">${esc(p.displayName || p.id)}</b><span title="${esc(p.baseUrl)}">${esc(where)} · ${API_LABEL[p.type] || 'OpenAI API'}</span></div><div class="prov-meta">${badges}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
+    c.innerHTML = `<div class="prov-head"><span class="dot ${ks.warn && p.enabled !== false ? 'warn' : status}"></span>${brandMark(p, p.displayName || p.id)}<div class="prov-title"><b title="${esc(p.displayName || p.id)}">${esc(p.displayName || p.id)}</b><span title="${esc(p.baseUrl)}">${esc(where)} · ${API_LABEL[p.type] || 'OpenAI API'}</span></div><div class="prov-meta">${badges}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
     disclosure(c.querySelector('.prov-head'), open, `${p.displayName || p.id} settings`, () => { state.expanded = open ? null : p.id; render(); });
     if (!open) { return c; }
     const body = el('div', 'prov-body');
@@ -1527,7 +1568,7 @@
     const commitKey = () => { const v = keyIn.value.trim(); if (stored && !v) { return; } if ((p.apiKey || '') !== v) { upd({ apiKey: v || undefined }); } };
     keyIn.onchange = commitKey; keyIn.onblur = commitKey;
     const keyCtl = el('div', 'btnrow'); keyCtl.style.margin = '0'; keyCtl.appendChild(keyIn);
-    if (p.apiKey) { const forget = el('button', 'btn sm', 'Remove'); forget.title = 'Remove this provider\'s API key'; forget.onclick = () => upd({ apiKey: undefined }); keyCtl.appendChild(forget); }
+    if (p.apiKey) { const forget = el('button', 'btn sm', `${I.trash}Remove`); forget.title = 'Remove this provider\'s API key'; forget.onclick = () => upd({ apiKey: undefined }); keyCtl.appendChild(forget); }
     if (!lm) { const envBtn = keyEnvButton(p, p.apiKey); if (envBtn) { keyCtl.appendChild(envBtn); } }
     const pr = presetOf(p);
     const getKey = pr && pr.keyUrl ? ` <a data-url="${esc(pr.keyUrl)}">${pr.group === 'gateway' ? 'Setup guide' : 'Get an API key'} ↗</a>` : '';
@@ -1567,7 +1608,7 @@
     const foot = el('div', 'prov-foot');
     // Gateways LocalPilot can install and start (OmniRoute, LiteLLM) get a Start button next to Test connection.
     const gw = pr && pr.group === 'gateway' ? pr.key : '';
-    foot.innerHTML = `<button class="btn primary" id="test">${I.bolt}Test connection</button>${gw ? `<button class="btn" data-cmd="localpilot.startGateway" data-args='${JSON.stringify([gw])}' title="Install it if needed, start it on 127.0.0.1 and check what it can route to">${I.play || I.bolt}Start ${esc(pr.label)}</button>` : ''}<span class="spacer"></span><button class="btn danger" id="rm">${I.trash}Remove</button>`;
+    foot.innerHTML = `<button class="btn primary" id="test">${I.signal}Test connection</button>${gw ? `<button class="btn" data-cmd="localpilot.startGateway" data-args='${JSON.stringify([gw])}' title="Install it if needed, start it on 127.0.0.1 and check what it can route to">${I.play || I.bolt}Start ${esc(pr.label)}</button>` : ''}<span class="spacer"></span><button class="btn danger" id="rm">${I.trash}Remove</button>`;
     foot.querySelector('#test').onclick = () => { state.tests[p.id] = null; const d = c.querySelector('.dot'); d.className = 'dot busy'; post({ type: 'test', provider: p }); };
     foot.querySelector('#rm').onclick = () => { saveProviders(list.filter((o) => o !== p)); state.expanded = null; render(); };
     body.appendChild(foot);
@@ -1641,8 +1682,8 @@
     const rts = el('div', 'rts');
     for (const r of d.runtimes) {
       const row = el('div', 'rt');
-      const status = r.running ? '<span class="badge ok">running</span>' : r.installed ? '<span class="badge warn">installed</span>' : '<span class="badge">not found</span>';
-      row.innerHTML = `<span class="dot ${r.running ? 'ok' : r.installed ? 'warn' : ''}"></span><div class="t"><b>${esc(r.label)} ${status}</b><span title="${esc(r.hint || r.baseUrl || '')}">${esc(r.running ? r.baseUrl : r.hint || '')}</span></div>`;
+      const status = r.running ? '<span class="badge">running</span>' : r.installed ? '<span class="badge warn">installed</span>' : '<span class="badge">not found</span>';
+      row.innerHTML = `<span class="dot ${r.running ? 'ok' : r.installed ? 'warn' : ''}"></span><div class="t"><b>${esc(r.label)} ${status}</b>${r.running && r.baseUrl ? `<button class="copy-txt" data-copy="${esc(r.baseUrl)}" title="Copy ${esc(r.baseUrl)}" aria-label="Copy endpoint ${esc(r.baseUrl)}">${esc(r.baseUrl)}${I.copy}</button>` : `<span title="${esc(r.hint || r.baseUrl || '')}">${esc(r.hint || '')}</span>`}</div>`;
       if (!r.running && r.installed && r.target === 'ollama') {
         const b = el('button', 'btn sm', `${I.play}Start`);
         b.disabled = !!activeJob('start');
@@ -1668,7 +1709,7 @@
     const jobs = state.jobs.filter((j) => j.kind !== 'setup' || j.status === 'running');
     if (jobs.length) {
       const h = el('h2', 'sub', `Activity${jobs.some((j) => j.status === 'running') ? '<span class="spinner"></span>' : ''}`);
-      const clr = el('button', 'btn ghost sm act', 'Clear finished'); clr.onclick = () => post({ type: 'clearJobs' });
+      const clr = el('button', 'btn ghost sm act', `${I.x}Clear finished`); clr.onclick = () => post({ type: 'clearJobs' });
       if (jobs.some((j) => j.status !== 'running')) { h.appendChild(clr); }
       sec.appendChild(h);
       const card = el('div', 'card');
@@ -1680,7 +1721,7 @@
           const grp = el('div', 'prog-grp');
           grp.appendChild(progressBar(j));
           grp.appendChild(pctEl(j));
-          const c = el('button', 'btn ghost sm', I.x); c.title = 'Cancel'; c.onclick = () => post({ type: 'cancelJob', id: j.id });
+          const c = el('button', 'btn ghost sm', I.x); c.title = 'Cancel'; c.setAttribute('aria-label', `Cancel ${j.model}`); c.onclick = () => post({ type: 'cancelJob', id: j.id });
           grp.appendChild(c);
           row.appendChild(grp);
         }
@@ -1692,21 +1733,21 @@
     // --- installed
     sec.appendChild(el('h2', 'sub', `Installed models<span class="count">${d.installed.filter((m) => !m.disabled).length} enabled · ${d.installed.length} total</span>`));
     const installedCard = () => {
-    const inst = el('div', 'card');
+    const inst = el('div', 'card inst-card');
     if (!anyModels) {
-      inst.appendChild(el('div', 'empty', running.length ? 'The server is running but has no models yet. Use <b>Set up automatically</b> above or install one from the catalog below.' : 'No model server is running. <b>Set up automatically</b> starts or installs Ollama and downloads a starter model sized for this machine.'));
+      inst.appendChild(emptyEl(I.cpu, running.length ? 'The server is running but has no models yet. Use <b>Set up automatically</b> above or install one from the catalog below.' : 'No model server is running. <b>Set up automatically</b> starts or installs Ollama and downloads a starter model sized for this machine.'));
     }
     const def = val('defaultModel');
     const sorted = [...d.installed].sort((a, b) => (a.disabled ? 1 : 0) - (b.disabled ? 1 : 0) || a.providerId.localeCompare(b.providerId) || a.name.localeCompare(b.name));
     for (const m of sorted) {
-      const row = el('div', `mrow ${m.disabled ? 'off' : ''}`);
+      const row = el('div', `mrow inst ${m.disabled ? 'off' : ''}`);
       const tg = switchBtn(!m.disabled, `Enable model ${m.name}`, (on) => post({ type: 'toggleModel', id: m.id, enabled: on })); tg.title = m.disabled ? 'Enable' : 'Disable (hidden from pickers and routing; stays installed)';
       row.appendChild(tg);
       row.insertAdjacentHTML('beforeend', vendorMark((m.catalog && m.catalog.vendor) || vendorFromModelId(m.modelId || m.name), m.name));
       const caps = [m.supportsTools ? 'tools' : 'prompt tools', m.supportsVision ? 'vision' : '', m.supportsFim ? 'FIM' : ''].filter(Boolean).join(' · ');
       // Cloud models: say so where the model is listed, since picking one sends code off the machine.
       if (m.remote) { row.classList.add('cloud'); }
-      const t = el('div', 't', `<b title="${esc(m.id)}">${esc(m.name)}</b><span>${esc(m.providerId)} · ${Math.round(m.contextWindow / 1024)}k context${m.gb ? ` · ${esc(gbText(m.gb))}` : ''}${m.parameterSize ? ` · ${esc(m.parameterSize)}` : ''} · ${esc(caps)}${m.catalog ? ` · ${esc(m.catalog.name)} ${esc(m.catalog.tag)}` : ''}${priceText(m) ? ` · <span class="price" title="${esc(priceTitle(m))}">${esc(priceText(m))}</span>` : ''}</span>`);
+      const t = el('div', 't', `<b><span class="nm" title="${esc(m.id)}">${esc(m.name).replace(/([:/])/g, '$1<wbr>')}</span><button class="copy-id" data-copy="${esc(m.id)}" title="Copy model id ${esc(m.id)}" aria-label="Copy model id ${esc(m.id)}">${I.copy}</button></b><span>${esc(m.providerId)} · ${Math.round(m.contextWindow / 1024)}k context${m.gb ? ` · ${esc(gbText(m.gb))}` : ''}${m.parameterSize ? ` · ${esc(m.parameterSize)}` : ''} · ${esc(caps)}${m.catalog ? ` · ${esc(m.catalog.name)} ${esc(m.catalog.tag)}` : ''}${priceText(m) ? ` · <span class="price" title="${esc(priceTitle(m))}">${esc(priceText(m))}</span>` : ''}</span>`);
       row.appendChild(t);
       const right = el('div', 'mrow-right');
       const tags = el('div', 'tags');
@@ -1719,11 +1760,12 @@
       for (const r of m.autoRoles) { if (r !== 'agent' && !tags.innerHTML.includes(`>${ROLE_LABEL[r]}<`)) { tags.innerHTML += `<span class="badge" title="Routing picks this model for ${ROLE_LABEL[r]} unless you choose one">auto · ${ROLE_LABEL[r]}</span>`; } }
       // Installed models normally fit; only say so when they don't (tight / too big).
       if (m.fit !== 'ok') { tags.innerHTML += fitBadge(m.fit); }
-      right.appendChild(tags);
+      // Badges sit under the name and details, so the actions keep the first line.
+      t.appendChild(tags);
       // Two fixed slots (Set default, Delete), empty when they do not apply, so every row's buttons line up.
       const acts = el('div', 'acts mdl-acts');
       if (!m.disabled && m.id !== def) {
-        const b = el('button', 'btn ghost sm', 'Set default'); b.title = 'Use for new chats'; b.onclick = () => set('defaultModel', m.id);
+        const b = el('button', 'btn ghost sm set-def', `${I.star}<span class="lbl">Set default</span>`); b.title = 'Set as default: used for new chats'; b.setAttribute('aria-label', `Set ${m.name} as the default model`); b.onclick = () => set('defaultModel', m.id);
         acts.appendChild(b);
       } else {
         acts.appendChild(el('span', 'slot', ''));
@@ -1732,7 +1774,7 @@
         acts.appendChild(el('span', 'slot', ''));
       } else {
         const rj = activeJob('remove', m.removable, m.modelId);
-        const b = el('button', 'btn ghost sm danger', rj ? '<span class="spinner"></span>' : I.trash); b.title = `Delete from ${TARGET_LABEL[m.removable]}`; b.disabled = !!rj;
+        const b = el('button', 'btn ghost sm danger', rj ? '<span class="spinner"></span>' : I.trash); b.title = `Delete from ${TARGET_LABEL[m.removable]}`; b.setAttribute('aria-label', `Delete ${m.name} from ${TARGET_LABEL[m.removable]}`); b.disabled = !!rj;
         b.onclick = () => post({ type: 'removeModel', target: m.removable, model: m.modelId, providerId: m.providerId, name: m.name });
         acts.appendChild(b);
       }
@@ -2174,7 +2216,7 @@
       for (const r of g.rows || []) {
         const li = el('li', 'sc-row', `<span class="sc-act"><span>${esc(r.action)}</span>${r.when ? `<span class="muted small">${esc(r.when)}</span>` : ''}</span><span class="sc-key">${kbd(state.keysOs === 'mac' ? r.mac : r.win)}</span>`);
         if (g.customizable && r.command) {
-          const b = el('button', 'btn sm ghost sc-change', 'Change…'); b.title = `Change the key for “${r.action}” in VS Code's Keyboard Shortcuts editor`; b.setAttribute('aria-label', `Change the key for ${r.action}`);
+          const b = el('button', 'btn sm ghost sc-change', `${I.keyboard}Change…`); b.title = `Change the key for “${r.action}” in VS Code's Keyboard Shortcuts editor`; b.setAttribute('aria-label', `Change the key for ${r.action}`);
           b.onclick = () => post({ type: 'openKeybindings', query: r.command });
           li.appendChild(b);
         }
@@ -2198,7 +2240,7 @@
       const box = el('div', 'card rules-card');
       box.appendChild(el('div', 'desc rules-lead', 'Commands you always allow, always ask about, or block, saved from approval cards (<b>Always allow “npm test”</b>) or added here. Block wins over Ask, Ask over Allow; destructive commands you allow still run without asking, so keep Allow rules narrow. <code>npm test</code> matches exactly, <code>npm run test:*</code> by prefix, <code>git log *</code> with wildcards.'));
       for (const k of v.grants || []) {
-        const g = el('div', 'rule-grant', `<span class="badge ok">Always</span><span class="rg-t">${esc(GRANT_NAME[k] || k)} in this workspace</span><button class="btn sm ghost">Ask again</button>`);
+        const g = el('div', 'rule-grant', `<span class="badge ok">Always</span><span class="rg-t">${esc(GRANT_NAME[k] || k)} in this workspace</span><button class="btn sm ghost">${I.undo}Ask again</button>`);
         g.querySelector('button').title = `Stop allowing ${(GRANT_NAME[k] || k).toLowerCase()} without asking in this workspace`;
         g.querySelector('button').onclick = () => post({ type: 'revokeWorkspaceGrant', kind: k });
         box.appendChild(g);
@@ -2267,7 +2309,7 @@
       const presets = el('div', 'approval-presets');
       for (const [k, p] of Object.entries(APPROVAL_PRESETS)) {
         const on = Object.keys(p.v).every((x) => p.v[x] === cur[x]);
-        const b = el('button', `ap ${on ? 'on' : ''}`, `<b>${esc(p.title)}</b><span>${esc(p.desc)}</span>`);
+        const b = el('button', `ap ${on ? 'on' : ''}`, `<b><span class="ap-ic" aria-hidden="true">${p.icon}</span>${esc(p.title)}</b><span>${esc(p.desc)}</span>`);
         // A value the organisation does not allow is left as it is; the rest of the preset still applies.
         b.onclick = () => { for (const [x, v] of Object.entries(p.v)) { if (cur[x] !== v && !policyRefuses(`approvals.${x}`, v)) { set(`approvals.${x}`, v); } } };
         presets.appendChild(b);
@@ -2293,7 +2335,7 @@
       const own = Array.isArray(ownValue('disabledTools')) ? ownValue('disabledTools') : [];
       const merged = Array.isArray(val('disabledTools')) ? val('disabledTools') : [];
       box.appendChild(el('div', 'desc', `Switched-off tools are never offered to the agent or its subagents. ${tools.filter((t) => t.off).length} of ${tools.length} off. MCP tools are managed per server on the MCP page; globs such as <code>mcp_*</code> or <code>browser_*</code> go in <code>localpilot.disabledTools</code>.`));
-      if (!tools.length) { box.appendChild(el('div', 'empty', 'No tools registered yet.')); }
+      if (!tools.length) { box.appendChild(emptyEl(I.wrench, 'No tools registered yet.')); }
       for (const t of tools) {
         const byName = merged.includes(t.name);
         const locked = t.off && !byName;
@@ -2543,7 +2585,7 @@
     const names = (state.data && state.data.terminalProfiles) || [];
     const f = field('terminal.profile', 'Shell for agent commands', 'Used by the <b>LocalPilot Agent</b> terminal, background commands and the hidden fallback process. Profiles come from <code>terminal.integrated.profiles</code> for this OS.', 'select', { options: [['default', 'VS Code default shell'], ...names.filter((n) => n !== 'default').map((n) => [n, n])] });
     const ctl = f.querySelector('.ctl'); const sel = ctl.querySelector('select');
-    const pick = el('button', 'btn sm', 'Pick…'); pick.dataset.cmd = 'localpilot.selectTerminalProfile'; pick.title = 'Choose from the profiles with their shell paths'; pick.disabled = sel.disabled;
+    const pick = el('button', 'btn sm', `${I.terminal}Pick…`); pick.dataset.cmd = 'localpilot.selectTerminalProfile'; pick.title = 'Choose from the profiles with their shell paths'; pick.disabled = sel.disabled;
     const row = el('div', 'row pick-row'); row.append(sel, pick); ctl.appendChild(row);
     return component(f, ['terminal.profile'], termProfile);
   }
@@ -2607,7 +2649,7 @@
     head(sec, 'Markdown & PDF', 'How LocalPilot\'s Markdown reader and PDF viewer show documents.');
     sec.appendChild(el('h2', 'sub', 'Markdown reader'));
     const md = el('div', 'btnrow');
-    md.innerHTML = `<span class="muted small">Opens the active Markdown file, or asks for one.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMarkdownViewer">${I.file}Open Markdown reader</button>`;
+    md.innerHTML = `<span class="muted small">Opens the active Markdown file, or asks for one.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMarkdownViewer">${I.external}Open Markdown reader</button>`;
     sec.appendChild(card(
       field('markdownViewer.scrollSync', 'Keep reader and source scrolled together', 'Double-click a paragraph in the reader to jump to its source line.', 'toggle'),
       field('markdownViewer.outlineDepth', 'Headings shown in the outline', 'Deepest heading level in the outline and in an inline <code>[[toc]]</code>.', 'seg', { options: [[2, 'H2'], [3, 'H3'], [4, 'H4'], [5, 'H5'], [6, 'H6']] }),
@@ -2617,7 +2659,7 @@
     ));
     sec.appendChild(el('h2', 'sub', 'PDF viewer'));
     const pdf = el('div', 'btnrow');
-    pdf.innerHTML = `<span class="muted small">PDFs also open in this viewer from the Explorer.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openPdf">${I.file}Open a PDF…</button>`;
+    pdf.innerHTML = `<span class="muted small">PDFs also open in this viewer from the Explorer.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openPdf">${I.folder}Open a PDF…</button>`;
     sec.appendChild(card(
       field('pdfViewer.pageColors', 'Page colours', 'Auto darkens pages in dark themes and follows high-contrast themes; Dark also inverts photos.', 'seg', { options: [['auto', 'Auto'], ['original', 'Original'], ['dark', 'Dark'], ['sepia', 'Sepia']] }),
       field('pdfViewer.sidebar', 'Sidebar on open', 'Hidden anyway while the viewer is narrower than 640 px.', 'select', { options: [['auto', 'Auto', 'outline if present, else thumbnails'], ['outline', 'Outline'], ['thumbnails', 'Pages'], ['hidden', 'Hidden']] }),
@@ -2673,12 +2715,12 @@
     if (!v.ok) { return; }
     sec.appendChild(el('h2', 'sub', `Stored <span class="count">${v.rows.length}</span>`));
     if (!v.rows.length) {
-      sec.appendChild(el('p', 'empty', 'Nothing stored yet. Paste an API key into a provider (Providers), or run <code>localpilot providers key &lt;id&gt;</code>.'));
+      sec.appendChild(emptyEl(I.key, 'Nothing stored yet. Paste an API key into a provider on the <button class="inline-link" data-sec="providers">Providers</button> page, or run <code>localpilot providers key &lt;id&gt;</code>.', 'p'));
       return;
     }
     const SRC = { vscode: 'VS Code', cli: 'CLI', 'migrated:vscode': 'moved from VS Code', 'migrated:keys.json': 'moved from keys.json', 'migrated:secrets.json': 'moved from secrets.json' };
     const srcText = (x) => SRC[x] || (/^env:/.test(x || '') ? `copied from $${x.slice(4)}` : x || '—');
-    const t = el('table', 'tbl secrets-tbl', `<thead><tr><th>Name</th><th>Used by</th><th>Source</th><th>Changed</th><th>Last used</th><th class="act"><span class="sr-only">Actions</span></th></tr></thead><tbody>${v.rows.map((r) => `<tr data-name="${esc(r.name)}"><td class="mono" title="${esc(r.name)}">${esc(r.name)}</td><td>${r.usedBy.length ? r.usedBy.map((u) => esc(u)).join('<br>') : '<span class="muted">not referenced</span>'}</td><td class="muted small">${esc(srcText(r.source))}</td><td class="muted small">${r.updatedAt ? fmtAgo(r.updatedAt) : ''}</td><td class="muted small">${r.lastUsedAt ? fmtAgo(r.lastUsedAt) : 'never'}</td><td class="act"><button class="btn sm ghost" data-sact="replace" title="Enter a new value for ${esc(r.name)}">${I.edit}Replace…</button><button class="btn sm ghost danger" data-sact="delete" title="Delete ${esc(r.name)}">${I.trash}Delete</button></td></tr>`).join('')}</tbody>`);
+    const t = el('table', 'tbl secrets-tbl', `<thead><tr><th>Name</th><th>Used by</th><th>Source</th><th>Changed</th><th>Last used</th><th class="act"><span class="sr-only">Actions</span></th></tr></thead><tbody>${v.rows.map((r) => `<tr data-name="${esc(r.name)}"><td class="mono" title="${esc(r.name)}">${esc(r.name)}</td><td>${r.usedBy.length ? r.usedBy.map((u) => esc(u)).join('<br>') : '<span class="muted">not referenced</span>'}</td><td class="muted small">${esc(srcText(r.source))}</td><td class="muted small">${r.updatedAt ? `<span class="nl">changed </span>${fmtAgo(r.updatedAt)}` : ''}</td><td class="muted small"><span class="nl">used </span>${r.lastUsedAt ? fmtAgo(r.lastUsedAt) : 'never'}</td><td class="act"><button class="btn sm ghost" data-sact="replace" title="Enter a new value for ${esc(r.name)}" aria-label="Replace ${esc(r.name)}">${I.edit}<span class="t">Replace…</span></button><button class="btn sm ghost danger" data-sact="delete" title="Delete ${esc(r.name)}" aria-label="Delete ${esc(r.name)}">${I.trash}<span class="t">Delete</span></button></td></tr>`).join('')}</tbody>`);
     t.onclick = (e) => {
       const b = e.target.closest('[data-sact]'); const tr = e.target.closest('tr[data-name]'); if (!b || !tr) { return; }
       post({ type: b.dataset.sact === 'replace' ? 'secretReplace' : 'secretDelete', name: tr.dataset.name });
@@ -2708,7 +2750,7 @@
     // ---- memory notes
     sec.appendChild(el('h2', 'sub', 'Memory notes'));
     const mem = el('div', 'btnrow');
-    mem.innerHTML = `<span class="muted small">${plural(d.memory.project, 'project note')} · ${plural(d.memory.global, 'global note')}</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMemory">${I.book}Open folder</button><button class="btn sm danger" data-cmd="localpilot.clearMemory" ${d.memory.project + d.memory.global ? '' : 'disabled'}>${I.trash}Clear…</button>`;
+    mem.innerHTML = `<span class="muted small">${plural(d.memory.project, 'project note')} · ${plural(d.memory.global, 'global note')}</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.openMemory">${I.folder}Open folder</button><button class="btn sm danger" data-cmd="localpilot.clearMemory" ${d.memory.project + d.memory.global ? '' : 'disabled'}>${I.trash}Clear…</button>`;
     sec.appendChild(card(
       field('memory.enabled', 'Enable memory', 'The agent can <code>memory_save</code> / <code>memory_read</code> notes in <code>.localpilot/memory/</code> (project, commit-able) and in global storage. A compact index is added to every prompt.', 'toggle', { after: mem }),
       memAutoSave(),
@@ -2717,7 +2759,7 @@
       field('memory.taskExpiryDays', 'Keep task memory after the task is done', 'Days. The checklist and notes of a plan or todo list move to Trash this long after every todo is done.', 'number', { min: 1, max: 3650, step: 1 })
     ));
     const mm = el('div', 'btnrow mmgr');
-    mm.innerHTML = `<span class="muted small">Six kinds of memory — project, developer, conversation, task, knowledge and agent — in one place: edit, move between types, keep on this machine, pin, versions, Trash.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.continuity.openMemoryManager">${I.book}Open Memory manager</button>`;
+    mm.innerHTML = `<span class="muted small">Six kinds of memory — project, developer, conversation, task, knowledge and agent — in one place: edit, move between types, keep on this machine, pin, versions, Trash.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.continuity.openMemoryManager">${I.external}Open Memory manager</button>`;
     sec.appendChild(mm);
     const notes = Array.isArray(d.memory.notes) ? d.memory.notes : [];
     if (notes.length) {
@@ -2729,7 +2771,7 @@
       };
       const wrap = el('div', 'card tblwrap'); wrap.appendChild(t); sec.appendChild(wrap);
     } else {
-      sec.appendChild(el('p', 'empty', 'No notes yet. The agent saves notes with <code>memory_save</code> when it learns something worth keeping (conventions, decisions, gotchas).'));
+      sec.appendChild(emptyEl(I.brain, 'No notes yet. The agent saves notes with <code>memory_save</code> when it learns something worth keeping (conventions, decisions, gotchas).', 'p'));
     }
     sec.appendChild(el('p', 'muted small', `Skills and subagents moved to their own page: <a data-sec="skills">Skills &amp; subagents</a>.`));
     sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
@@ -2818,7 +2860,7 @@
       field('continuity.relatedConversations', 'Offer related earlier conversations', 'While you write the first message of a new chat, up to three earlier chats of this project that look related are offered (<b>Related: … · Add</b>). Nothing is added until you click <b>Add</b>.', 'toggle')
     );
     const cca = el('div', 'btnrow');
-    cca.innerHTML = `<span class="muted small">Named sets of files, snippets, notes and earlier chats, attached with <code>#context:name</code>; and what the model saw on each request.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.continuity.openContextLibrary">${I.book}Open Context library</button>`;
+    cca.innerHTML = `<span class="muted small">Named sets of files, snippets, notes and earlier chats, attached with <code>#context:name</code>; and what the model saw on each request.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.continuity.openContextLibrary">${I.external}Open Context library</button>`;
     cc.appendChild(cca);
     body.appendChild(cc);
     // ---- runs and checkpoints (SESSION)
@@ -2827,7 +2869,7 @@
       field('continuity.captureToolOutput', 'Run history keeps of tool output', 'Each agent run keeps what it did, so a run a crash or a closed window cut off shows <b>What ran</b> and the files it changed. This sets how much of each step\'s output is kept with it.', 'select', { options: [['errors', 'Errors only', ''], ['summary', 'First 2 KB of each step (default)', ''], ['full', 'Everything', '']] })
     );
     const rca = el('div', 'btnrow');
-    rca.innerHTML = `<span class="muted small">The checkpoint taken before each agent turn, per project: view the changes since, restore files, the chat or both.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.continuity.openCheckpoints">${I.refresh}Open Checkpoints</button>`;
+    rca.innerHTML = `<span class="muted small">The checkpoint taken before each agent turn, per project: view the changes since, restore files, the chat or both.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.continuity.openCheckpoints">${I.external}Open Checkpoints</button>`;
     rc.appendChild(rca);
     body.appendChild(rc);
     // ---- trash & history
@@ -2930,8 +2972,8 @@
     const waiting = [st.pending ? plural(st.pending, 'change') : '', st.pendingBlobs ? plural(st.pendingBlobs, 'attachment') : ''].filter(Boolean).join(', ');
     const detail = !on ? (st.configured ? 'Set up, but turned off on this device.' : 'Not set up. Choose where to sync, then Set up sync.') : st.state === 'paused' || st.state === 'error' || st.state === 'offline' ? esc(st.message || '') : `${st.lastSync ? `Last sync ${fmtAgo(st.lastSync)}` : 'Not synced yet'}${waiting ? ` · ${esc(waiting)} waiting` : ''}${st.conflicts ? ` · <b>${plural(st.conflicts, 'conflict')}</b>` : ''}`;
     const fix = st.needsPassphrase || st.reason === 'passphrase' || st.reason === 'remote-replaced' ? syncBtn('unlock', 'Enter passphrase…', I.key, { primary: true }) : st.reason === 'auth' && (st.backend === 's3' || st.backend === 'webdav') ? syncBtn('setSecret', 'Update credentials…', I.key, { primary: true }) : '';
-    const acts = on ? `${fix}${syncBtn('now', 'Sync now', I.refresh)}${st.state === 'paused' && st.reason === 'user' ? syncBtn('resume', 'Resume', I.play || I.refresh) : syncBtn('pause', 'Pause', I.pause || I.x, { disabled: st.state === 'paused' })}${syncBtn('openManager', 'Open Sync manager', I.external || I.cloud)}` : `${fix}${syncBtn('setup', st.configured ? 'Turn sync on…' : 'Set up sync…', I.cloud, { primary: true })}`;
-    sc.innerHTML = `<div class="field wide"><div class="sync-line" role="status" aria-live="polite"><span class="sdot ${dot}" aria-hidden="true"></span><b>${esc(SYNC_STATE[st.state] || st.state || '')}</b><span class="muted small">${detail}</span></div></div><div class="btnrow"><span class="muted small">End-to-end encrypted: storage only sees ciphertext. Your passphrase never leaves your devices.</span><span class="spacer"></span>${acts}</div>`;
+    const acts = on ? `${fix}${syncBtn('now', 'Sync now', I.refresh)}${st.state === 'paused' && st.reason === 'user' ? syncBtn('resume', 'Resume', I.play || I.refresh) : syncBtn('pause', 'Pause', I.pause || I.x, { disabled: st.state === 'paused' })}${syncBtn('openManager', 'Open Sync manager', I.external)}` : `${fix}${syncBtn('setup', st.configured ? 'Turn sync on…' : 'Set up sync…', I.cloud, { primary: true })}`;
+    sc.innerHTML = `<div class="field wide"><div class="sync-line" role="status" aria-live="polite"><span class="dot ${dot}" aria-hidden="true"></span><b>${esc(SYNC_STATE[st.state] || st.state || '')}</b><span class="muted small">${detail}</span></div></div><div class="btnrow"><span class="muted small">End-to-end encrypted: storage only sees ciphertext. Your passphrase never leaves your devices.</span><span class="spacer"></span>${acts}</div>`;
     grid.appendChild(sc);
     // ---- storage
     const stc = el('div', 'card sync-storage');
@@ -2939,7 +2981,7 @@
     stc.appendChild(syncBackendFields());
     const t = v.test;
     const tr = el('div', 'btnrow');
-    tr.innerHTML = `<span class="muted small sync-test${t ? (t.ok ? ' ok' : ' err') : ''}" role="status">${t ? `${t.ok ? I.check : I.warn}${esc(t.message)}` : 'Checks the storage and whether it already holds LocalPilot data.'}</span><span class="spacer"></span>${syncBtn('test', 'Test connection', I.plug || I.refresh)}`;
+    tr.innerHTML = `<span class="muted small sync-test${t ? (t.ok ? ' ok' : ' err') : ''}" role="status">${t ? `${t.ok ? I.check : I.warn}${esc(t.message)}` : 'Checks the storage and whether it already holds LocalPilot data.'}</span><span class="spacer"></span>${syncBtn('test', 'Test connection', I.signal)}`;
     stc.appendChild(tr);
     grid.appendChild(stc);
     // ---- what syncs
@@ -2962,7 +3004,7 @@
       grid.appendChild(dc);
       const kc = el('div', 'card sync-keys');
       const kr = el('div', 'btnrow');
-      kr.innerHTML = `<span class="muted small">Change the passphrase (devices keep syncing), rotate the key after removing a device, or start over if the passphrase is lost (deletes the synced copies; this device uploads again).</span><span class="spacer"></span>${syncBtn('changePassphrase', 'Change passphrase…', I.key)}${syncBtn('rotateKey', 'Rotate key…', I.refresh)}${syncBtn('turnOff', 'Turn off sync…', I.x)}${syncBtn('startOver', 'Start over…', I.warn, { danger: true })}`;
+      kr.innerHTML = `<span class="muted small">Change the passphrase (devices keep syncing), rotate the key after removing a device, or start over if the passphrase is lost (deletes the synced copies; this device uploads again).</span><span class="spacer"></span>${syncBtn('changePassphrase', 'Change passphrase…', I.key)}${syncBtn('rotateKey', 'Rotate key…', I.refresh)}${syncBtn('turnOff', 'Turn off sync…', I.power)}${syncBtn('startOver', 'Start over…', I.warn, { danger: true })}`;
       kc.appendChild(kr);
       grid.appendChild(kc);
     }
@@ -3006,7 +3048,7 @@
     sec.appendChild(el('h2', 'sub', `Installed skills<span class="count">${enabledCount} enabled · ${skills.length} total</span>`));
     const inst = el('div', 'card'); inst.dataset.deps = 'skills.disabled';
     if (!skills.length) {
-      inst.appendChild(el('div', 'empty', 'No skills installed. Search the registry below, or create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.'));
+      inst.appendChild(emptyEl(I.book, 'No skills installed. Search the registry below, or create <code>.localpilot/skills/&lt;name&gt;/SKILL.md</code> in your project.'));
     }
     const q = (state.skillFilter || '').toLowerCase();
     if (skills.length > 8) {
@@ -3113,7 +3155,7 @@
     const agents = d.agents || [];
     sec.appendChild(el('h2', 'sub', `Subagents (${agents.length})`));
     if (!agents.length) {
-      sec.appendChild(el('div', 'empty', 'No subagents found. Create <code>.localpilot/agents/&lt;name&gt;.md</code> with a description and system prompt.'));
+      sec.appendChild(emptyEl(I.bot, 'No subagents found. Create <code>.localpilot/agents/&lt;name&gt;.md</code> with a description and system prompt.'));
     } else {
       const t = el('table', 'tbl', `<thead><tr><th>Name</th><th>Description</th><th>Source</th></tr></thead><tbody>${agents.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td>${esc(r.description)}</td><td><span class="badge">${esc(SOURCE_LABEL[r.source] || r.source)}</span></td></tr>`).join('')}</tbody>`);
       sec.appendChild(card(t));
@@ -3130,6 +3172,8 @@
     ['skill', 'Skills', 'Playbooks the agent loads when a request matches. Install more from the registry in <b>Skills &amp; subagents</b>.'],
     ['plugin', 'Plugins', 'Installed plugins (Claude Code format) and what they add. Switching one off writes <code>enabledPlugins</code> in <code>.localpilot/settings.json</code>.'],
   ];
+  /** One icon per kind, the same in Customize, Marketplace and the empty states. */
+  const CUSTOM_ICON = { rule: I.file, command: I.chat, hook: I.hook, skill: I.book, plugin: I.puzzle, agent: I.bot, mcp: I.plug };
   function secCustomize(sec) {
     const c = state.custom || (state.custom = { tab: 'rule', data: null, loading: 0, scope: '' });
     head(sec, 'Customize', 'The rules, commands, hooks, skills and plugins in this workspace and in your home folder: switch them on or off, open, delete or create them.');
@@ -3178,8 +3222,9 @@
       const group = items.filter((i) => i.scope === sc);
       sec.appendChild(el('h2', 'sub', `${title}<span class="count">${group.length}</span>`));
       const box = el('div', 'card');
-      if (!group.length) { box.appendChild(el('div', 'empty', sc === 'workspace' && !d.hasWorkspace ? 'Open a folder to see its items.' : `No ${noun}s here.`)); }
-      for (const it of group) { box.appendChild(customRow(it, d)); }
+      if (!group.length) { box.appendChild(emptyEl(sc === 'workspace' && !d.hasWorkspace ? I.folder : CUSTOM_ICON[kind], sc === 'workspace' && !d.hasWorkspace ? 'Open a folder to see its items.' : `No ${noun}s here.`)); }
+      const anySwitch = group.some((it) => it.editable && !it.fromSettings && (it.kind !== 'hook' || d.canSwitchHooks));
+      for (const it of group) { box.appendChild(customRow(it, { ...d, anySwitch })); }
       sec.appendChild(box);
     }
     if (kind === 'plugin') {
@@ -3197,8 +3242,11 @@
       tg.title = it.disabled ? 'Enable: the agent sees it again' : 'Disable: hidden from the agent, stays on disk';
       tg.onclick = () => { tg.classList.toggle('on'); post({ type: 'customToggle', kind: it.kind, file: it.file, enabled: !!it.disabled }); };
       row.appendChild(tg);
+    } else if (d.anySwitch) {
+      // Keeps the icon and name in the same column as the rows that have a switch.
+      row.appendChild(el('span', 'toggle-slot', ''));
     }
-    row.appendChild(el('span', 'ic brand-mark sk-ic', it.kind === 'hook' ? I.bolt : it.kind === 'command' ? I.chat : it.kind === 'plugin' ? I.plug : I.file));
+    row.appendChild(el('span', 'ic brand-mark sk-ic', CUSTOM_ICON[it.kind] || I.file));
     const sub = it.detail ? `<code>${esc(it.detail)}</code>` : esc(it.description || '');
     row.appendChild(el('div', 't', `<b title="${esc(it.file)}">${esc(it.name)}</b><span>${esc(it.label)}${sub ? ` · ${sub}` : ''}</span>`));
     const right = el('div', 'mrow-right');
@@ -3401,7 +3449,7 @@
     const mk = mkState();
     const installed = kind === 'agent' ? e.kind === 'agent' : !!e.installed;
     const row = el('div', `mrow sk mk-row ${installed ? 'have' : ''}`);
-    const icon = kind === 'skill' ? I.book : kind === 'mcp' ? I.plug : kind === 'agent' && e.kind === 'agent' ? I.chip : I.gallery;
+    const icon = kind === 'skill' ? CUSTOM_ICON.skill : kind === 'mcp' ? CUSTOM_ICON.mcp : kind === 'agent' && e.kind === 'agent' ? CUSTOM_ICON.agent : CUSTOM_ICON.plugin;
     row.appendChild(el('span', 'ic brand-mark sk-ic', icon));
     const desc = kind === 'mcp' ? e.tagline || '' : e.description || '';
     row.appendChild(el('div', 't', `<b>${esc(e.name)}</b><span>${esc(desc)}</span>`));
@@ -3466,7 +3514,7 @@
     const tabs = el('div', 'seg mcp-tabs');
     tabs.innerHTML = [['installed', 'Servers'], ['browse', 'Browse']].map(([k, l]) => `<button class="${cat.view === k ? 'on' : ''}" data-k="${k}">${l}</button>`).join('');
     tabs.onclick = (e) => { const b = e.target.closest('button'); if (b && b.dataset.k !== cat.view) { cat.view = b.dataset.k; render(); } };
-    const editBtn = el('button', 'btn sm', `${I.external}Edit configuration…`); editBtn.title = 'Open your mcp.json, the workspace .mcp.json or settings.json'; editBtn.onclick = () => post({ type: 'command', id: 'localpilot.editMcpConfig' });
+    const editBtn = el('button', 'btn sm', `${I.edit}Edit configuration…`); editBtn.title = 'Open your mcp.json, the workspace .mcp.json or settings.json'; editBtn.onclick = () => post({ type: 'command', id: 'localpilot.editMcpConfig' });
     const tabBar = el('div', 'btnrow'); tabBar.append(tabs, el('span', 'spacer'), editBtn);
     const panel = el('div', 'mcp-panel'); panel.id = 'mcp-panel';
     rovingStrip(tabs, { id: 'mcp-view', label: 'MCP servers', panel });
@@ -3484,7 +3532,7 @@
     const alwaysOn = new Set(pol ? pol.mcpAlwaysEnabled : []);
     const names = [...new Set([...orgSrv, ...Object.keys(servers), ...status.keys()])];
     const list = el('div');
-    if (!names.length) { list.appendChild(el('div', 'empty', 'No MCP servers configured. Add one below — for example the filesystem or GitHub server from <code>@modelcontextprotocol</code>.')); }
+    if (!names.length) { list.appendChild(emptyEl(I.plug, 'No MCP servers configured. Add one below — for example the filesystem or GitHub server from <code>@modelcontextprotocol</code>.')); }
     for (const name of names) {
       const st = status.get(name);
       const managed = orgSrv.has(name);
@@ -3498,13 +3546,13 @@
       const busy = st && (st.state === 'connecting' || st.state === 'restarting');
       const auth = !off && st && st.state === 'auth_required';
       const where = inSettings ? (s.url ? `${s.url}${st && st.transport && st.transport !== 'stdio' ? ` · ${st.transport === 'sse' ? 'SSE' : 'HTTP'}` : ''}` : [s.command, ...(s.args || [])].join(' ')) : managed ? 'from your organization' : `from ${({ project: "the workspace's .mcp.json", user: 'your mcp.json', plugin: 'a plugin' })[st && st.source] || 'a server file'}`;
-      const badge = tools !== undefined ? `<span class="badge ok">${tools} tool${tools === 1 ? '' : 's'}</span>` : off ? '<span class="badge">disabled</span>' : auth ? `<button class="btn sm primary" data-auth title="Sign in to ${esc(name)} in your browser (OAuth)">${I.external}Authenticate</button>` : busy ? `<span class="badge warn">${st.state === 'restarting' ? 'restarting…' : 'connecting…'}</span>` : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`;
+      const badge = tools !== undefined ? `<span class="badge">${tools} tool${tools === 1 ? '' : 's'}</span>` : off ? '<span class="badge">disabled</span>' : auth ? `<button class="btn sm primary" data-auth title="Sign in to ${esc(name)} in your browser (OAuth)">${I.external}Authenticate</button>` : busy ? `<span class="badge warn">${st.state === 'restarting' ? 'restarting…' : 'connecting…'}</span>` : `<span class="badge err" title="${esc(err || '')}">${err ? 'failed to start' : 'not connected'}</span>`;
       c.innerHTML = `<div class="prov-head"><span class="dot ${off ? '' : tools !== undefined ? 'ok' : busy ? 'busy' : 'err'}"></span><div class="prov-title"><b>${esc(name)}</b><span>${esc(where)}</span></div><div class="prov-meta">${managed ? lockIcon(alwaysOn.has(name) ? 'Always on: required by your organization' : 'Provided by your organization') : ''}${badge}${off ? '' : `<button class="btn sm ghost" data-restart title="Stop and start ${esc(name)} again">${I.refresh}Restart</button>`}<span class="chev" style="transform:rotate(${open ? 90 : 0}deg)">${I.chev}</span></div></div>`;
       const restart = () => { post({ type: 'restartMcp', name }); toast(`Restarting ${name}…`); };
       const rb = c.querySelector('[data-restart]'); if (rb) { rb.onclick = (e) => { e.stopPropagation(); restart(); }; rb.onkeydown = (e) => e.stopPropagation(); }
       const ab = c.querySelector('[data-auth]'); if (ab) { ab.onclick = (e) => { e.stopPropagation(); post({ type: 'authMcp', name }); }; ab.onkeydown = (e) => e.stopPropagation(); }
       if (err && !off && !busy && !auth) {
-        const box = el('div', 'prov-result err mcp-err', `<span>${I.x} ${esc(err)}</span><button class="btn sm">Retry</button>`);
+        const box = el('div', 'prov-result err mcp-err', `<span>${I.x} ${esc(err)}</span><button class="btn sm" title="Restart ${esc(name)}">${I.refresh}Retry</button>`);
         box.querySelector('button').onclick = restart;
         c.appendChild(box);
       }
@@ -3512,11 +3560,11 @@
       if (open) {
         if (st && st.state === 'connected') { c.appendChild(mcpInspect(name, st)); }
         if (managed) {
-          const note = el('div', 'prov-result mcp-err', `<span>${I.lock} Provided by your organization's policy${alwaysOn.has(name) ? ' and always on' : ''}. It cannot be edited here.</span>${alwaysOn.has(name) ? '' : `<button class="btn sm">${off ? 'Turn on' : 'Turn off'}</button>`}`);
+          const note = el('div', 'prov-result mcp-err', `<span>${I.lock} Provided by your organization's policy${alwaysOn.has(name) ? ' and always on' : ''}. It cannot be edited here.</span>${alwaysOn.has(name) ? '' : `<button class="btn sm">${off ? `${I.power}Turn on` : `${I.power}Turn off`}</button>`}`);
           const tb = note.querySelector('button'); if (tb) { tb.onclick = () => post({ type: 'toggleMcp', name, enabled: off }); }
           c.appendChild(note);
         } else if (inSettings) { c.appendChild(mcpForm(name, s, servers, own)); } else {
-          const note = el('div', 'prov-result mcp-err', `<span>Defined in ${esc(({ project: "the workspace's .mcp.json", user: 'your mcp.json (~/.localpilot/mcp.json)', plugin: 'a plugin' })[st && st.source] || 'a server file')}. Edit it there; it reloads on save.</span>${st && st.source !== 'plugin' ? `<button class="btn sm">${off ? 'Turn on' : 'Turn off'}</button>` : ''}`);
+          const note = el('div', 'prov-result mcp-err', `<span>Defined in ${esc(({ project: "the workspace's .mcp.json", user: 'your mcp.json (~/.localpilot/mcp.json)', plugin: 'a plugin' })[st && st.source] || 'a server file')}. Edit it there; it reloads on save.</span>${st && st.source !== 'plugin' ? `<button class="btn sm">${off ? `${I.power}Turn on` : `${I.power}Turn off`}</button>` : ''}`);
           const tb = note.querySelector('button'); if (tb) { tb.onclick = () => post({ type: 'toggleMcp', name, enabled: off }); }
           c.appendChild(note);
         }
@@ -3739,8 +3787,11 @@
     return `<svg class="spark" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="${esc(`${what}, last ${vals.length} day${vals.length === 1 ? '' : 's'}: ${said}`)}">${bars}</svg>`;
   }
   const NEEDS_ATTENTION = `<span class="kpi-flag">${I.warn}<span class="sr-only">Needs attention: </span></span>`;
+  // Every tile names its metric with an icon; a tile that needs attention swaps it for the warning sign.
+  const KPI_ICON = { 'Agent runs': I.rocket, Tokens: I.hash, Cost: I.coin, Providers: I.server, 'Model calls': I.cpu, 'Tool calls': I.wrench, Completions: I.ghost, Throughput: I.bolt, 'Turn time': I.clock, 'Cache hits': I.layers, 'Edits kept': I.edit, Hooks: I.hook,
+    Engine: I.shield, 'Failures detected': I.pulse, Recovered: I.check, 'Pending intervention': I.pause, 'Recovery rate': I.gauge, 'Mean time to recover': I.clock };
   function kpi(label, value, sub, sparkHtml, tone) {
-    return `<div class="kpi ${tone || ''}"><div class="kpi-l">${tone ? NEEDS_ATTENTION : ''}${esc(label)}</div><div class="kpi-v">${value}</div>${sub ? `<div class="kpi-s">${sub}</div>` : ''}${sparkHtml || ''}</div>`;
+    return `<div class="kpi ${tone || ''}"><div class="kpi-l">${tone ? NEEDS_ATTENTION : KPI_ICON[label] ? `<span class="kpi-ic" aria-hidden="true">${KPI_ICON[label]}</span>` : ''}${esc(label)}</div><div class="kpi-v">${value}</div>${sub ? `<div class="kpi-s">${sub}</div>` : ''}${sparkHtml || ''}</div>`;
   }
   // --- charts: plain inline SVG, theme chart colours, hover titles, real axis labels. No library, no canvas. ---
   // Each chart is drawn for the width of its card (see chartSlot), so axis text stays ~9 px instead of shrinking with the
@@ -3945,7 +3996,7 @@
   function moreMenu(items, cls = '', opts = {}) {
     const more = el('div', `dash-more ${cls}`);
     const label = opts.label || 'More actions';
-    const moreBtn = el('button', 'btn sm', opts.html || '…'); moreBtn.setAttribute('aria-label', label); moreBtn.title = opts.title || label; moreBtn.setAttribute('aria-haspopup', 'menu'); moreBtn.setAttribute('aria-expanded', 'false');
+    const moreBtn = el('button', 'btn sm', opts.html || I.more); moreBtn.setAttribute('aria-label', label); moreBtn.title = opts.title || label; moreBtn.setAttribute('aria-haspopup', 'menu'); moreBtn.setAttribute('aria-expanded', 'false');
     const menu = el('div', `menu${opts.floating ? ' floating' : ''}`); menu.setAttribute('role', 'menu'); menu.setAttribute('aria-label', label); menu.hidden = true;
     const close = (refocus) => { menu.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); document.removeEventListener('mousedown', outside, true); window.removeEventListener('resize', onMove); document.removeEventListener('scroll', onMove, true); if (refocus) { moreBtn.focus(); } };
     const outside = (e) => { if (!more.contains(e.target) && !menu.contains(e.target)) { close(false); } };
@@ -3986,6 +4037,8 @@
   const REC_STRATEGY = { retry: 'Retry', reroute: 'Other model', adjust_resources: 'Adjust resources', repair_output: 'Repair output', fix: 'Targeted fix', diagnose: 'Diagnose', install: 'Install dependency', reconnect: 'Reconnect', validate_schema: 'Validate schema', isolate: 'Isolate', remediate: 'Remediate', escalate: 'Escalate', stop: 'Stop' };
   const REC_REASON = { exhausted: 'Attempts used up', duplicate: 'Same failure after a fix', deadline: 'Deadline reached', loop: 'Loop or step limit', mistake_limit: 'Too many mistakes', approval_needed: 'Needs your approval', credentials: 'Credentials missing', git_conflict: 'Git conflict', security: 'Security finding', data_corruption: 'Data corruption', model_blocked: 'Model refused', user_edit_conflict: 'You edited the same files', model_unavailable: 'Model unavailable' };
   const REC_ACTION_TIP = { resume: 'Continue the task in its chat: the checks run again first', rollback: 'Undo the fixes self-healing made for this task', approveInstall: 'Run the proposed install (it still goes through the approval rules)', acceptRisk: 'Keep the finding in the code; LocalPilot asks you to confirm and records the decision in the audit log', dismiss: 'Remove this item from the queue', openChat: 'Open the chat this task ran in', openMergeEditor: 'Resolve the conflict in the merge editor' };
+  /** Every next step gets the icon its action has elsewhere in the panel (open chat = chat, undo = undo, …). */
+  const REC_ACTION_ICON = { resume: I.play, rollback: I.undo, approveInstall: I.download, installManually: I.check, acceptRisk: I.shield, dismiss: I.x, openChat: I.chat, openMergeEditor: I.diff, setApiKey: I.key };
   const catLabel = (c) => HEAL_CAT_LABEL[c] || String(c || '').replace(/_/g, ' ');
   const resLabel = (r) => REC_RESULT[r] || String(r || '—').replace(/_/g, ' ');
   const resBadge = (r) => (r ? `<span class="badge ${REC_OK.has(r) ? 'ok' : REC_BAD.has(r) ? 'err' : r === 'rolled_back' || r === 'interrupted' || r === 'completed_unverified' ? 'warn' : ''}">${esc(resLabel(r))}</span>` : '<span class="muted">—</span>');
@@ -4043,6 +4096,8 @@
   function recErr() {
     const c = el('div', 'policy dash-err'); c.setAttribute('role', 'alert');
     c.innerHTML = `${I.x}<div>Could not load recovery data: ${esc(state.rec.error)}</div>`;
+    // Recovery data rides on the dashboard request, so trying again asks for both.
+    const b = el('button', 'btn sm', `${I.refresh}Try again`); b.onclick = () => { state.rec.error = ''; state.dash.manual = true; requestDashboard(); }; c.appendChild(b);
     return c;
   }
   /** The engine's switches as read-only chips, Security bypass locked, plus a way to the settings. */
@@ -4103,7 +4158,7 @@
   function reuseBtn(id, allowed) {
     const mine = state.rec.reuse[id];
     const off = mine !== undefined ? mine === false : allowed === false;
-    const b = el('button', 'btn sm ghost', off ? 'Suggest again' : 'Don’t suggest again');
+    const b = el('button', 'btn sm ghost', off ? `${I.eye}Suggest again` : `${I.eyeOff}Don’t suggest again`);
     b.dataset.memory = id;
     b.title = off ? 'Offer this remembered fix again when the same failure comes back' : 'Stop offering this remembered fix for similar failures';
     b.onclick = () => { state.rec.reuse[id] = off; post({ type: 'memoryReuse', id, allowed: off }); renderRecovery(); };
@@ -4163,7 +4218,7 @@
       c.innerHTML = `<h3>${sidShort(task.sessionId)}<span class="muted small">turn ${esc(task.turnKey + 1)}${task.taskId ? ` · queued task ${esc(task.taskId)}` : ''} · ${recWhen(task.recoveryStartedAt || task.startedAt)}</span><span class="spacer"></span>${resBadge(task.outcome || task.phase)}</h3>`
         + (task.attempts.length ? `<ol class="rec-tl">${task.attempts.map(step).join('')}</ol>` : '<p class="muted small">No attempts: the failure was reported without a fix.</p>')
         + `<div class="rec-task-f muted small">${[total ? `${fmtMs(total)} in attempts` : '', ...task.perCategory.map((p) => `${esc(catLabel(p.category))} ${esc(p.count)}`)].filter(Boolean).join(' · ')}</div>`
-        + (task.approvals.length ? `<details class="rec-more"${recOpenAttr(`ap:${task.sessionId}|${task.turnKey}`)}><summary>${plural(task.approvals.length, 'approval')}</summary><ul class="rec-list">${task.approvals.map((a) => `<li>${recWhen(a.at)} <b>${esc(a.kind)}</b>${a.command ? ` <code>${esc(a.command)}</code>` : ''} · ${esc(a.decision)}${a.mandatory ? ' · always asked' : ''}${a.blockedBy ? ` · blocked by ${esc(a.blockedBy)}` : ''}</li>`).join('')}</ul></details>` : '')
+        + (task.approvals.length ? `<details class="rec-more"${recOpenAttr(`ap:${task.sessionId}|${task.turnKey}`)}><summary>${I.chev}${plural(task.approvals.length, 'approval')}</summary><ul class="rec-list">${task.approvals.map((a) => `<li>${recWhen(a.at)} <b>${esc(a.kind)}</b>${a.command ? ` <code>${esc(a.command)}</code>` : ''} · ${esc(a.decision)}${a.mandatory ? ' · always asked' : ''}${a.blockedBy ? ` · blocked by ${esc(a.blockedBy)}` : ''}</li>`).join('')}</ul></details>` : '')
         + (task.acceptedRisks.length ? `<div class="rec-risk">${I.warn}<span>Risk accepted by you: ${task.acceptedRisks.map((x) => `${x.keys.map(recKey).join(', ')} ${recWhen(x.at)}`).join('; ')}</span></div>` : '');
       box.appendChild(c);
     }
@@ -4189,7 +4244,7 @@
       b.disabled = !p.preview;
       b.title = p.preview ? `Show the change to ${p.file}` : 'No preview was kept for this change';
       b.onclick = () => { rs.open[k] = !open; renderRecovery(); const n = document.querySelector(`#rec-panel [data-patch="${i}"]`); if (n) { n.focus({ preventScroll: true }); } };
-      const od = el('button', 'btn sm ghost', 'Open diff');
+      const od = el('button', 'btn sm ghost', `${I.diff}Open diff`);
       od.dataset.opendiff = String(i);
       od.disabled = !rs.canDiff;
       od.title = rs.canDiff ? `Open the whole change to ${p.file} in a diff editor` : 'Opening diffs is not available in this window';
@@ -4205,7 +4260,7 @@
     const box = el('div', 'rec-view');
     const head = el('div', 'rec-filter');
     head.appendChild(el('span', 'muted small', 'Effective policy per kind of failure: the defaults with your overrides. Security findings get at most 3 fix attempts; data corruption, git conflicts, permissions and loops always go to you.'));
-    const b = el('button', 'btn sm', `${I.gear}Edit`); b.title = 'Settings → Agent → Self-healing → Retry configuration'; b.setAttribute('aria-label', 'Edit the retry configuration');
+    const b = el('button', 'btn sm', `${I.edit}Edit`); b.title = 'Settings → Agent → Self-healing → Retry configuration'; b.setAttribute('aria-label', 'Edit the retry configuration');
     b.onclick = () => { state.section = 'agent'; render(); };
     head.appendChild(b);
     box.appendChild(head);
@@ -4238,7 +4293,7 @@
       c.innerHTML = `<h3>${I.warn}<span class="rec-iv-t">${esc(iv.title)}</span></h3>`
         + `<div class="muted small">${esc(REC_REASON[iv.reason] || iv.reason)}${iv.category ? ` · ${esc(catLabel(iv.category))}` : ''} · ${sidShort(iv.sessionId)} · ${recWhen(iv.createdAt)}${iv.patches ? ` · ${plural(iv.patches, 'patched file')}` : ''}</div>`
         + (iv.rootCause || iv.attemptsSummary ? `<dl class="kv rec-chain">${iv.rootCause ? `<dt>Root cause</dt><dd>${esc(iv.rootCause)}</dd>` : ''}${iv.attemptsSummary ? `<dt>Tried</dt><dd>${esc(iv.attemptsSummary)}</dd>` : ''}</dl>` : '')
-        + (iv.evidence ? `<details class="rec-more"${recOpenAttr(`iv:${iv.id}`)}><summary>Evidence</summary><pre class="rec-diff">${esc(iv.evidence)}</pre></details>` : '');
+        + (iv.evidence ? `<details class="rec-more"${recOpenAttr(`iv:${iv.id}`)}><summary>${I.chev}Evidence</summary><pre class="rec-diff">${esc(iv.evidence)}</pre></details>` : '');
       const acts = el('div', 'btnrow rec-acts');
       // Guidance needs a typed instruction (the chat card has the box); accepting a risk is only for security findings.
       const list = (iv.nextActions || []).filter((a) => a && a.action && a.action !== 'retryWithGuidance' && (a.action !== 'acceptRisk' || sec));
@@ -4246,7 +4301,7 @@
       // Dismiss only resolves the item (it never accepts a risk), so every card can be cleared once it was handled elsewhere.
       if (!list.some((a) => a.action === 'dismiss')) { list.push({ action: 'dismiss', label: 'Dismiss' }); }
       list.forEach((a, i) => {
-        const b = el('button', `btn sm${a.action === 'acceptRisk' ? ' danger' : a.action === 'dismiss' ? ' ghost' : i === 0 ? ' primary' : ''}`, esc(a.label || a.action));
+        const b = el('button', `btn sm${a.action === 'acceptRisk' ? ' danger' : a.action === 'dismiss' ? ' ghost' : i === 0 ? ' primary' : ''}`, `${REC_ACTION_ICON[a.action] || ''}${esc(a.label || a.action)}`);
         b.dataset.ra = a.action;
         const tip = REC_ACTION_TIP[a.action] || a.label || a.action;
         b.title = a.command ? `${tip} (${a.command})` : tip;
@@ -4330,7 +4385,7 @@
     bar.appendChild(prov);
     const more = moreMenu([
       [I.folder, 'Open folder', () => post({ type: 'openTelemetryFolder' }), 'Open the folder with the recorded metrics and logs'],
-      [I.file, 'Open log file', () => post({ type: 'openLogFile' }), state.dash.logFile || "Today's log file"],
+      [I.external, 'Open log file', () => post({ type: 'openLogFile' }), state.dash.logFile || "Today's log file"],
       [I.gear, 'Telemetry settings', () => { state.section = 'telemetry'; render(); }, 'Recording, retention, Redis storage and OTLP export', 'telemetry'],
     ]);
     acts.append(refresh, exp, more);
@@ -4361,15 +4416,15 @@
     copy.onclick = () => {
       const lines = state.dash.logs.map((e) => `${new Date(e.t).toISOString()} ${String(e.level).toUpperCase()} ${e.msg}`);
       if (!lines.length) { toast('Nothing to copy'); return; }
-      navigator.clipboard.writeText(lines.join('\n')).then(() => toast(`Copied ${plural(lines.length, 'line')}`), () => toast('Could not copy to the clipboard', 'error'));
+      navigator.clipboard.writeText(lines.join('\n')).then(() => { copied(copy); toast(`Copied ${plural(lines.length, 'line')}`); }, () => toast('Could not copy to the clipboard', 'error'));
     };
     const clear = el('button', 'btn sm ghost', `${I.x}<span class="lbl">Clear view</span>`); clear.title = 'Clear this view (the log file is kept)'; clear.setAttribute('aria-label', 'Clear view');
     clear.onclick = () => { state.dash.logs = []; renderLogs(); };
-    const openFile = el('button', 'btn sm log-wide', `${I.file}Open log file`); openFile.title = state.dash.logFile || "Today's log file"; openFile.onclick = () => post({ type: 'openLogFile' });
+    const openFile = el('button', 'btn sm log-wide', `${I.external}Open log file`); openFile.title = state.dash.logFile || "Today's log file"; openFile.onclick = () => post({ type: 'openLogFile' });
     const channel = el('button', 'btn sm ghost log-wide', `${I.external}Output channel`); channel.title = 'Show the LocalPilot output channel'; channel.onclick = () => post({ type: 'command', id: 'localpilot.showLogs' });
     // Under 400 px the two "open elsewhere" buttons fold into one menu (CSS swaps them).
     const logMore = moreMenu([
-      [I.file, 'Open log file', () => post({ type: 'openLogFile' }), state.dash.logFile || "Today's log file"],
+      [I.external, 'Open log file', () => post({ type: 'openLogFile' }), state.dash.logFile || "Today's log file"],
       [I.external, 'Output channel', () => post({ type: 'command', id: 'localpilot.showLogs' }), 'Show the LocalPilot output channel'],
     ], 'log-narrow');
     tools.append(lvl, q, follow, copy, clear, openFile, channel, logMore);
@@ -4425,7 +4480,7 @@
     ));
     sec.appendChild(el('h2', 'sub', 'Redis storage (optional)'));
     const redisActs = el('div', 'btnrow');
-    redisActs.innerHTML = `<span class="muted small">Docker, Homebrew, apt/dnf, WSL or Memurai, or an existing server.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.setupRedis">${I.cpu}Set up Redis…</button>`;
+    redisActs.innerHTML = `<span class="muted small">Docker, Homebrew, apt/dnf, WSL or Memurai, or an existing server.</span><span class="spacer"></span><button class="btn sm" data-cmd="localpilot.setupRedis">${I.gear}Set up Redis…</button>`;
     sec.appendChild(card(
       field('storage.redis.enabled', 'Store telemetry in Redis', 'Events and the log go to capped Redis streams instead of daily files, and — with <b>Redis Stack</b> — metrics become labelled time series (<code>localpilot:ts:*</code>) for Grafana or RedisInsight. VS Code then keeps only a short log tail in memory. Falls back to files whenever Redis is unreachable. <b>Telemetry goes to the server in the URL</b> — keep it on this machine unless you trust that server.', 'toggle', { after: redisActs }),
       redisUrlField()
@@ -4472,7 +4527,7 @@
     res.classList.toggle('hidden', !res.innerHTML);
     const f = field('telemetry.otlp.endpoint', 'Endpoint', '<code>/v1/logs</code>, <code>/v1/metrics</code> and <code>/v1/traces</code> are appended.', 'text', { placeholder: 'http://localhost:4318', validate: (v) => /^https?:\/\/\S+$/.test(v), invalidHint: 'Use http(s)://host:port — /v1/logs, /v1/metrics and /v1/traces are appended', after: res, ...r });
     // Tests whatever is in effect (environment variables included), so it is offered whenever export is on.
-    const test = el('button', 'btn sm', `${I.bolt}Test connection`); test.title = 'Send one test record to the collector';
+    const test = el('button', 'btn sm', `${I.signal}Test connection`); test.title = 'Send one test record to the collector';
     test.disabled = effVal('telemetry.otlp.enabled') !== true || !!t.busy || f.classList.contains('locked');
     if (test.disabled && !t.busy) { test.title = r.off && effVal('telemetry.otlp.enabled') !== true ? r.off : MANAGED_TIP; }
     test.onclick = () => {
@@ -4569,7 +4624,7 @@
         : t.error ? `<div class="redis-line err-text">${I.x}<span>Test failed: ${esc(t.error)}</span></div>` : '';
     wrap.innerHTML = `${now}${res}`;
     const row = el('div', 'btnrow redis-acts');
-    const test = el('button', 'btn sm', t.busy ? '<span class="spinner"></span>Testing…' : `${I.bolt}Test connection`); test.title = 'Connect to the saved Redis URL and send PING';
+    const test = el('button', 'btn sm', t.busy ? '<span class="spinner"></span>Testing…' : `${I.signal}Test connection`); test.title = 'Connect to the saved Redis URL and send PING';
     const why = policyRefuses('storage.redis.url', undefined);
     test.disabled = !!t.busy || !!why; if (why) { test.title = MANAGED_TIP; }
     test.onclick = () => { state.redisTest = { busy: true }; post({ type: 'testRedis' }); refreshRedisStatus(); };
@@ -4649,7 +4704,7 @@
       if (r && r.pending) { return '<span class="muted small" role="status">Applying…</span>'; }
       if (r && r.ok) { return `<span class="ok-text" role="status">${I.check}Applied</span>`; }
       if (r && r.error) { return `<span class="err-text" role="alert" title="${esc(r.error)}">${esc(r.error)}</span>`; }
-      return `<button class="btn sm" data-tune="${i}" aria-label="Use ${esc(shortId(g.suggested))} for ${esc(roleLabel(g.role))}">Apply</button>`;
+      return `<button class="btn sm" data-tune="${i}" aria-label="Use ${esc(shortId(g.suggested))} for ${esc(roleLabel(g.role))}">${I.check}Apply</button>`;
     };
     if (tu.suggestions.length) {
       html += `<table class="tbl dash-tbl tune"><thead><tr><th>Role</th><th>Suggested</th><th>Instead of</th><th>Confidence</th><th class="act"><span class="sr-only">Apply</span></th></tr></thead><tbody>${tu.suggestions.map((g, i) => `<tr class="sug"><td>${esc(roleLabel(g.role))}</td><td class="mono"><b>${esc(shortId(g.suggested))}</b></td><td class="mono muted">${esc(shortId(g.current))}${g.currentStruggling ? ' <span class="err-text">struggling</span>' : ''}</td><td>${conf(g.confidence)}</td><td class="act">${act(g, i)}</td></tr><tr class="why"><td colspan="5" class="small" data-label="Why">${esc(g.reason)}</td></tr>`).join('')}</tbody></table>`;
@@ -4675,7 +4730,7 @@
     if (!root) { return; }
     const s = state.dash.summary;
     const off = recordingOff();
-    const turnOn = () => { if (policyRefuses('telemetry.enabled', true)) { return el('span', 'muted small', 'Set by your organization'); } const b = el('button', 'btn sm primary', 'Turn on'); b.title = 'Record usage metrics on this machine again'; b.onclick = () => { b.disabled = true; set('telemetry.enabled', true); }; return b; };
+    const turnOn = () => { if (policyRefuses('telemetry.enabled', true)) { return el('span', 'muted small', 'Set by your organization'); } const b = el('button', 'btn sm primary', `${I.power}Turn on`); b.title = 'Record usage metrics on this machine again'; b.onclick = () => { b.disabled = true; set('telemetry.enabled', true); }; return b; };
     const offEmpty = () => { const p = el('div', 'empty dash-off'); p.append(el('span', '', 'Recording is off, so nothing is collected.'), turnOn()); return p; };
     // A failed or missing reply keeps the last numbers on screen, dimmed under a retry card.
     const errCard = () => {
@@ -4693,7 +4748,7 @@
     const t = s.totals;
     const empty = !t.runs && !t.modelCalls && !s.completions.requested && !s.health.length;
     if (empty) {
-      if (off) { root.replaceChildren(offEmpty()); } else { root.innerHTML = `<p class="empty">Nothing recorded in this period yet. Start a chat, use inline completions or run the CLI and the numbers appear here.</p>`; }
+      if (off) { root.replaceChildren(offEmpty()); } else { const e = emptyEl(I.gauge, 'Nothing recorded in this period yet. Start a chat, use inline completions or run the CLI and the numbers appear here. <button class="btn sm" data-cmd="localpilot.openChat">' + I.chat + 'Open chat</button>', 'p'); wireGlobal(e); root.replaceChildren(e); }
       return finish();
     }
     const tokens = t.promptTokens + t.completionTokens;
@@ -4794,7 +4849,7 @@
     const models = el('div', 'card tblwrap');
     const so = state.dash.sort || { key: 'calls', dir: 'desc' };
     const sorted = [...s.models].sort((a, b) => (MODEL_SORTS[so.key](a) - MODEL_SORTS[so.key](b)) * (so.dir === 'asc' ? 1 : -1) || b.calls - a.calls);
-    const sth = (key, label, title) => `<th data-label="${label}"${so.key === key ? ` aria-sort="${so.dir === 'asc' ? 'ascending' : 'descending'}"` : ''}${title ? ` title="${title}"` : ''}><button class="th-sort${so.key === key ? ' on' : ''}" data-sort="${key}">${label}<span class="arr" aria-hidden="true">${so.key === key ? (so.dir === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>`;
+    const sth = (key, label, title) => `<th data-label="${label}"${so.key === key ? ` aria-sort="${so.dir === 'asc' ? 'ascending' : 'descending'}"` : ''}${title ? ` title="${title}"` : ''}><button class="th-sort${so.key === key ? ' on' : ''}" data-sort="${key}">${label}<span class="arr${so.key === key && so.dir === 'asc' ? ' up' : ''}" aria-hidden="true">${so.key === key ? I.sortDown : I.sort}</span></button></th>`;
     const latency = (m) => (m.ttft.p50 || m.duration.p50 ? `<span class="pctl" title="p95: first token ${fmtMs(m.ttft.p95)} · request ${fmtMs(m.duration.p95)}">${m.ttft.p50 ? fmtMs(m.ttft.p50) : '—'} <i>·</i> ${fmtMs(m.duration.p50)}</span>` : '<span class="muted">—</span>');
     // Stacked rows have no header to click, so a narrow dashboard sorts with a menu instead.
     const sortSel = s.models.length > 1 ? `<select class="dash-sort" aria-label="Sort models">${[['calls', 'Calls'], ['tokens', 'Tokens'], ['cost', 'Cost'], ['tps', 'tok/s'], ['errors', 'Errors']].map(([k, l]) => `<option value="${k}"${so.key === k ? ' selected' : ''}>${l}</option>`).join('')}</select>` : '';
@@ -4992,16 +5047,17 @@
     sec.appendChild(el('h2', 'sub', 'Tools'));
     const grid = el('div', 'card');
     const tools = [
-      ['Run setup again', 'Detect servers, pick a model and an approval preset.', 'localpilot.openWelcome', I.rocket],
-      ['Open a LocalPilot terminal', 'A branded terminal with the <code>localpilot</code> CLI already on PATH — run the agent right there: <code>localpilot "fix the tests"</code>.', 'localpilot.openTerminal', I.bolt],
-      ['Install the <code>localpilot</code> CLI', 'Put <code>localpilot</code> on your PATH for every terminal (also outside VS Code).', 'localpilot.installCli', I.wrench],
-      ['Open settings.json', 'Edit every <code>localpilot.*</code> key by hand.', state.scope === 'workspace' ? 'workbench.action.openWorkspaceSettingsFile' : 'workbench.action.openSettingsJson', I.wrench],
-      ['VS Code settings UI', 'The same settings in the built-in editor.', 'workbench.action.openSettings', I.wrench, ['@ext:localpilot.localpilot-agent']],
-      ['Show logs', 'Provider requests, tool runs and errors.', 'localpilot.showLogs', I.book],
+      ['Run setup again', 'Detect servers, pick a model and an approval preset.', 'localpilot.openWelcome', I.rocket, 'Start'],
+      ['Open a LocalPilot terminal', 'A branded terminal with the <code>localpilot</code> CLI already on PATH — run the agent right there: <code>localpilot "fix the tests"</code>.', 'localpilot.openTerminal', I.terminal, 'Open'],
+      ['Install the <code>localpilot</code> CLI', 'Put <code>localpilot</code> on your PATH for every terminal (also outside VS Code).', 'localpilot.installCli', I.download, 'Install'],
+      ['Open settings.json', 'Edit every <code>localpilot.*</code> key by hand.', state.scope === 'workspace' ? 'workbench.action.openWorkspaceSettingsFile' : 'workbench.action.openSettingsJson', I.external, 'Open'],
+      ['VS Code settings UI', 'The same settings in the built-in editor.', 'workbench.action.openSettings', I.external, 'Open', ['@ext:localpilot.localpilot-agent']],
+      ['Show logs', 'Provider requests, tool runs and errors.', 'localpilot.showLogs', I.external, 'Show'],
     ];
-    for (const [t, desc, cmdId, icon, args] of tools) {
-      const f = el('div', 'field');
-      f.innerHTML = `<div><div class="lbl">${t}</div><div class="desc">${desc}</div></div><div class="ctl"><button class="btn" data-cmd="${cmdId}" ${args ? `data-args='${JSON.stringify(args)}'` : ''}>${icon}Open</button></div>`;
+    // The verb says what happens (Start, Install, Open, Show) and the icon matches it, as everywhere else in the panel.
+    for (const [t, desc, cmdId, icon, verb, args] of tools) {
+      const f = el('div', 'field tool-row');
+      f.innerHTML = `<div><div class="lbl">${t}</div><div class="desc">${desc}</div></div><div class="ctl"><button class="btn" data-cmd="${cmdId}" ${args ? `data-args='${JSON.stringify(args)}'` : ''}>${icon}${verb}</button></div>`;
       grid.appendChild(f);
     }
     sec.appendChild(grid);
@@ -5033,7 +5089,9 @@
           // A cloud API that fails is rarely "not running": say the key is missing, or show what the server answered.
           const err = String(r.error || 'unreachable').replace(/\s+/g, ' ').trim();
           const why = r.ok ? `${r.models.length} model${r.models.length === 1 ? '' : 's'}` : !cloud ? 'not running' : keyState(probeProvider(r)).warn ? `<span class="warn-text">API key missing</span> · <button class="inline-link" data-cmd="localpilot.setProviderApiKey" data-args='${esc(JSON.stringify([r.id]))}' aria-label="Add the API key for ${esc(r.displayName)}">Add key</button>` : `<span class="err-text" title="${esc(err)}">${esc(err.length > 48 ? `${err.slice(0, 46)}…` : err)}</span>`;
-          det.appendChild(el('div', `srv ${r.ok ? 'ok' : ''}`, `<span class="dot ${r.ok ? 'ok' : 'err'}"></span><div class="t"><b>${esc(r.displayName)}${tag}</b><span>${esc(r.baseUrl)}</span></div><span class="n">${why}</span>`));
+          // Status vocabulary: a local server that is simply not running is off (hollow dot), a missing key a warning.
+          const tone = r.ok ? 'ok' : !cloud ? '' : keyState(probeProvider(r)).warn ? 'warn' : 'err';
+          det.appendChild(el('div', `srv ${r.ok ? 'ok' : ''}`, `<span class="dot ${tone}"></span><div class="t"><b>${esc(r.displayName)}${tag}</b><span>${esc(r.baseUrl)}</span></div><span class="n">${why}</span>`));
         }
         if (state.dmr === 'no-tcp') {
           det.appendChild(el('div', 'srv', `<span class="dot warn"></span><div class="t"><b>Docker Model Runner</b><span>running, but host access is off — run <code>docker desktop enable model-runner --tcp=12434</code> and check again</span></div>`));
@@ -5055,7 +5113,7 @@
         help.querySelector('#autoSetup').onclick = () => { state.setup.pendingAuto = true; const ol2 = (state.runtimes || []).find((r) => r.target === 'ollama'); post({ type: 'autoSetup', installRuntime: !!(ol2 && !ol2.installed), target: 'ollama' }); render(); };
       }
       const foot = el('div', 'foot');
-      foot.innerHTML = `<button class="btn" id="again">${state.busy ? '<span class="spinner"></span>' : I.refresh}Check again</button><span class="spacer"></span><button class="btn link" id="skip">Skip setup</button><button class="btn brand" id="next" ${found.length ? '' : 'disabled'}>Continue ${I.chev}</button>`;
+      foot.innerHTML = `<button class="btn" id="again">${state.busy ? '<span class="spinner"></span>' : I.signal}Check again</button><span class="spacer"></span><button class="btn link" id="skip">Skip setup</button><button class="btn brand" id="next" ${found.length ? '' : 'disabled'}>Continue ${I.chev}</button>`;
       foot.querySelector('#again').onclick = () => { state.busy = true; render(); post({ type: 'probe' }); };
       // The alternatives read as one sentence above the buttons, so the footer keeps to Check again · Skip · Continue.
       const alt = el('p', 'setup-alt muted small', 'No server running? <button class="inline-link" id="manual" title="Add any OpenAI-compatible server by URL">Add a custom endpoint</button> or <button class="inline-link" id="cloud" title="Settings → Providers → Cloud APIs">use a cloud API</button> (OpenAI, Claude, Gemini…).');
@@ -5072,7 +5130,7 @@
       c.innerHTML = `<h3>2 · Choose a default model</h3><p class="hint">For agent mode pick a tool-capable model (gemma4 e2b–12b, nemotron-3.5-bolt, devstral, gpt-oss). You can switch per chat at any time.</p>`;
       const list = el('div', 'mdl-list');
       if (!all.length) {
-        const e = el('div', 'empty', 'The server is running but has no models yet. <button class="btn brand sm" id="autoSetup2">Download a starter model</button> or pull one by hand (e.g. <code>ollama pull gemma4:e4b</code>) and go back.');
+        const e = emptyEl(I.cpu, `The server is running but has no models yet. <button class="btn brand sm" id="autoSetup2">${I.download}Download a starter model</button> or pull one by hand (e.g. <code>ollama pull gemma4:e4b</code>) and go back.`);
         e.querySelector('#autoSetup2').onclick = () => { su.pendingAuto = true; post({ type: 'autoSetup', installRuntime: false, target: 'ollama' }); su.step = 0; render(); };
         list.appendChild(e);
       }
@@ -5083,7 +5141,7 @@
       }
       c.appendChild(list);
       const foot = el('div', 'foot');
-      foot.innerHTML = `<button class="btn link" id="back">Back</button><span class="spacer"></span><button class="btn brand" id="next" ${su.model ? '' : 'disabled'}>Continue ${I.chev}</button>`;
+      foot.innerHTML = `<button class="btn link" id="back">${I.back}Back</button><span class="spacer"></span><button class="btn brand" id="next" ${su.model ? '' : 'disabled'}>Continue ${I.chev}</button>`;
       foot.querySelector('#back').onclick = () => { su.step = 0; render(); };
       foot.querySelector('#next').onclick = () => { su.step = 2; render(); };
       c.appendChild(foot);
@@ -5093,7 +5151,7 @@
       for (const [k, p] of Object.entries(APPROVAL_PRESETS)) {
         // Preset values the organisation locks or forbids are not saved (finishSetup skips them); say which.
         const held = Object.entries(p.v).filter(([x, v]) => policyRefuses(`approvals.${x}`, v)).map(([x]) => x);
-        const b = el('button', `ap ${su.approvals === k ? 'on' : ''}`, `<b>${esc(p.title)}</b><span>${esc(p.desc)}</span>${held.length ? `<span class="muted small">${lockIcon('')} Your organization sets ${esc(held.join(', '))}</span>` : ''}`);
+        const b = el('button', `ap ${su.approvals === k ? 'on' : ''}`, `<b><span class="ap-ic" aria-hidden="true">${p.icon}</span>${esc(p.title)}</b><span>${esc(p.desc)}</span>${held.length ? `<span class="muted small">${lockIcon('')} Your organization sets ${esc(held.join(', '))}</span>` : ''}`);
         b.dataset.id = `ap:${k}`; b.onclick = () => { su.approvals = k; render(); };
         presets.appendChild(b);
       }
@@ -5105,7 +5163,7 @@
       row.querySelector('.ctl').appendChild(switchBtn(su.inline, 'Inline completions', (on) => { su.inline = on; }));
       c.appendChild(row);
       const foot = el('div', 'foot');
-      foot.innerHTML = `<button class="btn link" id="back">Back</button><span class="spacer"></span><button class="btn brand" id="done">${I.check}Finish & open chat</button>`;
+      foot.innerHTML = `<button class="btn link" id="back">${I.back}Back</button><span class="spacer"></span><button class="btn brand" id="done">${I.check}Finish & open chat</button>`;
       foot.querySelector('#back').onclick = () => { su.step = 1; render(); };
       foot.querySelector('#done').onclick = () => post({ type: 'finishSetup', model: su.model, approvals: su.approvals, inlineCompletion: su.inline, providers: su.providers || undefined });
       c.appendChild(foot);
@@ -5141,6 +5199,12 @@
     console.error(`[LocalPilot settings] ${where}: ${message}`, err);
     if (reported++ < 20) { try { post({ type: 'clientError', where, message, stack: err instanceof Error && err.stack ? String(err.stack).split('\n').slice(0, 8).join('\n') : undefined }); } catch { /* bridge gone */ } }
   }
+  // Icon-only buttons need an accessible name: one with only a title (open, remove, cancel…) gets it as its aria-label,
+  // whichever renderer built it.
+  const nameIconButtons = (root) => { for (const b of root.querySelectorAll('button[title]:not([aria-label])')) { if (b.querySelector('svg') && !b.textContent.trim()) { b.setAttribute('aria-label', b.title); } } };
+  new MutationObserver((ms) => { for (const m of ms) { for (const n of m.addedNodes) { if (n.nodeType === 1) { nameIconButtons(n.matches('button') ? n.parentNode || n : n); } } } }).observe(app, { childList: true, subtree: true });
+  // Copyable text (endpoint URLs, model ids): any [data-copy] element, wherever a re-render puts it.
+  document.addEventListener('click', (e) => { const c = e.target.closest && e.target.closest('[data-copy]'); if (!c) { return; } Promise.resolve().then(() => navigator.clipboard.writeText(c.dataset.copy)).then(() => { copied(c); toast(`Copied ${c.dataset.copy}`); }, () => toast('Could not copy to the clipboard', 'error')); });
   window.addEventListener('error', (e) => reportError('uncaught', e.error || e.message));
   window.addEventListener('unhandledrejection', (e) => reportError('unhandled rejection', e.reason));
   window.addEventListener('message', (ev) => {

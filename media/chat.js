@@ -35,11 +35,11 @@
     chev: '<svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg>',
     copy: '<svg viewBox="0 0 16 16"><rect x="5" y="5" width="8" height="8" rx="1.5"/><path d="M3 11V4a1 1 0 0 1 1-1h7"/></svg>',
     download: '<svg viewBox="0 0 16 16"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M3 12.5h10"/></svg>',
-    insert: '<svg viewBox="0 0 16 16"><path d="M8 3v8M4.5 7.5L8 11l3.5-3.5M3 13h10"/></svg>',
+    insert: '<svg viewBox="0 0 16 16"><path d="M5.5 3h3M5.5 13h3M7 3v10M10.5 8h4M12.5 6v4"/></svg>',
     apply: '<svg viewBox="0 0 16 16"><path d="M3 3h7l3 3v7H3z"/><path d="M5 13V9h6v4"/></svg>',
     open: '<svg viewBox="0 0 16 16"><path d="M6 3H3.5A.5.5 0 0 0 3 3.5v9a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V10M9 3h4v4M13 3L7 9"/></svg>',
     undo: '<svg viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 0 1 0 6H8M3 7l3-3M3 7l3 3"/></svg>',
-    restore: '<svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg>',
+    restore: '<svg viewBox="0 0 16 16"><path d="M3 8a5 5 0 1 0 1.5-3.6M3 2.5v2.5h2.5"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/></svg>',
     diff: '<svg viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3M8 6.5v3M6.5 8h3M6.5 11.5h3"/></svg>',
     bot: '<svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1" fill="currentColor"/><circle cx="15" cy="9.5" r="1" fill="currentColor"/></svg>',
     warn: '<svg viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3M8 11.8v.2"/></svg>',
@@ -50,7 +50,6 @@
     sparkle: '<svg viewBox="0 0 16 16"><path d="M8 2l1.4 3.6L13 7l-3.6 1.4L8 12l-1.4-3.6L3 7l3.6-1.4z"/></svg>',
     file: '<svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></svg>',
     folder: '<svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"/></svg>',
-    bug: '<svg viewBox="0 0 16 16"><circle cx="8" cy="9" r="4"/><path d="M8 5V3M5 6L3 4M11 6l2-2M3 10H1M15 10h-2M4 13l-2 1M12 13l2 1"/></svg>',
     beaker: '<svg viewBox="0 0 16 16"><path d="M6 2v5l-3.5 6a1 1 0 0 0 .9 1.5h9.2a1 1 0 0 0 .9-1.5L10 7V2"/><path d="M5 2h6"/></svg>',
     search: '<svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M13.5 13.5l-3.3-3.3"/></svg>',
     edit: '<svg viewBox="0 0 16 16"><path d="M11.5 2.5l2 2L6 12l-3 1 1-3z"/></svg>',
@@ -85,11 +84,19 @@
     offline: '<svg viewBox="0 0 16 16"><path d="M5.2 12.5H4.5a2.5 2.5 0 0 1-.4-5A4 4 0 0 1 10.7 5M12.4 7.2a2.7 2.7 0 0 1-.9 5.3H8.3M2.5 2.5l11 11"/></svg>',
     cursor: '<svg viewBox="0 0 16 16"><path d="M3 2l10 6-4.5 1L6 13z"/></svg>',
     memory: '<svg viewBox="0 0 16 16"><path d="M3 3h10v10H3z"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>',
-    plan: '<svg viewBox="0 0 16 16"><path d="M4 3h8v10H4z"/><path d="M6 6h4M6 8.5h4M6 11h2"/></svg>',
-    gear: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6L5 5M11 11l1.4 1.4M3.6 12.4L5 11M11 5l1.4-1.4"/></svg>',
+    plan: '<svg viewBox="0 0 16 16"><path d="M10.5 3h1A1.5 1.5 0 0 1 13 4.5v8a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 12.5v-8A1.5 1.5 0 0 1 4.5 3h1"/><path d="M6 2h4v2H6zM5.5 7.5l1 1L8 7M9.5 8h1.5M5.5 11h5.5"/></svg>',
+    gear: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1.8l1.1 1.6 1.9-.4.4 1.9 1.6 1.1-1 1.6 1 1.6-1.6 1.1-.4 1.9-1.9-.4L8 14.2l-1.1-1.6-1.9.4-.4-1.9-1.6-1.1 1-1.6-1-1.6 1.6-1.1.4-1.9 1.9.4z"/></svg>',
     key: '<svg viewBox="0 0 16 16"><circle cx="5.5" cy="10.5" r="3"/><path d="M7.6 8.4L13.5 2.5M11.5 4.5l1.5 1.5M10 6l1.2 1.2"/></svg>',
     ask: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M6.2 6.2a1.8 1.8 0 1 1 2.6 1.6c-.6.4-.8.7-.8 1.4M8 11.5h.01"/></svg>',
     compass: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M10.6 5.4 9.1 9.1 5.4 10.6 6.9 6.9z"/></svg>',
+    skip: '<svg viewBox="0 0 16 16"><path d="M3.5 4l5 4-5 4z"/><path d="M12 4v8"/></svg>',
+    more: '<svg viewBox="0 0 16 16"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke-width="2.4"/></svg>',
+    chip: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 6.5h3v3h-3zM6 1.5V4M10 1.5V4M6 12v2.5M10 12v2.5M1.5 6H4M1.5 10H4M12 6h2.5M12 10h2.5"/></svg>',
+    parallel: '<svg viewBox="0 0 16 16"><path d="M2.5 4h8.5M2.5 8h8.5M2.5 12h8.5M11 2.5 12.5 4 11 5.5M11 6.5 12.5 8 11 9.5M11 10.5l1.5 1.5-1.5 1.5"/></svg>',
+    compact: '<svg viewBox="0 0 16 16"><path d="M8 1.5v5M5.5 4L8 6.5 10.5 4M8 14.5v-5M5.5 12L8 9.5l2.5 2.5M2.5 8h11"/></svg>',
+    chat: '<svg viewBox="0 0 16 16"><path d="M2.5 4A1.5 1.5 0 0 1 4 2.5h8A1.5 1.5 0 0 1 13.5 4v6a1.5 1.5 0 0 1-1.5 1.5H7L4 14v-2.5A1.5 1.5 0 0 1 2.5 10z"/></svg>',
+    back: '<svg viewBox="0 0 16 16"><path d="M13 8H3M7 4L3 8l4 4"/></svg>',
+    clearAll: '<svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h6M2.5 12h4M10 10l4 4M14 10l-4 4"/></svg>',
     refactor: '<svg viewBox="0 0 16 16"><path d="M2.5 5h8.5M8.5 2.5 11 5 8.5 7.5M13.5 11H5M7.5 8.5 5 11l2.5 2.5"/></svg>',
   };
   /** The one quiet "running" marker used wherever a spinner would only add noise: tabs, background rows, worker lanes. */
@@ -100,7 +107,7 @@
     agent: { label: 'Agent', icon: I.agent, desc: 'Edit files, run commands, verify', hint: 'Edit, run, verify', tag: 'edits files', placeholder: 'Ask anything, or describe a task…' },
     plan: { label: 'Plan', icon: I.plan, desc: 'Investigate and prepare a plan you can build with one click', hint: 'Plan first, build with one click', tag: 'read-only', placeholder: 'Describe what you want; I will prepare a plan first' },
     debug: { label: 'Debug', icon: I.bug, desc: 'Reproduce the problem, find the cause, fix and verify', hint: 'Reproduce, find the cause, fix', tag: 'edits files', placeholder: 'Paste the error or describe what goes wrong…' },
-    multitask: { label: 'Multitask', icon: I.layers, desc: 'Splits the work across background workers that run at the same time', hint: 'Parallel background workers', tag: 'edits files', placeholder: 'Coordinate parallel tasks… describe the outcome you want' },
+    multitask: { label: 'Multitask', icon: I.parallel, desc: 'Splits the work across background workers that run at the same time', hint: 'Parallel background workers', tag: 'edits files', placeholder: 'Coordinate parallel tasks… describe the outcome you want' },
   };
   // "More modes": a specialist runs in its base mode (which decides permissions) with a built-in agent's playbook added
   // to the prompt by the host (SPECIALISTS in src/agent/builtinAgents.ts; keep the two tables in step).
@@ -187,7 +194,7 @@
     const lv = level || 'info';
     const t = el('div', `toast ${lv}`, `<span class="tt">${esc(text)}</span>`); t.title = text;
     if (action && action.label && action.msg) { const b = el('button', 'ta', esc(action.label)); b.onclick = () => { post(action.msg); t.remove(); }; t.appendChild(b); }
-    const x = el('button', 'tx', '×'); x.setAttribute('aria-label', 'Dismiss'); x.title = 'Dismiss'; x.onclick = () => t.remove(); t.appendChild(x);
+    const x = el('button', 'tx', I.x); x.setAttribute('aria-label', 'Dismiss'); x.title = 'Dismiss'; x.onclick = () => t.remove(); t.appendChild(x);
     const ms = lv === 'info' ? (action ? 10000 : 3200) : Math.max(8000, String(text).length * 60);
     let left = ms; let since = 0; let timer = 0;
     const run = () => { clearTimeout(timer); since = Date.now(); timer = setTimeout(() => t.remove(), left); };
@@ -768,7 +775,7 @@
     if (!tool || tool === 'manage_todos' || node.closest('.subrows, .rec-rows')) { return; }
     const args = node.__args ? JSON.stringify(node.__args) : node.dataset.args || '{}';
     const running = state.running.has(sid);
-    const bar = el('div', 'tool-fail', `<span class="why" title="${esc(String(content || '').slice(0, 1500))}">${esc(failText(content))}</span><span class="acts"><button class="btn sm" data-f="retry" title="Ask the agent to try this step again">${I.refresh}<span>Retry</span></button><button class="btn sm ghost" data-f="edit" title="Change the ${tool === 'run_command' ? 'command' : 'arguments'}, then retry">${I.edit}<span>Edit &amp; retry</span></button>${running ? `<button class="btn sm ghost" data-f="skip" title="Carry on without this step">Skip</button><button class="btn sm ghost" data-f="stop" title="Stop the run (${kb('Esc')})">${I.stop}<span>Stop run</span></button>` : ''}</span>`);
+    const bar = el('div', 'tool-fail', `<span class="why" title="${esc(String(content || '').slice(0, 1500))}">${esc(failText(content))}</span><span class="acts"><button class="btn sm" data-f="retry" title="Ask the agent to try this step again">${I.refresh}<span>Retry</span></button><button class="btn sm ghost" data-f="edit" title="Change the ${tool === 'run_command' ? 'command' : 'arguments'}, then retry">${I.edit}<span>Edit &amp; retry</span></button>${running ? `<button class="btn sm ghost" data-f="skip" title="Carry on without this step">${I.skip}<span>Skip</span></button><button class="btn sm ghost" data-f="stop" title="Stop the run (${kb('Esc')})">${I.stop}<span>Stop run</span></button>` : ''}</span>`);
     bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', 'Failed step actions');
     const send = (action, extra) => { post(Object.assign({ type: 'toolFailureAction', sessionId: sid, action, tool, args, error: String(content || '').slice(0, 2000) }, extra || {})); bar.querySelectorAll('button, textarea').forEach((b) => { b.disabled = true; }); bar.classList.add('sent'); };
     bar.onclick = (e) => {
@@ -807,7 +814,7 @@
     const name = kind === 'url' ? p.replace(/^https?:\/\//, '').replace(/\/$/, '') : base(p) || p;
     const ext = kind === 'file' ? (p.split('.').pop() || '').toLowerCase() : '';
     const tag = kind === 'url' ? I.globe : kind === 'folder' ? I.folder : LANG_EXT[ext] ? `<i class="lang l-${LANG_EXT[ext]}">${LANG_EXT[ext]}</i>` : I.file;
-    return `<span class="fchip${kind === 'url' ? '' : ' path-link'}" ${kind === 'url' ? `data-url="${esc(p)}"` : `data-path="${esc(p)}"`}${extra && extra.line ? ` data-line="${extra.line}"` : ''} title="${esc(p)}">${tag}<span>${esc(short(name, 48))}</span></span>`;
+    return `<span class="fchip${kind === 'url' ? '' : ' path-link'}" ${kind === 'url' ? `data-url="${esc(p)}"` : `data-path="${esc(p)}"`}${extra && extra.line ? ` data-line="${extra.line}"` : ''} role="link" tabindex="0" title="${kind === 'url' ? 'Open in browser: ' : kind === 'folder' ? 'Reveal in Explorer: ' : 'Open '}${esc(p)}${extra && extra.line ? `:${extra.line}` : ''}">${tag}<span>${esc(short(name, 48))}</span></span>`;
   }
   const code = (t, n = 60) => `<code>${short(String(t ?? ''), n)}</code>`;
   function toolLabel(name, a, running) {
@@ -960,8 +967,8 @@
     c.onclick = (e) => {
       const b = e.target.closest('button'); if (!b || b.classList.contains('term-more') || b.closest('.tests')) { return; } e.preventDefault();
       const sid = state.session && state.session.id;
-      if (b.hasAttribute('data-copy')) { navigator.clipboard.writeText(a.command || '').then(() => toast('Command copied')); }
-      else if (b.hasAttribute('data-copyout')) { navigator.clipboard.writeText(c.querySelector('.term').textContent).then(() => toast('Output copied')); }
+      if (b.hasAttribute('data-copy')) { copyTo(b, a.command || ''); }
+      else if (b.hasAttribute('data-copyout')) { copyTo(b, c.querySelector('.term').textContent); }
       else if (b.hasAttribute('data-rerun') && sid) { post({ type: 'toolFailureAction', sessionId: sid, action: 'rerun', tool: 'run_command', args: JSON.stringify(a) }); b.disabled = true; toast(state.running.has(sid) ? 'Asked the agent to run it again' : 'Running it again…'); }
       else if (b.hasAttribute('data-openterm')) { post({ type: 'openInTerminal', sessionId: sid, command: a.command || '', cwd: cwd || undefined }); }
     };
@@ -1099,7 +1106,7 @@
     if (rows && n) { finBody.appendChild(rows); } else { fin.classList.add('nosteps'); }
     body.innerHTML = ''; body.appendChild(fin);
     const text = error || result || '';
-    if (text) { const rep = el('details', 'report'); rep.innerHTML = `<summary>${error ? 'Error' : 'Report'}<span class="n">${text.length > 1200 ? `${(text.length / 1000).toFixed(1)}k chars` : ''}</span></summary><div class="doc-body"></div>`; lazyFill(rep, () => { rep.querySelector('.doc-body').innerHTML = error ? `<div class="error-box">${esc(error)}</div>` : renderMarkdown(String(result).slice(0, 12000)); }); body.appendChild(rep); }
+    if (text) { const rep = el('details', 'report'); rep.innerHTML = `<summary><span class="chev" aria-hidden="true">${I.chev}</span>${error ? 'Error' : 'Report'}<span class="n">${text.length > 1200 ? `${(text.length / 1000).toFixed(1)}k chars` : ''}</span></summary><div class="doc-body"></div>`; lazyFill(rep, () => { rep.querySelector('.doc-body').innerHTML = error ? `<div class="error-box">${esc(error)}</div>` : renderMarkdown(String(result).slice(0, 12000)); }); body.appendChild(rep); }
     d.querySelector(':scope > summary .meta').textContent = '';
     const ctl = d.querySelector(':scope > summary .lanectl'); if (ctl) { ctl.remove(); }
     d.classList.remove('paused');
@@ -1120,7 +1127,7 @@
     const list = tasks || a.tasks || [];
     const n = list.length;
     const d = stepEl('step subhost workers running', `<b>${n} working</b>`, undefined, '');
-    d.__ico = I.layers; d.dataset.total = String(n); d.dataset.done = '0'; d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
+    d.__ico = I.parallel; d.dataset.total = String(n); d.dataset.done = '0'; d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
     const ctl = el('span', 'lanectl host', `<button data-c="stopall" title="Stop every worker in this batch">${I.stop}<span>Stop all</span></button>`);
     ctl.onclick = (e) => { const b = e.target.closest('button'); if (!b) { return; } e.preventDefault(); e.stopPropagation(); const sid = state.session && state.session.id; const live = sid && state.live.get(sid); if (!live) { return; } for (const [childId, node] of live.subs) { if (d.contains(node) && node.classList.contains('running')) { post({ type: 'stopChild', sessionId: sid, childId }); } } };
     d.querySelector(':scope > summary .chev').before(ctl);
@@ -1149,7 +1156,7 @@
     if (!sections.length) { return null; }
     const failed = sections.filter((s) => s.failed).length;
     const d = stepEl(`step subhost workers ${failed === sections.length ? 'error' : 'ok'}`, `<b>${sections.length} done</b>${failed ? `<span class="muted"> · ${failed} failed</span>` : ''}`, undefined, '');
-    d.__ico = I.layers; setState(d, failed === sections.length ? 'error' : 'ok'); d.dataset.total = String(sections.length); d.dataset.done = String(sections.length); d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
+    d.__ico = I.parallel; setState(d, failed === sections.length ? 'error' : 'ok'); d.dataset.total = String(sections.length); d.dataset.done = String(sections.length); d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
     const c = d.querySelector(':scope > .content'); c.className = 'content subs'; c.innerHTML = '';
     for (const s of sections) {
       const card = subagentCard(s.agent, s.label, null, s.label);
@@ -1348,7 +1355,7 @@
     const go = (restoreType) => post({ type: 'restoreCheckpoint', sessionId: sid, messageIndex: index, restoreType });
     openMenu(btn, [
       { label: 'Restore files only', desc: 'Put the files back as they were before this message; keep the chat', icon: I.file, onPick: () => go('workspace') },
-      { label: 'Restore chat only', desc: 'Remove this message and later turns; keep the files as they are', icon: I.edit, onPick: () => go('task') },
+      { label: 'Restore chat only', desc: 'Remove this message and later turns; keep the files as they are', icon: I.chat, onPick: () => go('task') },
       { label: 'Restore both', desc: 'Put the files back and rewind the chat to this message', icon: I.restore, onPick: () => go('both') },
     ]);
   }
@@ -1364,7 +1371,7 @@
       .replace(/<(workspace_tree|problems|git|open_editors|directory|terminal_output|codebase)[^>]*>[\s\S]*?<\/\1>\s*/g, (_, t) => { atts.push('@' + (t === 'workspace_tree' ? 'workspace' : t === 'open_editors' ? 'editors' : t === 'terminal_output' ? 'terminal' : t)); return ''; })
       .replace(/<memory_note name="([^"]*)"[^>]*>[\s\S]*?<\/memory_note>\s*/g, (_, nm) => { atts.push(`memory:${nm}`); return ''; })
       .replace(/\n\n\[\d+ images? attached\]$/, '');
-    const act = el('div', 'actions', `<button data-act="copy" title="Copy" aria-label="Copy message">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit this message here, then Reset Chat (keep the files) or Reset Code (also restore the files)" aria-label="Edit message">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: files only, the chat only, or both" aria-label="Restore checkpoint" aria-haspopup="listbox">${I.restore}<span>Restore checkpoint</span></button>` : ''}${index !== undefined && text.trim() && !/^\/\S/.test(text.trim()) ? `<button data-act="savePrompt" title="Save as prompt: reuse this message from the prompt library or as a /command" aria-label="Save as prompt">${I.bookmark}</button>` : ''}${index !== undefined && m.meta && m.meta.id ? `<button data-act="msgmore" title="More: continue or duplicate from here, remember it, save it to knowledge" aria-label="More message actions" aria-haspopup="listbox">${I.list}</button>` : ''}`);
+    const act = el('div', 'actions', `<button data-act="copy" title="Copy" aria-label="Copy message">${I.copy}</button>${index !== undefined ? `<button data-act="edit" title="Edit this message here, then Reset Chat (keep the files) or Reset Code (also restore the files)" aria-label="Edit message">${I.edit}<span>Edit</span></button><button data-act="restore" title="Restore checkpoint: files only, the chat only, or both" aria-label="Restore checkpoint" aria-haspopup="listbox">${I.restore}<span>Restore checkpoint</span></button>` : ''}${index !== undefined && text.trim() && !/^\/\S/.test(text.trim()) ? `<button data-act="savePrompt" title="Save as prompt: reuse this message from the prompt library or as a /command" aria-label="Save as prompt">${I.bookmark}</button>` : ''}${index !== undefined && m.meta && m.meta.id ? `<button data-act="msgmore" title="More: continue or duplicate from here, remember it, save it to knowledge" aria-label="More message actions" aria-haspopup="listbox">${I.more}</button>` : ''}`);
     if (m.meta && m.meta.checkpoint !== undefined) { d.dataset.checkpoint = m.meta.checkpoint; }
     act.onclick = (e) => {
       const b = e.target.closest('[data-act]'); if (!b) { return; }
@@ -1477,17 +1484,20 @@
     return d.children.length ? d : null;
   }
   /** Under every answer: which model replied and how fast (from the turn's meta), then Copy / Regenerate / Open as
-   *  document — always visible, so nothing depends on hovering. Regenerate is added to the latest answer by renderSession. */
+   *  document. Visible (dimmed) on the latest answer; older answers show them on hover or focus, and always on touch
+   *  screens, so they stay in the Tab order. Regenerate is added to the latest answer by renderSession. */
   function answerFoot(m, long) {
     const mt = m.meta || {};
     const info = [];
-    if (mt.model) { info.push(`<span class="mdl" title="Answered by ${esc(mt.model)}">${esc(modelName(mt.model))}</span>`); }
+    // Narrow footers drop whole parts (speed, then the model's size tag) instead of ellipsizing each one; the title keeps all.
+    const speed = mt.outputTokens && mt.genMs > 250 ? `${mt.outputTokens.toLocaleString()} tokens generated in ${(mt.genMs / 1000).toFixed(1)}s` : '';
+    if (mt.model) { const nm = modelName(mt.model); const c = nm.lastIndexOf(':'); info.push(`<span class="mdl" title="Answered by ${esc(mt.model)}${speed ? ` · ${speed}` : ''}">${c > 0 ? `${esc(nm.slice(0, c))}<span class="mtag">${esc(nm.slice(c))}</span>` : esc(nm)}</span>`); }
     const out = mt.healing && reportOutcome(mt.healing.report); if (BADGE[out]) { info.unshift(outcomeBadge(out, mt.healing.report)); }
     // Kept from its draft after a crash or a closed laptop: the generation stopped part way.
     if (mt.partial) { info.unshift(`<span class="partial-tag" title="LocalPilot closed while this answer was being written; this is the text written so far">${I.pause}Partial answer</span>`); }
-    if (mt.outputTokens && mt.genMs > 250) { info.push(`<span title="${mt.outputTokens.toLocaleString()} tokens generated in ${(mt.genMs / 1000).toFixed(1)}s">${Math.round(mt.outputTokens / (mt.genMs / 1000))} tok/s</span>`); }
+    if (speed) { info.push(`<span class="spd" title="${speed}">${Math.round(mt.outputTokens / (mt.genMs / 1000))} tok/s</span>`); }
     const trace = mt.traceId ? `<button data-act="trace" title="Trace: this run's model calls, tool calls, retries, fallbacks and approvals in order, with durations" aria-label="Show run trace">${I.trace}</button>` : '';
-    const f = el('div', 'afoot', `<span class="info">${info.join('<i>·</i>')}</span><span class="acts"><button data-act="copy" title="Copy response" aria-label="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader" aria-label="Open as document">${I.open}</button>` : ''}${trace}${mt.id ? `<button data-act="msgmore" title="More: continue or duplicate from here, compare answers" aria-label="More answer actions" aria-haspopup="listbox">${I.list}</button>` : ''}</span>`);
+    const f = el('div', 'afoot', `<span class="info">${info.join('<i>·</i>')}</span><span class="acts" role="group" aria-label="Answer actions"><button data-act="copy" title="Copy response" aria-label="Copy response">${I.copy}</button>${long ? `<button data-act="doc" title="Open as document in the Markdown reader" aria-label="Open as document">${I.open}</button>` : ''}${trace}${mt.id ? `<button data-act="msgmore" title="More: continue or duplicate from here, compare answers" aria-label="More answer actions" aria-haspopup="listbox">${I.more}</button>` : ''}</span>`);
     if (mt.id) { f.dataset.mid = mt.id; }
     f.onclick = (e) => {
       const b = e.target.closest('[data-act]'); if (!b) { return; }
@@ -1514,11 +1524,11 @@
     const fix = kind === 'connection' ? (ollama ? { a: 'ollama', icon: I.play, label: 'Start Ollama', title: 'Start the local Ollama server (and pull a model if none is installed), then Retry' } : { a: 'models', icon: I.gear, label: 'Open model settings', title: 'Check the model server and its models in Settings, then Retry' })
       : kind === 'auth' ? { a: 'key', icon: I.key, label: 'Set API key…', title: 'Enter a valid API key in Settings → Providers, then Retry' }
       : kind === 'quota' ? { a: 'key', icon: I.key, label: 'Provider settings…', title: 'Check the account or key in Settings → Providers, or pick another model' }
-      : kind === 'context' ? { a: 'compact', icon: I.layers, label: 'Compact and retry', title: 'Summarise older messages to make room, then send the last message again' }
+      : kind === 'context' ? { a: 'compact', icon: I.compact, label: 'Compact and retry', title: 'Summarise older messages to make room, then send the last message again' }
       : null;
     const retryBtn = `<button class="btn sm ${fix ? '' : 'primary'}" data-a="retry" title="Send the last message again">${I.refresh}<span>Retry</span></button>`;
     const raise = kind === 'context' ? `<button class="btn sm ghost" data-a="ctxwin" title="Settings → Models → Context window: give the model a larger window">${I.gear}<span>Raise context window</span></button>` : '';
-    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log" aria-label="Show log">${I.file}<span>Show log</span></button>${raise}<button class="btn sm" data-a="model" title="Pick another model for this chat, then Retry" aria-label="Change model">${I.layers}<span>Change model</span></button>${fix && fix.a !== 'compact' ? retryBtn : ''}${fix ? `<button class="btn sm primary" data-a="${fix.a}" title="${esc(fix.title)}">${fix.icon}<span>${esc(fix.label)}</span></button>` : retryBtn}`);
+    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log" aria-label="Show log">${I.file}<span>Show log</span></button>${raise}<button class="btn sm" data-a="model" title="Pick another model for this chat, then Retry" aria-label="Change model">${I.chip}<span>Change model</span></button>${fix && fix.a !== 'compact' ? retryBtn : ''}${fix ? `<button class="btn sm primary" data-a="${fix.a}" title="${esc(fix.title)}">${fix.icon}<span>${esc(fix.label)}</span></button>` : retryBtn}`);
     // Rate limited: Retry counts down the moment the server is likely to accept requests again.
     if (kind === 'ratelimit') {
       const span = acts.querySelector('[data-a="retry"] span'); let left = 10;
@@ -1543,7 +1553,7 @@
   }
   /** The mistake limit: Continue with guidance (a short note, sent as the next message), Restore checkpoint, Show log. */
   function mistakeActions(box, sid) {
-    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log">${I.file}<span>Show log</span></button><button class="btn sm" data-a="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button><button class="btn sm primary" data-a="guide" title="Tell LocalPilot what to do differently; it continues from here">${I.play}<span>Continue with guidance</span></button>`);
+    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log" aria-label="Show log">${I.file}<span>Show log</span></button><button class="btn sm" data-a="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button><button class="btn sm primary" data-a="guide" title="Tell LocalPilot what to do differently; it continues from here">${I.play}<span>Continue with guidance</span></button>`);
     acts.onclick = (e) => {
       const b = e.target.closest('[data-a]'); if (!b) { return; }
       if (b.dataset.a === 'log') { post({ type: 'showLog' }); return; }
@@ -1618,7 +1628,7 @@
   function renderRemoteBanner() {
     const old = document.getElementById('remoteBanner'); if (old) { old.remove(); }
     const s = state.session; const m = s && state.remote.get(s.id); if (!m) { return; }
-    const n = el('div', `rbanner ${m.kind}`, `<span class="ico">${m.kind === 'continued' ? I.branch : I.sync}</span><span class="t">${m.kind === 'continued' ? `Continued on ${esc(m.device)} too` : `Updated on ${esc(m.device)}`}${m.applied ? '' : ' — reload to see the changes'}</span>${m.applied ? '' : '<button class="btn sm" data-r="reload">Reload</button>'}${m.kind === 'continued' ? '<button class="btn sm ghost" data-r="view">View</button>' : ''}<button class="x" data-r="x" aria-label="Dismiss" title="Dismiss">×</button>`);
+    const n = el('div', `rbanner ${m.kind}`, `<span class="ico">${m.kind === 'continued' ? I.branch : I.sync}</span><span class="t">${m.kind === 'continued' ? `Continued on ${esc(m.device)} too` : `Updated on ${esc(m.device)}`}${m.applied ? '' : ' — reload to see the changes'}</span>${m.applied ? '' : `<button class="btn sm" data-r="reload">${I.refresh}<span>Reload</span></button>`}${m.kind === 'continued' ? `<button class="btn sm ghost" data-r="view">${I.eye}<span>View</span></button>` : ''}<button class="x" data-r="x" aria-label="Dismiss" title="Dismiss">${I.x}</button>`);
     n.id = 'remoteBanner'; n.setAttribute('role', 'status');
     n.onclick = (e) => {
       const b = e.target.closest('[data-r]'); if (!b) { return; }
@@ -1643,7 +1653,7 @@
       const text = n.kind === 'restored'
         ? `Context restored from this chat's last run${n.parts ? `: ${n.parts}` : ''}.${changed.length ? ` ${changed.length} file${changed.length === 1 ? '' : 's'} changed since: <span class="files">${changed.slice(0, 4).map((c) => `<button class="link" data-f="${esc(c.path)}" title="${c.state === 'deleted' ? 'Deleted since' : 'Open'}">${esc(c.path.split('/').pop())}${c.state === 'deleted' ? ' (deleted)' : ''}</button>`).join(', ')}${changed.length > 4 ? ` and ${changed.length - 4} more` : ''}</span>` : ''}`
         : esc(n.text);
-      const b = el('div', `rbanner ctxn ${n.kind}`, `<span class="ico">${n.kind === 'cloud' ? I.globe : n.kind === 'window' ? I.warn : I.history}</span><span class="t">${text}</span>${n.kind === 'cloud' ? '<button class="btn sm ghost" data-r="inspect" title="Open what the model saw on the last request">See context</button>' : ''}<button class="x" data-r="x" aria-label="Dismiss" title="Dismiss">×</button>`);
+      const b = el('div', `rbanner ctxn ${n.kind}`, `<span class="ico">${n.kind === 'cloud' ? I.globe : n.kind === 'window' ? I.warn : I.history}</span><span class="t">${text}</span>${n.kind === 'cloud' ? `<button class="btn sm ghost" data-r="inspect" title="Open what the model saw on the last request">${I.eye}<span>See context</span></button>` : ''}<button class="x" data-r="x" aria-label="Dismiss" title="Dismiss">${I.x}</button>`);
       b.setAttribute('role', 'status');
       b.onclick = (e) => {
         const x = e.target.closest('[data-r],[data-f]'); if (!x) { return; }
@@ -1700,7 +1710,7 @@
         return;
       }
       if (m.role === 'tool' || (m.role === 'user' && m.meta && (m.meta.toolImages || m.meta.toolResults || m.meta.hidden))) { return; }
-      if (m.meta && m.meta.summary) { settleReplay(); const n = el('div', 'turn'); const handoff = /\nThis is a new task continuing the chat /.test(m.content); const text = m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').replace(/This is a new task continuing the chat .*$/s, '').trim(); const det = !handoff && m.meta.compaction ? compactionEl(m.meta.compaction, text) : stepEl('ok', handoff ? 'New task: started from a summary of the previous chat' : 'Conversation compacted to free context', text); det.querySelector('.ico').innerHTML = I.list; n.appendChild(det); els.messages.appendChild(n); return; }
+      if (m.meta && m.meta.summary) { settleReplay(); const n = el('div', 'turn'); const handoff = /\nThis is a new task continuing the chat /.test(m.content); const text = m.content.replace(/<\/?conversation_summary>/g, '').replace(/Continue from here.*$/s, '').replace(/This is a new task continuing the chat .*$/s, '').trim(); const det = !handoff && m.meta.compaction ? compactionEl(m.meta.compaction, text) : stepEl('ok', handoff ? 'New task: started from a summary of the previous chat' : 'Conversation compacted to free context', text); det.querySelector('.ico').innerHTML = I.compact; n.appendChild(det); els.messages.appendChild(n); return; }
       if (m.role === 'user' && m.meta && m.meta.steer) {
         const prev = els.messages.lastElementChild;
         const row = steerRow(m.content, m.images, m.meta.steerId, false, m.meta.corrections);
@@ -1734,7 +1744,8 @@
     // The latest turn: Continue / Discard after a stop, and the actions on steps that failed and were not retried.
     if (!inFlight && lastTurn && lastTurn.classList.contains('assistant')) { settledRunActions(lastTurn, s.id); }
     const foot = !failedBox && !inFlight && lastTurn && lastTurn.classList.contains('assistant') && lastTurn.querySelector(':scope > .afoot .acts');
-    if (foot) { foot.insertAdjacentHTML('beforeend', `<button data-act="regen" title="Regenerate: send your last message again for a new answer (files changed by this turn are kept; the old answer stays as a version)" aria-label="Regenerate">${I.refresh}</button><button data-act="regenWith" title="Regenerate with another model…" aria-label="Regenerate with another model">${I.layers}</button>`); }
+    // Next to Copy, before the document/trace/more icons: the answer's own actions stay together.
+    if (foot) { foot.querySelector('[data-act="copy"]').insertAdjacentHTML('afterend', `<button data-act="regen" title="Regenerate: send your last message again for a new answer (files changed by this turn are kept; the old answer stays as a version)" aria-label="Regenerate">${I.refresh}</button><button data-act="regenWith" title="Regenerate with another model…" aria-label="Regenerate with another model">${I.chip}</button>`); }
     applyBranches();
     renderRemoteBanner();
     renderContextNotes();
@@ -1787,7 +1798,7 @@
     const ran = Array.isArray(st.ran) ? st.ran : []; if (!ran.length) { return ''; }
     const more = Number(st.ranMore) || 0;
     const items = ran.map((r) => { const ico = I[RAN_ICON[r.status]] || ''; const tail = r.error || r.detail || ''; return `<li class="ran ${esc(r.status || 'pt')} k-${esc(r.kind || '')}"><span class="m" aria-hidden="true">${ico}</span><span class="n">${esc(r.kind === 'model' ? `Model ${r.name}` : r.name)}</span>${r.status === 'running' ? '<span class="d">was running</span>' : tail ? `<span class="d" title="${esc(tail)}">${short(tail, 90)}</span>` : ''}</li>`; }).join('');
-    return `<details class="rec-ran"><summary>What ran <span class="count">${ran.length + more}</span></summary>${more ? `<div class="rec-vh">${more} earlier step${more === 1 ? '' : 's'} not shown</div>` : ''}<ol>${items}</ol></details>`;
+    return `<details class="rec-ran"><summary><span class="chev" aria-hidden="true">${I.chev}</span>What ran <span class="count">${ran.length + more}</span></summary>${more ? `<div class="rec-vh">${more} earlier step${more === 1 ? '' : 's'} not shown</div>` : ''}<ol>${items}</ol></details>`;
   }
   function renderRunInterrupted(s) {
     const st = state.runInt.get(s.id) || null;
@@ -1808,7 +1819,7 @@
     const cause = partial ? 'LocalPilot closed while this answer was being written. The text written so far is kept above.' : 'VS Code closed or reloaded while LocalPilot was working. Nothing ran since.';
     const acts = partial
       ? `<button class="btn sm primary" data-draft="continue" title="Ask the model to continue from the partial answer">${I.play}<span>Continue</span></button><button class="btn sm" data-draft="regenerate" title="Drop the partial answer and send your request again">${I.refresh}<span>Regenerate</span></button><button class="btn sm ghost" data-draft="discard" title="Remove the partial answer from the chat">${I.trash}<span>Discard</span></button>`
-      : `<button class="btn sm primary" data-run="continue" title="Start a turn that checks what was done and carries on">${I.play}<span>Resume</span></button><button class="btn sm" data-run="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button><button class="btn sm ghost" data-run="dismiss" title="Keep everything as it is and hide this card">Dismiss</button>`;
+      : `<button class="btn sm primary" data-run="continue" title="Start a turn that checks what was done and carries on">${I.play}<span>Resume</span></button><button class="btn sm" data-run="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button><button class="btn sm ghost" data-run="dismiss" title="Keep everything as it is and hide this card">${I.x}<span>Dismiss</span></button>`;
     const card = el('div', `rec rec-int run-int warn${partial ? ' partial' : ''}`, `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">${head}</span>${when ? `<span class="when">started ${esc(when)}</span>` : ''}</div><div class="rec-body"><div class="rec-title">${esc(facts)}</div><div class="rec-cause">${cause}</div>${ranList(run)}${filesBlock}</div><div class="rec-final"><div class="rec-acts">${acts}</div></div>`);
     card.setAttribute('role', 'group'); card.setAttribute('aria-label', head);
     card.onclick = (e) => {
@@ -1854,7 +1865,7 @@
       if (b.dataset.a === 'build') { post({ type: 'buildPlan', sessionId: s.id }); b.disabled = true; b.textContent = 'Building…'; }
       else if (b.dataset.a === 'revise') { if (state.session && state.session.id === s.id && state.session.mode !== 'plan') { setMode('plan'); } state.revising = s.id; syncPlaceholder(); els.input.focus(); }
       else if (b.dataset.a === 'open' && s.plan.file) { post({ type: 'openFile', path: s.plan.file }); }
-      else if (b.dataset.a === 'copy') { navigator.clipboard.writeText(todos.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')).then(() => toast('Checklist copied')); }
+      else if (b.dataset.a === 'copy') { copyTo(b, todos.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')); }
       else if (b.dataset.a === 'detail') { const prev = d.previousElementSibling; if (prev && prev.classList.contains('assistant')) { prev.scrollIntoView({ behavior: calmMotion() ? 'auto' : 'smooth', block: 'start' }); } }
     };
     return d;
@@ -1949,7 +1960,7 @@
     // Without a model nothing can answer: setting one up comes first, and the suggestions wait for it.
     const noModels = !state.models.length && !state.modelsLoading;
     if (noModels) {
-      const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">Set up automatically</button><button class="btn" data-a="refresh">Refresh models</button><button class="btn" data-a="settings">Manage models</button></div>`);
+      const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">${I.play}<span>Set up automatically</span></button><button class="btn" data-a="refresh">${I.refresh}<span>Refresh models</span></button><button class="btn" data-a="settings">${I.gear}<span>Manage models</span></button></div>`);
       n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
       wrap.appendChild(n);
     }
@@ -2037,8 +2048,13 @@
   // sees what the agent is doing, how much it has done and for how long, without reading the rows. When the turn
   // settles it becomes "Worked for 1m 12s · 9 steps · …" and folds the steps away on click (as Copilot does).
   const PHASES = { read_file: 'Reading the code', list_dir: 'Exploring the workspace', grep_search: 'Searching the code', file_search: 'Searching the code', find_symbol: 'Looking up symbols', find_references: 'Looking up references', gather_context: 'Gathering context', get_editor_state: 'Reading the editor', get_diagnostics: 'Checking for errors', edit_file: 'Editing files', apply_patch: 'Editing files', write_file: 'Writing files', create_directory: 'Writing files', delete_path: 'Deleting files', run_command: 'Running a command', web_search: 'Researching on the web', web_fetch: 'Reading documentation', browser_inspect: 'Checking the UI', browser_screenshot: 'Checking the UI', open_browser: 'Opening the browser', manage_todos: 'Planning', load_skill: 'Loading a skill', memory_read: 'Recalling notes', memory_list: 'Recalling notes', memory_save: 'Saving a note', ask_user: 'Waiting for your answer', run_subagent: 'Delegating', run_parallel_subagents: 'Coordinating workers', run_todos_parallel: 'Coordinating workers' };
+  /** A node the live run just created fades in once (chat.css .enter); re-renders and replays never get the class. The class
+   *  goes after the fade (a timer, not animationend: a hidden tab never fires it), so moving the node later cannot replay it. */
+  function enter(n) { if (!n || n.__entered) { return; } n.__entered = true; n.classList.add('enter'); setTimeout(() => n.classList.remove('enter'), 220); }
   function workStrip() { return el('div', 'work running', `<span class="ico">${I.spin}</span><span class="phase">Starting…</span><span class="facts"></span><span class="time"></span><span class="chev">${I.chev}</span>`); }
-  function setPhase(live, text) { if (live.work && text && live.phase !== text) { live.phase = text; if (!live.pausedAt) { live.work.querySelector('.phase').textContent = text; } } }
+  function setPhase(live, text) { if (live.work && text && live.phase !== text) { live.phase = text; if (!live.pausedAt) { live.work.querySelector('.phase').textContent = text; workWaiting(live); } } }
+  /** Waiting on the user (an approval, a question) is not work: the strip shows the tab's warn icon instead of the spinner. */
+  function workWaiting(live) { const w = /^Waiting for your /.test(live.phase || ''); if (live.work.classList.contains('waiting') !== w) { live.work.classList.toggle('waiting', w); live.work.querySelector('.ico').innerHTML = w ? I.warn : I.spin; } }
   const SLOW_TIP = 'Still running; Esc stops the run';
   /** Time the turn has been working: paused stretches do not count. */
   function liveElapsed(live, now) { return Math.max(0, now - live.startedAt - (live.pausedMs || 0) - (live.pausedAt ? now - live.pausedAt : 0)); }
@@ -2048,7 +2064,7 @@
     const p = state.paused.get(live.sid); const held = !!(p && p.paused && p.holding);
     if (held && !live.pausedAt) {
       live.pausedAt = now;
-      live.work.classList.add('paused');
+      live.work.classList.add('paused'); live.work.classList.remove('waiting');
       live.work.querySelector('.ico').innerHTML = I.pause;
       const n = turnStats(live.root).steps;
       live.work.querySelector('.phase').textContent = n ? `Paused after step ${n}` : 'Paused';
@@ -2057,9 +2073,9 @@
       live.work.querySelector('.chev').before(b);
     } else if (!held && live.pausedAt) {
       live.pausedMs = (live.pausedMs || 0) + (now - live.pausedAt); live.pausedAt = 0;
-      live.work.classList.remove('paused');
+      live.work.classList.remove('paused', 'waiting');
       live.work.querySelector('.ico').innerHTML = I.spin;
-      live.work.querySelector('.phase').textContent = live.phase || 'Working';
+      live.work.querySelector('.phase').textContent = live.phase || 'Working'; workWaiting(live);
       const b = live.work.querySelector('.work-resume'); if (b) { b.remove(); }
     }
   }
@@ -2117,7 +2133,7 @@
     // Stopped by the user is not a failure: muted stop icon and its own wording (Continue / Discard come with the latest turn).
     work.className = `work done${stopped ? ' stopped' : failed ? ' failed' : ''}`;
     work.querySelector('.ico').innerHTML = stopped ? I.stop : failed ? I.x : I.check;
-    work.querySelector('.phase').textContent = stopped ? (ms ? `Stopped by you after ${fmtDur(ms)}` : 'Stopped by you') : ms ? `${failed ? 'Stopped after' : 'Worked for'} ${fmtDur(ms)}` : failed ? 'Stopped' : 'Work done';
+    work.querySelector('.phase').textContent = stopped ? (ms ? `Stopped by you after ${fmtDur(ms)}` : 'Stopped by you') : ms ? `${failed ? 'Failed after' : 'Worked for'} ${fmtDur(ms)}` : failed ? 'Failed' : 'Work done';
     const res = work.querySelector('.work-resume'); if (res) { res.remove(); }
     // The checklist's failed items belong to the latest turn only (the todos are the chat's current plan).
     const ft = root.classList.contains('live') || !root.nextElementSibling ? failedTodos().length : 0;
@@ -2160,7 +2176,7 @@
   function ensureLive(sessionId) {
     let live = state.live.get(sessionId);
     if (!live) {
-      const root = el('div', 'turn assistant live');
+      const root = el('div', 'turn assistant live fresh'); setTimeout(() => root.classList.remove('fresh'), 220);
       const work = workStrip();
       const steps = el('div', 'steps');
       const body = el('div', 'body', '<span class="typing"><i></i><i></i><i></i></span>');
@@ -2232,7 +2248,7 @@
     if (!row) {
       rotateBody(live);
       // Keep waiting (another full limit), the first fallback model when one is set and up, another model, or Stop.
-      row = el('div', 'note wait', `<span class="ico">${I.spin}</span><span class="t"></span><span class="lim"></span><span class="acts hidden"><button class="btn sm ghost" data-w="keep" title="Give the model another full wait before it counts as stalled">${I.timer}<span>Keep waiting</span></button><button class="btn sm ghost hidden" data-w="fallback">${I.layers}<span class="fb"></span></button><button class="btn sm ghost" data-w="switch" title="Stop this request and send the message again with another model">${I.layers}<span>Switch model</span></button><button class="btn sm ghost" data-w="stop" title="Stop the run (${kb('Esc')})">${I.stop}<span>Stop</span></button></span>`);
+      row = el('div', 'note wait', `<span class="ico">${I.spin}</span><span class="t"></span><span class="lim"></span><span class="acts hidden"><button class="btn sm ghost" data-w="keep" title="Give the model another full wait before it counts as stalled">${I.timer}<span>Keep waiting</span></button><button class="btn sm ghost hidden" data-w="fallback">${I.chip}<span class="fb"></span></button><button class="btn sm ghost" data-w="switch" title="Stop this request and send the message again with another model">${I.chip}<span>Switch model</span></button><button class="btn sm ghost" data-w="stop" title="Stop the run (${kb('Esc')})">${I.stop}<span>Stop</span></button></span>`);
       row.setAttribute('role', 'status');
       row.onclick = (e) => {
         const b = e.target.closest('button[data-w]'); if (!b) { return; }
@@ -2279,7 +2295,7 @@
     state.rerouted.set(sid, p); if (state.session && state.session.id === sid) { syncModel(); }
     const old = live.root.querySelector(':scope > .note.route'); if (old) { old.remove(); }
     const wanted = modelName(p.wanted) || p.wanted; const used = p.usedName || modelName(p.used) || p.used;
-    const n = el('div', 'note route', `<span class="ico">${I.warn}</span><span class="t"><b>${esc(wanted)}</b> ${p.unavailable ? 'is not answering' : 'is not available'}. This turn uses <b>${esc(used)}</b>${p.cloud ? ' <span class="badge cloud" title="Cloud model: prompts leave this machine">cloud</span>' : ''}.</span><span class="acts"><button class="btn sm ghost" data-r="keep" title="Make ${esc(used)} this chat's model">Use for this chat</button><button class="btn sm ghost" data-r="retry" title="Stop and send the message again with ${esc(wanted)}">${I.refresh}<span>Retry with ${esc(short(wanted, 24))}</span></button></span>`);
+    const n = el('div', 'note route', `<span class="ico">${I.warn}</span><span class="t"><b>${esc(wanted)}</b> ${p.unavailable ? 'is not answering' : 'is not available'}. This turn uses <b>${esc(used)}</b>${p.cloud ? ' <span class="badge cloud" title="Cloud model: prompts leave this machine">cloud</span>' : ''}.</span><span class="acts"><button class="btn sm ghost" data-r="keep" title="Make ${esc(used)} this chat's model">${I.check}<span>Use for this chat</span></button><button class="btn sm ghost" data-r="retry" title="Stop and send the message again with ${esc(wanted)}">${I.refresh}<span>Retry with ${esc(short(wanted, 24))}</span></button></span>`);
     n.title = p.reason || '';
     n.onclick = (e) => {
       const b = e.target.closest('button[data-r]'); if (!b) { return; }
@@ -2402,7 +2418,7 @@
       return `<li class="${cls}"${cur ? ' aria-current="step"' : ''}>${esc(s[0])}</li>`;
     }).join('');
     const chip = (c) => {
-      const st = String(c.status || ''); const sym = st === 'passed' ? '✓' : st === 'failed' ? '✗' : st === 'timeout' ? '⏱' : st === 'skipped' ? '' : '…';
+      const st = String(c.status || ''); const sym = st === 'passed' ? I.check : st === 'failed' ? I.x : st === 'timeout' ? I.timer : st === 'skipped' ? '' : I.spin;
       const ms = typeof c.ms === 'number' && st !== 'skipped' ? (c.ms >= 1000 ? `${(c.ms / 1000).toFixed(1)}s` : `${Math.round(c.ms)}ms`) : '';
       const tip = st === 'skipped' ? `Skipped${c.skipReason ? `: ${c.skipReason}` : ''}` : `${c.id}: ${st}${ms ? ` in ${ms}` : ''}`;
       // A failed check with an excerpt expands (click / Enter) to show what failed.
@@ -2447,7 +2463,7 @@
     // A git conflict lists its files, each with its own merge editor; Resume stays off until git reports none left.
     const conflict = iv && iv.reason === 'git_conflict';
     const files = conflict && Array.isArray(iv.files) ? iv.files : [];
-    if (files.length) { fin.insertAdjacentHTML('beforeend', `<ul class="rec-conflicts">${files.map((f) => `<li data-file="${esc(f)}"><span class="f" title="${esc(f)}">${esc(f)}</span><button class="btn sm" type="button" data-merge="${esc(f)}" title="Open ${esc(f)} in the merge editor">Open in merge editor</button></li>`).join('')}</ul>`); }
+    if (files.length) { fin.insertAdjacentHTML('beforeend', `<ul class="rec-conflicts">${files.map((f) => `<li data-file="${esc(f)}"><span class="f" title="${esc(f)}">${esc(f)}</span><button class="btn sm" type="button" data-merge="${esc(f)}" title="Open ${esc(f)} in the merge editor">${I.merge}<span>Open in merge editor</span></button></li>`).join('')}</ul>`); }
     if (iv && iv.next) { fin.insertAdjacentHTML('beforeend', `<div class="rec-next">${esc(iv.next)}</div>`); }
     if (conflict) {
       card.dataset.conflict = '1';
@@ -2587,7 +2603,7 @@
     const head = recHeader(p).replace(/^Self-healing/, out === 'completed' ? 'Recovered' : out === 'completed_unverified' ? 'Not verified' : out && out !== 'cancelled' ? 'Needs attention' : 'Self-healing');
     mini.querySelector('.t').textContent = `${head}${!out && p.phase ? ` · ${REC_PHASE[p.phase] || p.phase}` : ''}`;
     mini.querySelector('.t').title = [p.title, p.rootCause && `Root cause: ${p.rootCause}`, p.decision].filter(Boolean).join('\n');
-    mini.querySelector('.chips').innerHTML = (Array.isArray(p.checks) ? p.checks : []).map((c) => `<b class="${esc(c.status)}" title="${esc(`${c.id}: ${c.status}${c.skipReason ? ` (${c.skipReason})` : ''}`)}">${c.status === 'passed' ? '✓' : c.status === 'failed' ? '✗' : c.status === 'timeout' ? '⏱' : '–'}</b>`).join('');
+    mini.querySelector('.chips').innerHTML = (Array.isArray(p.checks) ? p.checks : []).map((c) => `<b class="${esc(c.status)}" title="${esc(`${c.id}: ${c.status}${c.skipReason ? ` (${c.skipReason})` : ''}`)}">${c.status === 'passed' ? I.check : c.status === 'failed' ? I.x : c.status === 'timeout' ? I.timer : '–'}</b>`).join('');
     return mini;
   }
   /** Replay: the card of a finished turn. The full payload when this webview saw the turn, else the stored footer. */
@@ -2637,7 +2653,7 @@
     const changed = (state.changes && state.changes.get(s.id)) || [];
     const files = changed.slice(0, 6).map((f) => `<li title="${esc(f.path || f.fsPath || '')}">${esc(f.path || f.fsPath || '')}</li>`).join('') + (changed.length > 6 ? `<li class="more">+${changed.length - 6} more</li>` : '');
     const review = changed.length ? `<button class="btn sm ghost" data-run="review" title="Open the changes this chat made so far">${I.diff || ''}<span>Review changes so far</span></button>` : '';
-    const card = el('div', 'rec rec-int warn', `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">Recovery interrupted</span></div><div class="rec-body"><div class="rec-title">${esc(facts)}</div>${cause ? `<div class="rec-cause"><span>Root cause:</span> ${esc(cause)}</div>` : ''}${fails ? `<ul class="rec-fails">${fails}</ul>` : ''}${files ? `<div class="rec-vh">${changed.length} file${changed.length === 1 ? '' : 's'} changed so far</div><ul class="rec-files">${files}</ul>` : ''}</div><div class="rec-final"><div class="rec-acts"><button class="btn sm primary" data-ra="resume" title="Re-run the checks, then continue fixing where it stopped">${I.play}<span>Resume</span></button><button class="btn sm" data-ra="rollback" title="Undo the files the interrupted fix attempts changed">${I.undo}<span>Rollback fixes</span></button>${review}<button class="btn sm ghost" data-ra="dismiss" title="Keep the files as they are and forget this recovery">Dismiss</button></div></div>`);
+    const card = el('div', 'rec rec-int warn', `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">Recovery interrupted</span></div><div class="rec-body"><div class="rec-title">${esc(facts)}</div>${cause ? `<div class="rec-cause"><span>Root cause:</span> ${esc(cause)}</div>` : ''}${fails ? `<ul class="rec-fails">${fails}</ul>` : ''}${files ? `<div class="rec-vh">${changed.length} file${changed.length === 1 ? '' : 's'} changed so far</div><ul class="rec-files">${files}</ul>` : ''}</div><div class="rec-final"><div class="rec-acts"><button class="btn sm primary" data-ra="resume" title="Re-run the checks, then continue fixing where it stopped">${I.play}<span>Resume</span></button><button class="btn sm" data-ra="rollback" title="Undo the files the interrupted fix attempts changed">${I.undo}<span>Rollback fixes</span></button>${review}<button class="btn sm ghost" data-ra="dismiss" title="Keep the files as they are and forget this recovery">${I.x}<span>Dismiss</span></button></div></div>`);
     card.querySelector('.rec-acts').onclick = (e) => {
       const r = e.target.closest('button[data-run]'); if (r) { post({ type: 'runAction', sessionId: s.id, action: r.dataset.run }); return; }
       const b = e.target.closest('button[data-ra]'); if (!b) { return; }
@@ -2843,7 +2859,7 @@
           const d = e.payload.data || {}; const sub = live.subs.get(e.payload.childId);
           if (sub && d.name !== 'manage_todos') {
             const rows = d.origin === 'healing' ? recChild(sub, d, true) : sub.querySelector(':scope > .content > .subrows') || sub.querySelector('.subrows');
-            if (rows) { const node = placeTool(rows, { id: d.id, name: d.name, arguments: JSON.stringify(d.args || {}) }, null); if (node) { live.subTools.set(`${e.payload.childId}:${d.id}`, node); node.__t0 = Date.now(); } sub.dataset.calls = String(Number(sub.dataset.calls || 0) + 1); }
+            if (rows) { const node = placeTool(rows, { id: d.id, name: d.name, arguments: JSON.stringify(d.args || {}) }, null); if (node) { live.subTools.set(`${e.payload.childId}:${d.id}`, node); node.__t0 = Date.now(); enter(node); } sub.dataset.calls = String(Number(sub.dataset.calls || 0) + 1); }
           }
           childStatus(live, sid, e.payload.childId, e.payload.agent, plainLabel(toolLabel(d.name, d.args || {}, true)), visible);
           followLive(live);
@@ -2853,7 +2869,7 @@
         if (!heal) { rotateBody(live); }
         clearWait(live); retryRecovered(live);
         const node = placeTool(heal ? recToolRows(live, sid) : live.steps, { id: e.payload.id, name: e.payload.name, arguments: JSON.stringify(e.payload.args || {}) }, null);
-        if (node) { live.tools.set(e.payload.id, node); node.__t0 = Date.now(); if (e.payload.todoId) { node.dataset.todo = String(e.payload.todoId); linkTodo(String(e.payload.todoId)); } }
+        if (node) { live.tools.set(e.payload.id, node); node.__t0 = Date.now(); enter(node); if (e.payload.todoId) { node.dataset.todo = String(e.payload.todoId); linkTodo(String(e.payload.todoId)); } }
         setPhase(live, heal ? 'Verifying' : PHASES[e.payload.name] || 'Working'); updateWork(live);
         noteStatus(sid, toolLabel(e.payload.name, e.payload.args || {}, true).replace(/<[^>]+>/g, ''));
         followLive(live);
@@ -2874,7 +2890,7 @@
         let c = [...live.tools.values()].find((n) => n.classList.contains('subagent') && n.dataset.pending === '1' && !n.dataset.childId && n.dataset.agent === e.payload.agent);
         if (c) { if (e.payload.model) { const m = c.querySelector('.pill .model'); const name = modelName(e.payload.model); if (m) { m.textContent = name; } else if (name) { c.querySelector('.pill').insertAdjacentHTML('beforeend', `<i>·</i><span class="model">${esc(name)}</span>`); } } }
         else {
-          c = subagentCard(e.payload.agent, e.payload.prompt, e.payload.model, e.payload.label);
+          c = subagentCard(e.payload.agent, e.payload.prompt, e.payload.model, e.payload.label); enter(c);
           const host = hostFor(live);
           if (host) {
             // Claim the queued lane for this exact checklist item first, then any lane of the same agent, then the next free one.
@@ -2936,7 +2952,7 @@
       case 'context': if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; if (e.payload.breakdown) { state.session.contextBreakdown = e.payload.breakdown; } updateCtx(); } break;
       // Facts the finished run taught, saved to project memory after the answer.
       case 'memory': if (visible && e.payload && e.payload.saved && e.payload.saved.length) { toast(`Saved to memory: ${e.payload.saved.join(', ')}`, 'info'); } break;
-      case 'compaction': { rotateBody(live); const p = e.payload || {}; const d = p.details ? compactionEl(p.details, p.summary || '') : el('div', 'note', `Context compacted: ${Number(p.before).toLocaleString()} → ${Number(p.after).toLocaleString()} tokens (${p.removed} messages summarised)`); if (p.details) { d.querySelector('.ico').innerHTML = I.list; } live.root.insertBefore(d, live.body); break; }
+      case 'compaction': { rotateBody(live); const p = e.payload || {}; const d = p.details ? compactionEl(p.details, p.summary || '') : el('div', 'note', `Context compacted: ${Number(p.before).toLocaleString()} → ${Number(p.after).toLocaleString()} tokens (${p.removed} messages summarised)`); if (p.details) { d.querySelector('.ico').innerHTML = I.compact; } live.root.insertBefore(d, live.body); break; }
       case 'skill_suggestions': { rotateBody(live); const n = skillSuggestionNote(e.payload || {}); if (n) { live.root.insertBefore(n, live.body); } break; }
       case 'clarify': rotateBody(live); live.root.insertBefore(el('div', 'note', `Request looks ambiguous (${esc((e.payload && e.payload.reasons || []).join('; '))}) — interpreting it from the editor, open files, errors and git changes.`), live.body); break;
       case 'hook': {
@@ -2963,7 +2979,7 @@
       }
       case 'waiting': showWait(live, sid, e.payload || {}); break;
       case 'route': routeNote(live, sid, e.payload || {}); break;
-      case 'error': { clearWait(live); if (live.retryRow) { live.retryRow.className = 'note retry failed'; live.retryRow.querySelector('.ico').innerHTML = I.warn; live.retryRow = null; } rotateBody(live); live.failed = true; setPhase(live, e.payload && e.payload.kind === 'mistake_limit' ? 'Stopped' : 'Failed'); const box = errorBox(e.payload); errorActions(box, sid); live.root.insertBefore(box, live.body); break; }
+      case 'error': { clearWait(live); if (live.retryRow) { live.retryRow.className = 'note retry failed'; live.retryRow.querySelector('.ico').innerHTML = I.warn; live.retryRow = null; } rotateBody(live); live.failed = true; setPhase(live, e.payload && e.payload.kind === 'mistake_limit' ? 'Stopped' : 'Failed'); const box = errorBox(e.payload); errorActions(box, sid); enter(box); live.root.insertBefore(box, live.body); break; }
       case 'recovery': onRecovery(live, sid, e.payload, visible); for (const n of live.root.querySelectorAll('.step.has-tests')) { syncHealLink(n); } break;
       case 'turn_end': noteStatus(sid, 'Finishing…'); recTurnEnd(live, sid, e.payload, visible); if (e.payload && typeof e.payload.durationMs === 'number') { live.durationMs = e.payload.durationMs; } if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
     }
@@ -3027,7 +3043,7 @@
 
   // ------------------------------------------------------------------ composer state
   function setStatus(text) { els.statusText.textContent = text || ''; els.status.classList.toggle('hidden', !text); }
-  function setRunning(running) { renderRunHint(); fitModelChip(); syncFolderChip(); els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.pause.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } syncPause(); updateSendEnabled(); updateJump(); }
+  function setRunning(running) { document.body.classList.toggle('running', !!running); renderRunHint(); fitModelChip(); syncFolderChip(); els.send.classList.toggle('hidden', running); els.stop.classList.toggle('hidden', !running); els.pause.classList.toggle('hidden', !running); els.progress.classList.toggle('hidden', !running); if (!running) { setStatus(''); } syncPause(); updateSendEnabled(); updateJump(); }
   function updateSendEnabled() { els.send.disabled = !els.input.value.trim() && !state.images.length; syncEmptyChrome(); }
   /** Pause button, progress bar and placeholder follow the active session's pause state. */
   function syncPause() {
@@ -3218,7 +3234,7 @@
     if (state.running.has(s.id) && state.paused.get(s.id) && state.paused.get(s.id).paused) { return `<span class="pausedind" aria-label="Paused">${I.pause}</span>`; }
     if (state.running.has(s.id)) { return LIVE_DOT; }
     if (state.attention.has(s.id)) { return I.warn; }
-    if (state.unread.has(s.id)) { return '<span class="dot" aria-label="Finished"></span>'; }
+    if (state.unread.has(s.id)) { return `<span class="doneind" aria-label="Finished">${I.check}</span>`; }
     if (s.pinned) { return I.pin; }
     return modeView(s).icon;
   }
@@ -3272,7 +3288,7 @@
       els.tabs.appendChild(more);
     }
     els.history.dataset.n = String(state.running.size);
-    els.history.title = state.running.size ? `All chats · ${state.running.size} agent${state.running.size === 1 ? '' : 's'} running` : 'All chats';
+    els.history.title = state.running.size ? `All chats · ${state.running.size} agent${state.running.size === 1 ? '' : 's'} running` : 'All chats'; els.history.setAttribute('aria-label', els.history.title);
     const act = els.tabs.querySelector('.tab.active'); if (act) { act.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
     tabEdges();
     renderBgRuns();
@@ -3372,7 +3388,7 @@
       { label: 'Export as Markdown', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id }) },
       { hr: true },
       ...(running ? [(state.paused.get(s.id) && state.paused.get(s.id).paused) ? { label: 'Resume agent', desc: 'Continue from where it paused', icon: I.play, onPick: () => post({ type: 'resume', sessionId: s.id }) } : { label: 'Pause agent', desc: 'Holds after the current step; type to add instructions', icon: I.pause, onPick: () => post({ type: 'pause', sessionId: s.id }) }] : []),
-      ...(running ? [{ label: 'Stop agent', desc: state.status.get(s.id) || 'Running', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : [{ label: 'Clear messages', icon: I.list, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }]),
+      ...(running ? [{ label: 'Stop agent', desc: state.status.get(s.id) || 'Running', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : [{ label: 'Clear messages', icon: I.clearAll, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }]),
       ...(running || s.pinned ? [] : [{ label: 'Close tab', desc: 'Keeps the chat in All chats', icon: I.x, onPick: () => closeTab(s.id) }]),
       ...(running ? [{ label: 'Stop and close', desc: 'Cancels the agent and closes this tab', icon: I.x, onPick: () => closeTabs([s.id], { stop: true }) }] : []),
       ...(idle.length ? [{ group: 'Close many', label: 'Close other tabs', desc: `${idle.length} idle tab${idle.length === 1 ? '' : 's'} · running and pinned stay`, icon: I.x, onPick: () => closeTabs(idle) }] : []),
@@ -3412,14 +3428,16 @@
     const runs = tabList().all.filter((s) => state.running.has(s.id) && s.id !== active);
     els.bgruns.classList.toggle('hidden', !runs.length);
     // Rebuilding identical rows restarts their spinners on every store broadcast; skip when nothing visible changed.
-    const sig = runs.map((s) => `${s.id}:${s.title}:${state.status.get(s.id) || ''}:${tabModel(s)}:${state.paused.get(s.id) && state.paused.get(s.id).paused ? 'p' : ''}`).join('|');
+    const sig = runs.map((s) => `${s.id}:${s.title}:${state.status.get(s.id) || ''}:${tabModel(s)}:${state.paused.get(s.id) && state.paused.get(s.id).paused ? 'p' : ''}:${state.attention.has(s.id) ? 'w' : ''}`).join('|');
     if (sig === bgSig) { return; }
     bgSig = sig;
     els.bgruns.innerHTML = '';
     if (!runs.length) { return; }
     for (const s of runs.slice(0, 3)) {
       const paused = state.paused.get(s.id) && state.paused.get(s.id).paused;
-      const row = el('div', `bgrun ${paused ? 'paused' : ''}`, `<button class="open">${paused ? `<span class="pausedind">${I.pause}</span>` : LIVE_DOT}<span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(state.status.get(s.id) || 'Working…')}</span><span class="mdl" title="Model">${esc(tabModel(s))}</span></button><button class="stop pausebtn" title="${paused ? 'Resume this agent' : 'Pause this agent after its current step'}" aria-label="${paused ? 'Resume' : 'Pause'} “${esc(s.title || 'New chat')}”">${paused ? I.play : I.pause}</button><button class="stop" title="Stop this agent" aria-label="Stop “${esc(s.title || 'New chat')}”">${I.stop}</button>`);
+      // Waiting on an approval or answer outranks "running": the same warn triangle as its tab.
+      const waiting = !paused && state.attention.has(s.id);
+      const row = el('div', `bgrun ${paused ? 'paused' : waiting ? 'waiting' : ''}`, `<button class="open">${paused ? `<span class="pausedind">${I.pause}</span>` : waiting ? `<span class="waitind" aria-label="Waiting for you">${I.warn}</span>` : LIVE_DOT}<span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(waiting ? 'Waiting for you' : state.status.get(s.id) || 'Working…')}</span><span class="mdl" title="Model">${esc(tabModel(s))}</span></button><button class="stop pausebtn" title="${paused ? 'Resume this agent' : 'Pause this agent after its current step'}" aria-label="${paused ? 'Resume' : 'Pause'} “${esc(s.title || 'New chat')}”">${paused ? I.play : I.pause}</button><button class="stop" title="Stop this agent" aria-label="Stop “${esc(s.title || 'New chat')}”">${I.stop}</button>`);
       row.querySelector('.open').title = `${s.title}\n${state.status.get(s.id) || 'Working…'}\nModel: ${tabModel(s)}\nClick to open`;
       row.onclick = (e) => { if (e.target.closest('.pausebtn')) { post({ type: paused ? 'resume' : 'pause', sessionId: s.id }); return; } if (e.target.closest('.stop')) { post({ type: 'stop', sessionId: s.id }); return; } selectTab(s.id); };
       els.bgruns.appendChild(row);
@@ -3536,7 +3554,7 @@
     const psel = ready ? `<select class="psel" aria-label="Project" title="Which project's conversations"><option value="this"${hist.project === 'this' ? ' selected' : ''}>This project${cur ? ` (${cur.count})` : ''}</option><option value="all"${hist.project === 'all' ? ' selected' : ''}>All projects (${total})</option>${projs.filter((p) => !p.current).map((p) => `<option value="${esc(p.id)}"${hist.project === p.id ? ' selected' : ''}>${esc(short(p.name, 28))}${p.missing ? ' (moved?)' : ''} (${p.count})</option>`).join('')}</select>` : '';
     const sel = projs.find((p) => p.id === hist.project);
     const moved = sel && sel.missing ? `<div class="nav-moved" role="note">Chats from <b>${esc(sel.name)}</b>, whose folder is gone on this computer. <button class="lnk" data-repoint="${esc(sel.id)}">This is the same project</button></div>` : '';
-    const tags = ready && n.tags && n.tags.length ? `<div class="nav-tags" role="group" aria-label="Tags">${hist.tag ? `<button class="tchip on" data-tag="" aria-pressed="true">#${esc(hist.tag)} ×</button>` : n.tags.slice(0, 8).map((t) => `<button class="tchip" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : '';
+    const tags = ready && n.tags && n.tags.length ? `<div class="nav-tags" role="group" aria-label="Tags">${hist.tag ? `<button class="tchip on" data-tag="" aria-pressed="true" title="Clear the tag filter">#${esc(hist.tag)}${I.x}</button>` : n.tags.slice(0, 8).map((t) => `<button class="tchip" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : '';
     box.innerHTML = `<div class="nav-views" role="group" aria-label="Views">${chips}</div>${show}${psel ? `<div class="nav-proj">${psel}</div>` : ''}${tags}${moved}${note}`;
     box.onmousedown = (e) => { if (e.target.closest('button')) { e.preventDefault(); holdHistory(); } };
     box.onclick = (e) => {
@@ -3558,7 +3576,7 @@
   const SYNC_TITLE = { off: 'Sync is off', idle: 'Synced', syncing: 'Syncing…', offline: 'Offline — changes wait', paused: 'Sync paused', error: 'Sync failed', unavailable: 'Sync is not available' };
   function applySyncDot() {
     const st = state.sync; if (!st) { return; }
-    const cls = st.state === 'off' || st.state === 'unavailable' ? 'off' : st.conflicts || st.state === 'offline' || st.state === 'error' || (st.state === 'paused' && st.reason !== 'user') ? 'err' : st.state === 'syncing' ? 'busy' : st.state === 'idle' ? 'ok' : 'off';
+    const cls = st.state === 'off' || st.state === 'unavailable' ? 'off' : st.state === 'error' || (st.state === 'paused' && st.reason !== 'user') ? 'err' : st.conflicts || st.state === 'offline' ? 'warn' : st.state === 'syncing' ? 'busy' : st.state === 'idle' ? 'ok' : 'off';
     const title = `${SYNC_TITLE[st.state] || st.state}${st.conflicts ? ` · ${st.conflicts} conflict${st.conflicts === 1 ? '' : 's'}` : ''}${st.pending && st.state !== 'off' ? ` · ${st.pending} change${st.pending === 1 ? '' : 's'} waiting` : ''}`;
     document.querySelectorAll('.know[data-k="sync"]').forEach((b) => {
       const d = b.querySelector('.sdot'); if (d) { d.className = `sdot ${cls}`; d.title = title; }
@@ -3713,7 +3731,7 @@
         ? (hist.confirm === s.id ? `<span class="q">Delete forever?</span><button data-a="purge" class="danger">Delete</button><button data-a="cancel">Keep</button>` : `<button data-a="restore" title="Restore from Trash">${I.restore}<span>Restore</span></button><button data-a="askpurge" class="danger" title="Delete permanently…" aria-label="Delete permanently">${I.trash}</button>`)
         : hist.confirm === s.id
           ? `<span class="q">${running ? (toTrash ? 'Stop and move to Trash?' : 'Stop and delete?') : toTrash ? 'Move to Trash?' : 'Delete?'}</span><button data-a="confirm" class="danger">${toTrash ? 'Move' : 'Delete'}</button><button data-a="cancel">Keep</button>`
-          : `${toTrash ? `<button data-a="fav" title="${fav ? 'Remove from Favorites' : 'Add to Favorites'}" aria-pressed="${fav}" aria-label="Favorite">${I.star}</button>` : ''}<button data-a="pin" title="${s.pinned ? 'Unpin' : 'Pin — stays first in the tab bar and is never removed by retention'}" aria-pressed="${!!s.pinned}">${I.pin}</button><button data-a="rename" title="Rename (F2)">${I.rename}</button><button data-a="more" title="More…">${I.list}</button><button data-a="delete" title="${running ? `Stop the agent and ${toTrash ? 'move this chat to Trash' : 'delete this chat'}` : toTrash ? 'Move to Trash' : 'Delete this chat'}">${I.trash}</button>`;
+          : `${toTrash ? `<button data-a="fav" title="${fav ? 'Remove from Favorites' : 'Add to Favorites'}" aria-pressed="${fav}" aria-label="Favorite">${I.star}</button>` : ''}<button data-a="pin" title="${s.pinned ? 'Unpin' : 'Pin — stays first in the tab bar and is never removed by retention'}" aria-pressed="${!!s.pinned}">${I.pin}</button><button data-a="rename" title="Rename (F2)">${I.rename}</button><button data-a="more" title="More…" aria-label="More actions">${I.more}</button><button data-a="delete" title="${running ? `Stop the agent and ${toTrash ? 'move this chat to Trash' : 'delete this chat'}` : toTrash ? 'Move to Trash' : 'Delete this chat'}">${I.trash}</button>`;
       const meta = historyMeta(s);
       const ico = hist.selecting ? `<input type="checkbox" class="pick-box" tabindex="-1" aria-label="Select" ${picked ? 'checked' : ''}>` : running ? LIVE_DOT : s.pinned ? I.pin : fav ? `<span class="favico">${I.star}</span>` : mode.icon;
       row.innerHTML = `<span class="ico">${ico}</span><span class="txt"><span class="lbl">${highlightMatch(s.title || 'New chat', q)}</span><span class="desc${hit && hit.snippet ? ' snippet' : ''}">${desc}</span>${meta ? `<span class="meta">${esc(meta)}</span>` : ''}</span>${tag}${hist.selecting ? '' : `<span class="acts">${acts}</span>`}`;
@@ -3739,7 +3757,7 @@
     const selRow = list.querySelector('.hist-row.sel'); if (selRow && hist.reveal) { selRow.scrollIntoView({ block: 'nearest' }); } hist.reveal = false;
     const idle = state.sessions.filter((s) => !state.running.has(s.id) && (s.messageCount > 0 || s.pinned || s.plan));
     // Wide enough (≥320 px), the tidy-up buttons carry a short label; narrower they are icons with the same aria-label.
-    foot.innerHTML = `<div class="hist-acts"><button data-a="multi" title="Several agents at once">${I.layers}<span>Multitask</span></button>${state.running.size > 1 ? `<button data-a="stopall" title="Stop every running agent; tabs stay open">${I.stop}<span>Stop all ${state.running.size}</span></button>` : ''}</div><div class="hist-acts tidy"><button data-a="closeothers" title="Close idle tabs — the chats stay here" aria-label="Close idle tabs">${I.closeOthers}<span class="lbl">Close idle tabs</span></button><button data-a="clear" class="danger" title="Clear chat history… (${idle.length} idle chat${idle.length === 1 ? '' : 's'} in this workspace, ${fmtBytes(idle.reduce((n, s) => n + (s.bytes || 0), 0))})" aria-label="Clear chat history" ${idle.length ? '' : 'disabled'}>${I.trash}<span class="lbl">Clear…</span></button>${navReady() ? `<button data-a="import" title="Import conversations from a LocalPilot JSON export" aria-label="Import conversations">${I.import}</button>` : ''}<button data-a="settings" title="Memory & history settings" aria-label="Memory and history settings">${I.memory}</button></div>`;
+    foot.innerHTML = `<div class="hist-acts"><button data-a="multi" title="Several agents at once">${I.parallel}<span>Multitask</span></button>${state.running.size > 1 ? `<button data-a="stopall" title="Stop every running agent; tabs stay open">${I.stop}<span>Stop all ${state.running.size}</span></button>` : ''}</div><div class="hist-acts tidy"><button data-a="closeothers" title="Close idle tabs — the chats stay here" aria-label="Close idle tabs">${I.closeOthers}<span class="lbl">Close idle tabs</span></button><button data-a="clear" class="danger" title="Clear chat history… (${idle.length} idle chat${idle.length === 1 ? '' : 's'} in this workspace, ${fmtBytes(idle.reduce((n, s) => n + (s.bytes || 0), 0))})" aria-label="Clear chat history" ${idle.length ? '' : 'disabled'}>${I.trash}<span class="lbl">Clear…</span></button>${navReady() ? `<button data-a="import" title="Import conversations from a LocalPilot JSON export" aria-label="Import conversations">${I.import}</button>` : ''}<button data-a="settings" title="Memory & history settings" aria-label="Memory and history settings">${I.memory}</button></div>`;
     foot.onmousedown = (e) => { const b = e.target.closest('[data-a]'); if (b && !b.disabled) { e.preventDefault(); holdHistory(); } };
     foot.onclick = (e) => {
       const b = e.target.closest('[data-a]'); if (!b || b.disabled) { return; }
@@ -3894,7 +3912,7 @@
           { label: 'Delete permanently…', desc: 'Messages, archive, traces and checkpoints', icon: I.trash, onPick: () => post({ type: 'convAction', ids: [s.id], action: 'purge' }) },
           { label: 'Import conversations…', desc: 'From a LocalPilot JSON export', icon: I.import, onPick: () => post({ type: 'importConversations' }) },
           { hr: true },
-          { label: 'Back to Trash', icon: I.reply, onPick: back },
+          { label: 'Back to Trash', icon: I.back, onPick: back },
         ]);
         return;
       }
@@ -3922,11 +3940,11 @@
           { label: 'Export as Markdown', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id }) },
           { label: 'Export as HTML', desc: 'A standalone page', icon: I.export, onPick: () => post({ type: 'exportSession', id: s.id, format: 'html' }) },
         ]),
-        ...(running ? [{ label: 'Stop agent', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : inStore ? [{ label: 'Clear messages', desc: 'Keeps the chat, empties it', icon: I.list, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }] : []),
+        ...(running ? [{ label: 'Stop agent', icon: I.stop, onPick: () => post({ type: 'stop', sessionId: s.id }) }] : inStore ? [{ label: 'Clear messages', desc: 'Keeps the chat, empties it', icon: I.clearAll, onPick: () => post({ type: 'clearSession', sessionId: s.id }) }] : []),
         { hr: true },
         { label: nav ? 'Move to Trash' : 'Delete chat…', desc: running ? 'Stops the agent first' : nav ? 'Undo for 10 s; Trash keeps it' : 'Cannot be undone', icon: I.trash, onPick: () => { openHistory({ view: hist.view }); hist.confirm = s.id; hist.sel = historyRows().findIndex((r) => r.s.id === s.id); hist.reveal = true; hist.sig = ''; renderHistory(); } },
         { hr: true },
-        { label: 'Back to all chats', icon: I.reply, onPick: back },
+        { label: 'Back to all chats', icon: I.back, onPick: back },
       ]);
     }
   }
@@ -3995,7 +4013,7 @@
     const toolModels = state.models.filter((m) => m.supportsTools);
     let kind = kindArg === 'bestof' ? 'bestof' : 'tasks';
     const box = el('div', 'par', `
-      <div class="par-head">${I.layers}<div><b>Multitask</b><span>Start several agents at once. Each works in its own copy of your project, so nothing collides — you review and apply what you like.</span></div></div>
+      <div class="par-head">${I.parallel}<div><b>Multitask</b><span>Start several agents at once. Each works in its own copy of your project, so nothing collides — you review and apply what you like.</span></div></div>
       <div class="par-cards" role="radiogroup">
         <button class="par-card ${kind === 'tasks' ? 'on' : ''}" data-m="tasks" role="radio" aria-checked="${kind === 'tasks'}">${I.list}<b>Split the work</b><span>Give each agent its own task; they run at the same time.</span></button>
         <button class="par-card ${kind === 'bestof' ? 'on' : ''}" data-m="bestof" role="radio" aria-checked="${kind === 'bestof'}">${I.sparkle}<b>Try several models</b><span>One task, several models — keep the result you like best.</span></button>
@@ -4145,7 +4163,7 @@
     let nowEl = els.tasksToggle.querySelector('.now-task');
     if (!nowEl) { nowEl = el('span', 'now-task', ''); els.tasksLabel.after(nowEl); }
     nowEl.textContent = !open && now ? `· ${now.title}` : '';
-    els.tasksMeter.firstElementChild.style.width = `${Math.round((done / todos.length) * 100)}%`;
+    els.tasksMeter.firstElementChild.style.width = `${Math.round((done / todos.length) * 100)}%`; els.tasksMeter.title = `${done} of ${todos.length} done`;
     const sig = `${state.session.id}|${todos.map((t) => `${t.id}:${t.status}:${t.title}:${t.agent || ''}:${(t.dependsOn || []).join(',')}`).join('|')}`;
     if (sig === tasksSig) { return; }
     tasksSig = sig;
@@ -4374,7 +4392,8 @@
     const p = els.popover; const r = anchor.getBoundingClientRect(); const pw = Math.min(p.offsetWidth || 360, window.innerWidth - 20);
     p.style.left = `${Math.max(10, Math.min(r.left, window.innerWidth - pw - 10))}px`;
     const ph = p.offsetHeight; const above = r.top - 8;
-    if (above >= Math.min(ph, 200)) { p.style.top = `${Math.max(8, r.top - 6 - ph)}px`; } else { p.style.top = `${r.bottom + 6}px`; }
+    // Clamped to the view: an anchor scrolled half out of sight (a streaming transcript) never pushes the menu off an edge.
+    if (above >= Math.min(ph, 200)) { p.style.top = `${Math.max(8, r.top - 6 - ph)}px`; } else { p.style.top = `${Math.max(8, Math.min(r.bottom + 6, window.innerHeight - ph - 8))}px`; }
   }
   function openMenu(anchor, items, opts = {}) {
     const p = els.popover; p.innerHTML = ''; p.classList.remove('hidden'); p.dataset.menu = opts.cls || '';
@@ -4481,7 +4500,7 @@
     const health = state.providerHealth || {};
     const HEALTH = { ok: ['reachable', 'ok'], slow: ['slow', 'warn'], down: ['down', 'err'], nokey: ['no key', 'err'] };
     const gtag = (pid) => { const h = health[pid]; const v = h && HEALTH[h.state]; return v ? { text: v[0], cls: v[1], title: healthTitle(h) } : undefined; };
-    const row = (m, group) => ({ group, groupTag: group === 'Starred' ? undefined : gtag(m.providerId), label: m.name, desc: `${group === 'Starred' ? `${provName(m.providerId)} · ` : ''}${ctxLabel(m)}${m.supportsTools ? ' · tools' : ' · text tools'}${m.supportsVision ? ' · vision' : ''}`, tags: [m.remote && { text: 'cloud', title: 'Cloud model: prompts leave this machine' }, ctxCapped(m) && { text: 'capped', cls: 'capped', title: 'Limited by Settings → Models → Context window' }], icon: I.bot, selected: m.id === cur, starred: favs.has(m.id), onStar: (q) => toggleFavoriteModel(m.id, q), onPick: () => chooseModel(m.id) });
+    const row = (m, group) => ({ group, groupTag: group === 'Starred' ? undefined : gtag(m.providerId), label: m.name, desc: `${group === 'Starred' ? `${provName(m.providerId)} · ` : ''}${ctxLabel(m)}${m.supportsTools ? ' · tools' : ' · text tools'}${m.supportsVision ? ' · vision' : ''}`, tags: [m.remote && { text: 'cloud', title: 'Cloud model: prompts leave this machine' }, ctxCapped(m) && { text: 'capped', cls: 'capped', title: 'Limited by Settings → Models → Context window' }], icon: I.chip, selected: m.id === cur, starred: favs.has(m.id), onStar: (q) => toggleFavoriteModel(m.id, q), onPick: () => chooseModel(m.id) });
     for (const m of state.models) { if (favs.has(m.id)) { items.push(row(m, 'Starred')); } }
     for (const m of state.models) { if (!favs.has(m.id)) { items.push(row(m, provName(m.providerId))); } }
     const listed = new Set(state.models.map((m) => m.providerId));
@@ -4489,7 +4508,7 @@
       if (listed.has(pid) || (h.state !== 'down' && h.state !== 'nokey')) { continue; }
       items.push({ group: provName(pid), groupTag: gtag(pid), label: h.state === 'nokey' ? 'Add an API key to use its models' : 'Not answering right now', desc: `${healthTitle(h)} · open Settings → Providers`, icon: h.state === 'nokey' ? I.key : I.warn, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'providers', expand: pid }) });
     }
-    items.push({ hr: true }, { label: 'Refresh models', icon: I.refresh, noSearch: true, onPick: () => { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.list, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.list, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
+    items.push({ hr: true }, { label: 'Refresh models', icon: I.refresh, noSearch: true, onPick: () => { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Refreshing models…'); } }, { label: 'Manage models…', icon: I.gear, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'models' }) }, { label: 'Configure providers…', icon: I.gear, noSearch: true, onPick: () => post({ type: 'openSettings', section: 'providers' }) });
     // Text that matches no model: use it as a model id with a provider that serves ids it does not list.
     const onNoMatch = (q) => {
       if (!q || /\s/.test(q) || !state.session) { return []; }
@@ -4501,7 +4520,7 @@
         return { label: `Use '${id}' as a model id with ${provName(pid)}`, desc: 'Added to the provider’s model list', icon: I.plus, onPick: () => { state.modelsRequested = true; post({ type: 'useModelId', sessionId: state.session.id, providerId: pid, modelId: id }); toast(`Using ${id} with ${provName(pid)}`); } };
       });
     };
-    openMenu(els.modelBtn, items, { search: 'Search models or type a model id…', fuzzy: true, onNoMatch, query });
+    openMenu(els.modelBtn, items, { cls: 'models', search: 'Search models or type a model id…', fuzzy: true, onNoMatch, query });
   }
   /** "Down · not answering · checked 2 min ago" for a provider health tag. */
   function healthTitle(h) {
@@ -4582,7 +4601,7 @@
   }
   // MCP servers: a popover with a switch, status dot and restart per server, and the total tool count (context cost).
   const MCP_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2"/></svg>';
-  const SLASH_GROUPS = { Chat: { order: 0, icon: I.bot }, 'More modes': { order: 0.5, icon: I.sparkle }, 'Plan & delegate': { order: 1, icon: I.plan }, Info: { order: 2, icon: I.ask }, Custom: { order: 3, icon: I.sparkle }, Skills: { order: 4, icon: I.book }, MCP: { order: 5, icon: MCP_ICON } };
+  const SLASH_GROUPS = { Chat: { order: 0, icon: I.chat }, 'More modes': { order: 0.5, icon: I.sparkle }, 'Plan & delegate': { order: 1, icon: I.plan }, Info: { order: 2, icon: I.ask }, Custom: { order: 3, icon: I.sparkle }, Skills: { order: 4, icon: I.book }, MCP: { order: 5, icon: MCP_ICON } };
   const GEAR_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/></svg>';
   let mcpBtn = null;
   function syncMcp() {
@@ -4643,7 +4662,7 @@
         items.push({ group: 'Pin to every request', label: s.name, desc: s.description, icon: I.book, selected: on, tag: on ? 'pinned' : undefined, onPick: () => { const next = new Set(pinned); on ? next.delete(s.name) : next.add(s.name); setSkills({ pinned: [...next] }); } });
       }
     }
-    items.push({ hr: true }, { label: 'Manage skills…', desc: 'Install from the registry, enable / disable, remove', icon: I.list, onPick: () => post({ type: 'openSettings', section: 'skills' }) });
+    items.push({ hr: true }, { label: 'Manage skills…', desc: 'Install from the registry, enable / disable, remove', icon: I.gear, onPick: () => post({ type: 'openSettings', section: 'skills' }) });
     openMenu(anchor, items, { search: state.skills.length > 6 ? 'Search skills…' : undefined, label: 'Skills for this chat' });
   }
   function openContextMenu() {
@@ -4660,7 +4679,7 @@
     // Index status: a scan in progress, or how much of a large repository the @ search lists.
     const idx = state.workspace && state.workspace.index; const big = indexNote();
     if (idx && idx.state === 'indexing') { items.push({ note: true, spin: true, label: `Indexing ${Number(idx.files).toLocaleString()} files… ${idx.pct}%` }); }
-    else if (big) { items.push({ hr: true }, { label: big.text, desc: 'Rescan the workspace files', title: big.title, icon: I.list, onPick: () => { post({ type: 'workspaceAction', action: 'rebuildIndex' }); toast('Rescanning the workspace files…'); } }); }
+    else if (big) { items.push({ hr: true }, { label: big.text, desc: 'Rescan the workspace files', title: big.title, icon: I.refresh, onPick: () => { post({ type: 'workspaceAction', action: 'rebuildIndex' }); toast('Rescanning the workspace files…'); } }); }
     openMenu(els.addCtx, items, { search: 'Add files, folders, docs…' });
   }
   els.addCtx.onclick = openContextMenu;
@@ -5295,6 +5314,8 @@
     const img = e.target.closest(THUMBS); if (img) { openLightbox(img.src, img.alt); return; }
     const a = e.target.closest('a[href]'); if (a) { e.preventDefault(); post({ type: 'openExternal', url: a.getAttribute('href') }); }
   });
+  // A file chip is a link (role="link", focusable): Enter opens it like a click.
+  els.messages.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.altKey && !e.metaKey && !e.ctrlKey && e.target.matches && e.target.matches('.fchip[tabindex]')) { e.preventDefault(); e.stopPropagation(); e.target.click(); } });
   // A thumbnail is a button: Enter or Space opens it full size.
   els.messages.addEventListener('keydown', (e) => {
     if ((e.key !== 'Enter' && e.key !== ' ') || e.altKey || e.metaKey || e.ctrlKey || !e.target.matches || !e.target.matches(THUMBS)) { return; }
@@ -5331,7 +5352,7 @@
     const b = $('boot');
     if (!b) { return; }
     if (bootTries >= 3 && !b.querySelector('.boot-hint')) {
-      const hint = el('div', 'boot-hint', `<span>Still connecting to LocalPilot…</span><button class="btn" type="button">Retry</button>`);
+      const hint = el('div', 'boot-hint', `<span>Still connecting to LocalPilot…</span><button class="btn" type="button">${I.refresh}<span>Retry</span></button>`);
       hint.querySelector('button').onclick = () => { bootTries = 0; requestInit(); };
       b.appendChild(hint);
     }
@@ -5486,12 +5507,14 @@
         break;
       }
       case 'approval': state.approvalSid.set(m.id, m.sessionId); renderApproval(m); markApprovalRow(m); { const lv = state.live.get(m.sessionId); if (lv) { setPhase(lv, 'Waiting for your approval'); } } if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Approval needed in “${(s && s.title) || 'another chat'}”`); } break;
-      case 'approvalResolved': { removeApproval(m.id); resolveAttention(m.id); unmarkApprovalId(m.id); break; }
+      case 'approvalResolved': { const asid = state.approvalSid.get(m.id); removeApproval(m.id); resolveAttention(m.id); unmarkApprovalId(m.id);
+        // Answered: the strip goes back to working (its spinner) until the next step names a phase.
+        const lv = asid && state.live.get(asid); if (lv && lv.work && /^Waiting for your /.test(lv.phase || '') && ![...state.approvalSid.values()].includes(asid)) { setPhase(lv, 'Working'); } break; }
       // Host -> webview: a run cut off by a reload (`state` with its facts) or null once it was continued or dismissed.
       case 'runInterrupted': if (typeof m.sessionId === 'string') { if (m.state && typeof m.state === 'object') { state.runInt.set(m.sessionId, m.state); } else { state.runInt.delete(m.sessionId); } if (state.session && state.session.id === m.sessionId) { renderInterrupted(); } } break;
       case 'conflicts': applyConflicts(m.sessionId, Array.isArray(m.files) ? m.files : []); break;
       case 'question': state.approvalSid.set(m.id, m.sessionId); renderQuestion(m); { const lv = state.live.get(m.sessionId); if (lv) { setPhase(lv, 'Waiting for your answer'); } } if (!state.session || state.session.id !== m.sessionId) { state.attention.add(m.sessionId); renderTabs(); const s = state.sessions.find((x) => x.id === m.sessionId); toast(`Question waiting in “${(s && s.title) || 'another chat'}”`); } break;
-      case 'questionResolved': { removeApproval(m.id); resolveAttention(m.id); break; }
+      case 'questionResolved': { const qsid = state.approvalSid.get(m.id); removeApproval(m.id); resolveAttention(m.id); const lv = qsid && state.live.get(qsid); if (lv && lv.work && /^Waiting for your /.test(lv.phase || '') && ![...state.approvalSid.values()].includes(qsid)) { setPhase(lv, 'Working'); } break; }
       case 'toast': if (m.text.startsWith('attach:')) { addAttachment(m.text.slice(7)); } else { toast(m.text, m.level, m.action); } if (m.level === 'error') { editChecks.forEach((c) => c.release && c.release()); } break;
       case 'checkpointExistsResult': { const c = editChecks.get(`${m.sessionId}:${m.index}`); if (c) { c.done(m); } break; }
       case 'editAndRegenerateResult': { const c = editChecks.get(`${m.sessionId}:${m.index}`); if (c && c.release) { c.release(); } break; }
@@ -5631,7 +5654,7 @@
     if (!kinds.length) { if (strip) { strip.remove(); } box.classList.toggle('has-grants', false); return; }
     if (!strip) { strip = el('div', 'aa-grants'); strip.id = 'aaGrants'; strip.setAttribute('role', 'group'); strip.setAttribute('aria-label', 'Allowed for this chat'); strip.onclick = (e) => { const b = e.target.closest('button[data-kind]'); if (b && state.session) { post({ type: 'revokeGrant', sessionId: state.session.id, kind: b.dataset.kind }); } }; box.insertBefore(strip, head); }
     box.classList.remove('hidden'); box.classList.add('has-grants');
-    strip.innerHTML = `<span class="aa-k">This chat:</span>` + kinds.map((k) => { const n = GRANT_CHIP[k] || k; return `<button class="grant" data-kind="${esc(k)}" title="${esc(GRANT_LABEL[k] || n)} — click to ask again" aria-label="Stop allowing ${esc(n.toLowerCase())} in this chat"><span>${esc(n)}</span><span class="x" aria-hidden="true">×</span></button>`; }).join('');
+    strip.innerHTML = `<span class="aa-k">This chat:</span>` + kinds.map((k) => { const n = GRANT_CHIP[k] || k; return `<button class="grant" data-kind="${esc(k)}" title="${esc(GRANT_LABEL[k] || n)} — click to ask again" aria-label="Stop allowing ${esc(n.toLowerCase())} in this chat"><span>${esc(n)}</span><span class="x" aria-hidden="true">${I.x}</span></button>`; }).join('');
   }
   function renderApproval(a) {
     if (els.approvals.querySelector(`[data-id="${CSS.escape(a.id)}"]`)) { return; }
@@ -5644,13 +5667,15 @@
     // "Allow all … in this chat" with a split menu that also offers the workspace-wide grant (never for a mandatory prompt).
     // A destructive command (asked every time) can still be blocked for good: its own chevron offers only that.
     const all = a.mandatory ? (a.rule ? `<button class="btn split-more solo" data-a="more" title="Block this command from now on" aria-label="More: block this command from now on" aria-haspopup="menu">${I.chev}</button>` : '') : `<span class="split"><button class="btn" data-a="session" title="Allow every ${esc(GRANT_NOUN[a.kind] || 'action of this kind')} for the rest of this chat (A)"><span class="long">${esc(GRANT_LABEL[a.kind] || 'Allow all of these in this chat')}</span><span class="short">All in chat</span> <kbd>A</kbd></button><button class="btn split-more" data-a="more" title="More ways to allow" aria-label="More ways to allow" aria-haspopup="menu">${I.chev}</button></span>`;
-    const edit = a.editable ? `<button class="btn ghost" data-a="edit" title="Change the command before it runs; the edited command is what runs">${I.edit}<span class="long">Edit</span></button>` : '';
+    const edit = a.editable ? `<button class="btn ghost" data-a="edit" title="Change the command before it runs; the edited command is what runs" aria-label="Edit command">${I.edit}<span class="long">Edit</span><span class="short">Edit</span></button>` : '';
     // Why it asked, and where that is set: the policy, a destructive command, or the approval setting for this kind.
     const because = a.askedBecause ? `${a.mandatory ? 'Always asks' : 'Asked'} because ${a.askedBecause}` : why;
-    const foot = because ? `<div class="always"><span>${esc(because)}</span><i>·</i><button class="link" data-a="settings" title="Settings → Agent → approvals">Change in Settings</button></div>` : '';
-    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}</div>${other ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}<pre></pre><div class="reason hidden"><input type="text" maxlength="2000" placeholder="Why not? The agent reads this — Enter denies, Esc cancels" aria-label="Reason for denying"><button class="btn" data-a="denyReason">Deny</button></div><div class="actions"><button class="btn ghost" data-a="reason" title="Deny and tell the agent what to do instead (Shift+N)"><span class="long">Deny with reason…</span><span class="short">Reason…</span></button><button class="btn ghost" data-a="deny" title="Deny (N). Text in the message box goes along as the reason.">Deny <kbd>N</kbd></button>${edit}${all}<button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button></div>${foot}`;
-    const pre = d.querySelector('pre');
+    const foot = because ? `<div class="always"><span>${esc(because)}</span><button class="link" data-a="settings" title="Settings → Agent → approvals">Change in Settings</button></div>` : '';
     const cmdLine = a.kind === 'terminal' && /^\$ /.test(String(a.detail || '')) ? String(a.detail).split('\n')[0].slice(2) : '';
+    // Primary group first in the DOM (Tab reaches Allow first; row-reverse puts it at the right), the quiet Deny group after:
+    // when both don't fit they wrap as two predictable rows (allow row, deny row), never a lone orphaned button.
+    d.innerHTML = `<div class="head">${I.warn}<span>${esc(a.title)}</span>${kind.toLowerCase() === String(a.title).toLowerCase() ? '' : `<span class="kind">${esc(kind)}</span>`}${cmdLine ? `<button class="ib cp" data-a="copy" title="Copy command" aria-label="Copy command">${I.copy}</button>` : ''}</div>${other ? `<button class="sess" data-a="open" title="Open that chat">${I.agent}<span>${esc((sess && sess.title) || 'Another chat')}</span>${I.chev}</button>` : ''}<pre></pre><div class="reason hidden"><input type="text" maxlength="2000" placeholder="Why not? The agent reads this — Enter denies, Esc cancels" aria-label="Reason for denying"><button class="btn" data-a="denyReason">Deny</button></div><div class="actions"><span class="pri"><button class="btn primary" data-a="allow" title="Allow once (Y)"><span class="long">Allow once</span><span class="short">Once</span> <kbd>Y</kbd></button>${all}${edit}</span><span class="sec"><button class="btn ghost" data-a="deny" title="Deny (N). Text in the message box goes along as the reason.">Deny <kbd>N</kbd></button><button class="btn ghost rsn" data-a="reason" title="Deny and tell the agent what to do instead (Shift+N)"><span class="long">Deny with reason…</span><span class="short">Reason…</span></button></span></div>${foot}`;
+    const pre = d.querySelector('pre');
     if (cmdLine) { pre.innerHTML = `<span class="sh-prompt">$ </span>${highlight(cmdLine, 'sh')}${esc(String(a.detail).slice(cmdLine.length + 2))}`; pre.classList.add('cmd'); } else { pre.textContent = a.detail; }
     let editor = null;
     const answer = (act, feedback) => {
@@ -5677,7 +5702,7 @@
     d.onclick = (ev) => {
       const b = ev.target.closest('[data-a]'); if (!b) { return; } const act = b.dataset.a;
       if (act === 'open') { selectTab(a.sessionId); return; } if (act === 'reason') { openReason(); return; } if (act === 'denyReason') { answer('deny', reasonIn.value); return; } if (act === 'deny') { denyWithDraft(); return; }
-      if (act === 'edit') { openEditor(); return; }
+      if (act === 'edit') { openEditor(); return; } if (act === 'copy') { copyTo(b, editor ? editor.value : cmdLine); return; }
       if (act === 'settings') { post(a.settingsSection === 'mcp' ? { type: 'openSettings', section: 'mcp' } : { type: 'openSettings', section: 'agent', key: `approvals.${a.kind}` }); return; }
       if (act === 'more') {
         // Command rules ("Always allow `npm test`") are saved for the chat's folder, or for every workspace without one.
@@ -6353,7 +6378,7 @@
   }
   function libEditHtml() {
     const e = lib.edit; const slug = libSlug(e.name);
-    const head = `<div class="tr-head"><button class="ib" data-l="${lib.editOnly ? 'close' : 'back'}" title="${lib.editOnly ? 'Close (Esc)' : 'Back to the library (Esc)'}" aria-label="${lib.editOnly ? 'Close' : 'Back to the library'}">${lib.editOnly ? I.x : I.reply}</button><span class="tr-h">${e.file ? `Edit ${esc(e.invoke)}` : 'Save as prompt'}</span></div>`;
+    const head = `<div class="tr-head"><button class="ib" data-l="${lib.editOnly ? 'close' : 'back'}" title="${lib.editOnly ? 'Close (Esc)' : 'Back to the library (Esc)'}" aria-label="${lib.editOnly ? 'Close' : 'Back to the library'}">${lib.editOnly ? I.x : I.back}</button><span class="tr-h">${e.file ? `Edit ${esc(e.invoke)}` : 'Save as prompt'}</span></div>`;
     const scopes = [['workspace', 'This workspace', lib.ws ? '.localpilot/commands, share it by committing it' : 'Open a folder first'], ['user', 'Just me', '~/.localpilot/commands, every workspace']];
     return `${head}<form class="pl-form" novalidate>`
       + `<label class="pl-f"><span class="k">Name</span><input name="name" type="text" maxlength="64" spellcheck="false" autocomplete="off" value="${esc(e.name)}" aria-describedby="pl-runs"><span id="pl-runs" class="pl-hint">${slug ? `Runs as <code>/${esc(slug)}</code>` : 'Letters, digits and "-"'}</span></label>`

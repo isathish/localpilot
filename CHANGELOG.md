@@ -4,6 +4,22 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Changed
+- **Cleaner approval cards.** Allow (**Once Y**, **All in chat A**) and Deny (**Deny N**, **Reason…**) are two groups, so no button is left alone on a line in a narrow sidebar; the Y/N/A hints show at every width and Tab reaches Allow first. Command approvals have a copy button.
+- **Calmer answer footer.** In a narrow sidebar, the model name stays readable and lower-value details drop out whole instead of being cut off; older answers show their buttons on hover or focus. File chips open with Enter and say what a click does.
+- **Tidier Settings.** Section tabs are never cut mid-word (narrow panels show icons with tooltips); runtimes and detected servers are plain lists instead of boxes in boxes; installed models take one line, with **Set default**, delete and a copy button for the model id; the Providers actions share one row; endpoint URLs copy on click. Stored secrets keep **Replace…** and **Delete** on the name's line, and their dates say which is *changed* and which is *used*.
+- **One look for every state.** Running is amber, waiting for you is a warning sign, paused shows pause bars, done is a quiet check, failed is red, stopped is a square and queued a hollow dot — the same in steps, tabs, workers, tasks and Settings status dots. A failed run now says *Failed after …* instead of *Stopped after …*, and a background run waiting for an approval says so under the tabs.
+- **Icons where they were missing:** approval presets, Dashboard tiles, the **…** menus, and text-only buttons next to iconned ones in the chat and Settings. Empty lists in Settings show an icon and a way forward.
+- **Gentle motion.** New steps fade in, copy buttons turn into a check, a changed setting shows a brief tick, sections fade when you switch. All of it is off when the system asks for reduced motion.
+- **One icon per action, everywhere.** Model actions share one icon, Multitask, Compact and Back have their own, every **More** is ⋯, Stop is a square, Start is play, and checking a connection no longer looks like reloading. Look-alike icons (restore and history, settings and a sun) are redrawn so they differ, and text characters used as icons (×, ✓, ▸, ↕) are real icons.
+- **The Markdown reader, PDF viewer and Continuity pages match the chat.** Same icons, buttons, status dots and copy confirmation; error, empty and deleted-file states have an icon and a next step; the PDF find bar keeps its controls on one row; wide editor tabs keep a readable column.
+- **Sync conflicts and offline show amber, not red.** Red is kept for a failed or unexpectedly paused sync.
+
+### Fixed
+- **Narrow sidebars no longer cut controls off.** At 260–300 px, Review and Apply all stay in the changes header, approval buttons fit, the answer footer wraps instead of overflowing, model names in the model menu are not cut short, and Settings (Dashboard, search, Add a provider, Customize) never scrolls sideways.
+- **Menus opened from a half-scrolled message stay inside the view,** and **Jump to latest** no longer slides in from the side or covers an open menu.
+- **High-contrast themes show progress bars** (the task and context meters had no visible track).
+
 ## 1.8.0 — 2026-11-17
 
 ### Added

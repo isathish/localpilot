@@ -34,7 +34,7 @@ function loadRecovery(): Rec {
   const noop = (): void => undefined;
   const sandbox: Record<string, unknown> = {
     document: doc, CSS: { escape: (x: string) => String(x).replace(/["\\]/g, '\\$&') },
-    I: { spin: icon, check: icon, warn: icon, refresh: icon, undo: icon, pause: icon, play: icon }, state, els,
+    I: { spin: icon, check: icon, warn: icon, refresh: icon, undo: icon, pause: icon, play: icon, x: icon, timer: icon, chev: icon }, state, els,
     post: (m: Record<string, unknown>) => posted.push(JSON.parse(JSON.stringify(m))),
     noteStatus: noop, setStatus: noop, setPhase: noop, followLive: noop, rotateBody: noop,
     childStatus: (...a: unknown[]) => childStatus.push(a),
@@ -82,9 +82,9 @@ suite('Chat self-healing card', () => {
       checks: [{ id: 'typecheck', status: 'passed', ms: 4100 }, { id: 'test', status: 'failed', ms: 250 }, { id: 'e2e', status: 'timeout', ms: 120000 }, { id: 'lint', status: 'skipped', skipReason: 'not required' }],
       patches: [{ file: 'src/a.ts', added: 4, removed: 2 }, { file: 'src/b.ts', added: 1, removed: 1, result: 'rolled_back' }],
     })) as string;
-    assert.match(html, /rchip passed[^>]*><b>✓<\/b><span class="n">typecheck<\/span><i>4\.1s<\/i>/);
-    assert.match(html, /rchip failed[^>]*><b>✗<\/b><span class="n">test<\/span><i>250ms<\/i>/);
-    assert.match(html, /rchip timeout[^>]*><b>⏱<\/b>/);
+    assert.match(html, /rchip passed[^>]*><b><svg><\/svg><\/b><span class="n">typecheck<\/span><i>4\.1s<\/i>/);
+    assert.match(html, /rchip failed[^>]*><b><svg><\/svg><\/b><span class="n">test<\/span><i>250ms<\/i>/);
+    assert.match(html, /rchip timeout[^>]*><b><svg><\/svg><\/b>/);
     assert.match(html, /rchip skipped" title="Skipped: not required"><span class="n">lint<\/span><i>skipped<\/i>/);
     assert.match(html, /<li class="rb"[^>]*><span class="f">src\/b\.ts<\/span><span class="a">\+1<\/span><span class="r">−1<\/span>/);
     assert.match(html, /returns &lt;string&gt;/);
