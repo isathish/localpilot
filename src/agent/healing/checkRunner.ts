@@ -221,6 +221,9 @@ interface Clock {
   start: number;
   budgetMs: number;
   deadlineAt?: number;
+  /** Set when a check was killed because the budget or deadline ran out. Timers can fire a millisecond before the
+   *  clock agrees, so re-reading the clock afterwards could wrongly find time left and start the next check. */
+  spent?: boolean;
 }
 
 export class CheckRunner {
@@ -386,7 +389,7 @@ export class CheckRunner {
   }
 
   private exhausted(c: Clock): boolean {
-    return this.remainingMs(c) <= 0;
+    return c.spent === true || this.remainingMs(c) <= 0;
   }
 
   /** A check that timed out with the budget spent, or was never started because it ran out. */
@@ -407,7 +410,7 @@ export class CheckRunner {
       throw abortError();
     }
     const waitMs = this.remainingMs(clock);
-    if (waitMs <= 0) {
+    if (waitMs <= 0 || clock.spent) {
       return this.budgetSkip(p, clock, fingerprint);
     }
     // worktrees get their own lane; a gate rerun against the main root passes root = mainRoot
@@ -430,12 +433,13 @@ export class CheckRunner {
     try {
       const remaining = this.remainingMs(clock);
       const started = this.now();
-      if (remaining <= 0) {
+      if (remaining <= 0 || clock.spent) {
         return this.budgetSkip(p, clock, fingerprint);
       }
       const specMs = p.spec.timeoutSeconds > 0 ? p.spec.timeoutSeconds * 1000 : MAX_TIMER_MS;
       const limitMs = Math.max(1, Math.min(specMs, remaining, MAX_TIMER_MS));
-      handle = setTimeout(() => kill.abort(), limitMs);
+      const budgetBound = remaining <= specMs && remaining <= MAX_TIMER_MS;
+      handle = setTimeout(() => { if (budgetBound) { clock.spent = true; } kill.abort(); }, limitMs);
       const timer = kill.signal;
       const combined = AbortSignal.any([signal, timer]);
       const spec: CheckSpec = { ...p.spec, timeoutSeconds: Math.max(1, Math.ceil(limitMs / 1000)) };
