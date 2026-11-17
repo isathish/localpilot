@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.9.0 — 2026-11-17
+
 ### Changed
 - **Cleaner approval cards.** Allow (**Once Y**, **All in chat A**) and Deny (**Deny N**, **Reason…**) are two groups, so no button is left alone on a line in a narrow sidebar; the Y/N/A hints show at every width and Tab reaches Allow first. Command approvals have a copy button.
 - **Calmer answer footer.** In a narrow sidebar, the model name stays readable and lower-value details drop out whole instead of being cut off; older answers show their buttons on hover or focus. File chips open with Enter and say what a click does.
