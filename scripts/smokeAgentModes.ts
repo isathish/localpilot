@@ -48,7 +48,7 @@ export async function agentModes(check: Check): Promise<void> {
   const started = Date.now();
   const res = await cm.compact(history, { chat() { throw new Error('no model call expected'); } } as never, model);
   const ms = Date.now() - started;
-  check('basic compaction: 200 messages in under 50 ms, no model call, every user message kept', ms < 50 && res.removed > 0 && history.filter((m) => m.role === 'user').every((u) => res.messages.some((m) => m.content.includes(u.content))), { ms, removed: res.removed });
+  check(`basic compaction: 200 messages in under ${process.env.CI ? 250 : 50} ms, no model call, every user message kept`, ms < (process.env.CI ? 250 : 50) && res.removed > 0 && history.filter((m) => m.role === 'user').every((u) => res.messages.some((m) => m.content.includes(u.content))), { ms, removed: res.removed });
   check('basic compaction: one line per tool call', basicSummary([...turn(1), { role: 'assistant', content: '', toolCalls: [{ id: 'x', name: 'run_command', arguments: '{"command":"npm test"}' }] }, { role: 'tool', toolCallId: 'x', content: '$ npm test\nboom\n[exit code 2]' }]).includes('• run_command npm test (exit 2, 1 line of error)') && basicSummary(turn(1)).includes('• read_file f1.ts (ok)'));
 
   const before = [...turn(1), ...turn(2)];

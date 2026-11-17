@@ -47,7 +47,10 @@ suite('Continuity data: extension activation', () => {
     const c = await api.continuity;
     assert.ok(c, 'continuity opened');
     assert.strictEqual(c.degraded, undefined, c.degraded);
-    assert.ok(c.openMs < 50, `open took ${c.openMs} ms on the extension host`);
+    // 50 ms locally; shared CI runners (Windows especially) stall for tens of ms at random, so they get 250 ms. Either
+    // budget still catches the real regression: work moved back onto the extension host takes seconds.
+    const budget = process.env.CI ? 250 : 50;
+    assert.ok(c.openMs < budget, `open took ${c.openMs} ms on the extension host (budget ${budget} ms)`);
     await c.ready;
     assert.strictEqual(c.indexFailed, undefined, `index: ${c.indexFailed}`);
     assert.ok(!c.dataDir.startsWith(path.join(os.homedir(), '.localpilot')) || !!process.env.LOCALPILOT_CONTINUITY_DIR, 'tests never write the real data folder');
