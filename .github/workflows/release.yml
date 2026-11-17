@@ -184,6 +184,8 @@ jobs:
           done
           docker logs lp-redis || true
           echo "::error::Redis Stack did not answer PING within 30 s"; exit 1
+      - name: Download VS Code for the tests (retries network errors)
+        run: node scripts/fetch-vscode.mjs
       - name: Extension Host tests
         env:
           # The Redis suite must run here, not skip (the macOS/Windows runners in verify-os have no Docker for it).
@@ -252,6 +254,8 @@ jobs:
         run: npm run smoke
       - name: CLI end-to-end
         run: node scripts/cli-e2e.mjs
+      - name: Download VS Code for the tests (retries network errors)
+        run: node scripts/fetch-vscode.mjs
       - name: Extension Host tests
         run: npm test
 
