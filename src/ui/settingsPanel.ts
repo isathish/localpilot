@@ -408,6 +408,8 @@ export class SettingsPanel implements vscode.Disposable {
   /** A deep link from the chat: the setting to scroll to (`key`) or the provider card to open (`expand`); sent once. */
   private focus?: { key?: string; expand?: string };
   private navigate = false;
+  /** The "reload to use the new settings" toast was shown once already (stale window after an in-place update). */
+  private staleReloadOffered = false;
   private pushSeq = 0;
   private modelsLoaded = false;
   private modelsRefresh?: ReturnType<typeof setTimeout>;
@@ -571,8 +573,17 @@ export class SettingsPanel implements vscode.Disposable {
         try {
           await this.update(m.key, m.type === 'set' ? m.value : undefined, m.scope);
         } catch (e) {
-          const error = e instanceof Error ? e.message : String(e);
+          let error = e instanceof Error ? e.message : String(e);
           this.log.warn(`settings: ${m.key} not saved: ${error}`);
+          // After an in-place update the page is new but VS Code still holds the old version's setting list until the
+          // window reloads, so every new setting fails to save. Say that once, with the fix, instead of VS Code's error per click.
+          if (/not a registered configuration/i.test(error)) {
+            error = 'LocalPilot was updated. Reload the window to save this setting.';
+            if (!this.staleReloadOffered) {
+              this.staleReloadOffered = true;
+              this.post({ type: 'toast', level: 'warn', text: 'LocalPilot was updated in this window. Reload it to use the new settings.', action: { label: 'Reload window', command: 'workbench.action.reloadWindow' } });
+            }
+          }
           return this.post({ type: 'saved', id: m.id, key: m.key, ok: false, error });
         }
         this.post({ type: 'saved', id: m.id, key: m.key, ok: true });
