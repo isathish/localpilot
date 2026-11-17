@@ -36,7 +36,7 @@ async function withPolicy(policy: Record<string, unknown>, fn: (dir: string) => 
       process.env.LOCALPILOT_MANAGED_SETTINGS = prev;
     }
     resetManagedPolicyCache();
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 
@@ -112,7 +112,7 @@ suite('LocalPilot organization policy wiring (MCP layers, skills, registry, Sett
       assert.ok(cmd.disabled && !cmd.alwaysEnabled);
       assert.strictEqual(parseCommandFile('/org/commands/ship.md', '---\nalwaysEnabled: true\ndisabled: true\n---\nShip.', { source: 'managed' }).alwaysEnabled, true);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
 
