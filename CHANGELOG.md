@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.8.0 — 2026-11-17
+
 ### Added
 - **Encrypted secret store, shared by VS Code and the CLI.** API keys, MCP sign-in tokens and sync credentials now live in one encrypted store, `~/.localpilot/secrets.db`: a single database sealed as a whole with AES-256-GCM (neither names nor values are readable on disk), readable by you only. Its key is kept in your OS keychain (macOS Keychain, Windows Credential Manager, or the Secret Service through `secret-tool` on Linux); where there is no keychain, set `LOCALPILOT_SECRETS_PASSPHRASE` — LocalPilot never falls back to plain text. A key saved in VS Code works in the CLI and the other way round, and MCP sign-ins are shared too. On first start, keys VS Code already held are moved in (the old copies stay, in case you go back to an older version), and the CLI's plain-text `keys.json` and `secrets.json` are moved in and deleted once every value reads back. New **Settings → Secrets** (status, what uses each key, last used, **Replace…**, **Delete**) and `localpilot secrets status|list|set|delete|import-env`. Values never reach the Settings page and are never printed.
 - **`localpilot.models.localOnly`.** Keeps every automatic pick (Auto, routing roles, fallback, images, completions, subagents) on this machine; a cloud model answers only when you pick it yourself.
