@@ -61,7 +61,7 @@ export { probeProvider, recommendModel };
 export type { ProbeResult };
 
 export type SettingsPage = 'settings' | 'setup';
-export type SettingsSection = 'providers' | 'models' | 'gallery' | 'marketplace' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'continuity' | 'secrets' | 'mcp' | 'dashboard' | 'telemetry' | 'advanced' | 'customize' | 'documents' | 'shortcuts';
+export type SettingsSection = 'providers' | 'models' | 'gallery' | 'marketplace' | 'skills' | 'agent' | 'completions' | 'web' | 'memory' | 'continuity' | 'secrets' | 'mcp' | 'dashboard' | 'telemetry' | 'advanced' | 'customize' | 'documents' | 'shortcuts' | 'appearance';
 
 /** Settings → Secrets: the encrypted store's status and what it holds. Names and metadata only, never a value. */
 export interface SecretsView {
@@ -171,6 +171,8 @@ type ToSettings =
   | { type: 'skillRegistry'; q: string; entries: RegistrySkill[]; status: { repo: string; skills: number; fetched?: number; error?: string }[]; refreshing: boolean }
   | { type: 'skillJob'; name: string; status: 'running' | 'done' | 'error'; detail?: string }
   | { type: 'busy'; busy: boolean }
+  /** Look of the page (density, text size, motion): applied to <body> data attributes at once, before the state push. */
+  | { type: 'appearance'; density: string; textSize: string; motion: string }
   | {
       type: 'dashboard';
       days: number;
@@ -306,6 +308,7 @@ const SETTING_KEYS = [
   'pluginPaths', 'hooks.enabled', 'browser.chromePath',
   'memory.maxNoteChars', 'memory.maxNotes', 'memory.taskExpiryDays', 'autoMode.enabled', 'autoMode.model', 'queue.concurrency', 'supervisor.enabled', 'supervisor.intervalSeconds', 'supervisor.autoInstall', 'gateways.litellmConfig',
   'maxConsecutiveMistakes', 'maxIterations', 'agent.modelRetries', 'disabledTools',
+  'appearance.density', 'appearance.textSize', 'appearance.motion',
   'markdownViewer.scrollSync', 'markdownViewer.outlineDepth', 'markdownViewer.frontMatter', 'markdownViewer.mermaid', 'markdownViewer.exportTheme',
   'pdfViewer.pageColors', 'pdfViewer.sidebar', 'pdfViewer.defaultZoom', 'pdfViewer.rangeThresholdMB', 'pdfViewer.maxFileSizeMB', 'pdf.maxReadSizeMB', 'pdf.maxChars',
   'healing.enabled', 'healing.autoDetect', 'healing.autoRetry', 'healing.autoFix', 'healing.regressionRequired', 'healing.maxRepairAttempts', 'healing.maxTotalAttempts', 'healing.extraSteps', 'healing.taskDeadlineMinutes',
@@ -320,7 +323,7 @@ const SETTING_KEYS = [
 const ALLOWED_COMMANDS = new Set([
   'localpilot.rate', 'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.clearHistory', 'localpilot.showSessions', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openMarkdownViewer', 'localpilot.openPdf', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
-  'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels', 'localpilot.browseModelGallery',
+  'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'workbench.action.selectTheme', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels', 'localpilot.browseModelGallery',
   'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills', 'localpilot.manageSkills',
   'localpilot.editMcpConfig', 'localpilot.setupRedis', 'localpilot.telemetry.testOtlp', 'localpilot.startColibri', 'localpilot.stopColibri', 'localpilot.startGateway', 'localpilot.stopGateway',
   'localpilot.selectTerminalProfile', 'localpilot.browsePlugins', 'localpilot.managePlugins', 'workbench.action.reloadWindow', 'localpilot.setProviderApiKey',
@@ -454,6 +457,9 @@ export class SettingsPanel implements vscode.Disposable {
     }
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('localpilot.appearance') && this.panel) {
+          this.post({ type: 'appearance', ...getConfig().appearance });
+        }
         if (e.affectsConfiguration('localpilot') && this.panel) {
           void this.pushState();
         }
@@ -1761,6 +1767,8 @@ export class SettingsPanel implements vscode.Disposable {
   // ------------------------------------------------------------------ html
   private html(webview: vscode.Webview): string {
     const media = (f: string) => webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'media', f));
+    // Same contract as the chat view: the stylesheet keys density, text size and motion off these (updated live by 'appearance').
+    const look = getConfig().appearance;
     const nonce = Array.from({ length: 24 }, () => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[Math.floor(Math.random() * 62)]).join('');
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
@@ -1771,7 +1779,7 @@ export class SettingsPanel implements vscode.Disposable {
 <link rel="stylesheet" href="${media('settings.css')}" />
 <title>LocalPilot</title>
 </head>
-<body data-logo="${media('logo.svg')}">
+<body data-logo="${media('logo.svg')}" data-density="${look.density}" data-text-size="${look.textSize}" data-motion="${look.motion}">
 <div id="app" aria-busy="true"><div class="loading" role="status"><div class="boot-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><path d="M12 3V1.5"/><circle cx="12" cy="1.2" r=".8" fill="currentColor" stroke="none"/></svg></div><span class="boot-dots"><i></i><i></i><i></i></span><span class="sr">Loading LocalPilot Settings…</span></div></div>
 <div id="toasts" role="status" aria-live="polite"></div>
 <script nonce="${nonce}" src="${media('settings.js')}"></script>

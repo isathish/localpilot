@@ -71,6 +71,8 @@ body{margin:0}
 // ?light=1 and ?hc=1 mimic VS Code's theme kinds: the body class drives the stylesheet's light / high-contrast rules.
 (() => { const q = new URLSearchParams(location.search); if (q.get('light')) document.documentElement.classList.add('light');
   document.body.classList.add(q.get('hc') ? (q.get('light') ? 'vscode-high-contrast-light' : 'vscode-high-contrast') : q.get('light') ? 'vscode-light' : 'vscode-dark');
+  // ?density=compact, ?text=small|large, ?motion=reduced: localpilot.appearance.*, on <body> like chatViewProvider.ts renders it.
+  Object.assign(document.body.dataset, { density: q.get('density') || 'comfortable', textSize: q.get('text') || 'default', motion: q.get('motion') || 'system' });
   // HC Dark / HC Light: black or white ground, borders instead of fills, and no selection background.
   if (q.get('hc')) { const r = document.documentElement.style; const dark = !q.get('light');
     const v = dark ? { 'sideBar-background': '#000', 'editor-background': '#000', 'input-background': '#000', 'chat-requestBackground': '#000', 'editorWidget-background': '#0c141f', 'notifications-background': '#0c141f', 'foreground': '#fff', 'descriptionForeground': '#ffffffb3', 'input-foreground': '#fff', 'icon-foreground': '#fff', 'contrastBorder': '#6fc3df', 'contrastActiveBorder': '#f38518', 'focusBorder': '#f38518', 'widget-border': '#6fc3df', 'chat-requestBorder': '#6fc3df', 'input-border': '#6fc3df', 'button-border': '#6fc3df', 'textLink-foreground': '#21a6ff', 'list-activeSelectionForeground': '#fff', 'toolbar-hoverBackground': 'transparent' }
@@ -83,6 +85,8 @@ const listeners=[]; const paused={};
 window.acquireVsCodeApi=()=>({postMessage(m){
   const send=(d)=>window.dispatchEvent(new MessageEvent('message',{data:d}));
   if(m.type==='ready'){
+    // The host re-sends the appearance on every load (chatController sendInit); same values as the flags above.
+    send({type:'appearance',density:document.body.dataset.density,textSize:document.body.dataset.textSize,motion:document.body.dataset.motion});
     const models=[{id:'ollama/qwen2.5-coder:14b',providerId:'ollama',name:'qwen2.5-coder:14b',contextWindow:32768,supportsTools:true},{id:'ollama/gemma4:12b',providerId:'ollama',name:'gemma4:12b',contextWindow:262144,supportsTools:true,supportsVision:true,supportsThinking:true},{id:'ollama/gpt-oss:20b',providerId:'ollama',name:'gpt-oss:20b',contextWindow:131072,supportsTools:true},{id:'lmstudio/qwen2.5-vl',providerId:'lmstudio',name:'qwen2.5-vl-7b',contextWindow:32768,supportsTools:true,supportsVision:true},
       // Cloud models (?cloud=0 hides them): shown in the picker with a "cloud" tag.
       ...(/cloud=0/.test(location.search)?[]:[{id:'anthropic/claude-sonnet-4-6',providerId:'anthropic',name:'Claude Sonnet 4.6',contextWindow:1000000,supportsTools:true,supportsVision:true,remote:true},{id:'openai/gpt-5',providerId:'openai',name:'gpt-5',contextWindow:400000,supportsTools:true,supportsVision:true,remote:true}])];

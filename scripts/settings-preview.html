@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<!-- Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|… and ?light=1 (?web=0: web search off) -->
+<!-- Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|appearance|… and ?light=1 (?web=0: web search off; ?density=compact&text=large&motion=reduced: appearance) -->
 <style>
 :root{
 --vscode-button-secondaryBackground:#313131;--vscode-button-secondaryForeground:#cccccc;--vscode-button-secondaryHoverBackground:#3c3c3c;--vscode-button-border:#ffffff12;--vscode-icon-foreground:#cccccc;
@@ -82,7 +82,10 @@ const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWi
   'pdfViewer.sidebar': 'auto', 'pdfViewer.defaultZoom': 'auto', 'pdfViewer.rangeThresholdMB': 16, 'pdfViewer.maxFileSizeMB': 1024, 'pdf.maxReadSizeMB': 100, 'pdf.maxChars': 60000,
   // ?fallback=1: a fallback order with a cloud model and one that is not available now.
   'routing.fallbackModels': q.get('fallback') ? ['anthropic/claude-sonnet-4-6', 'ollama/gemma4:e4b', 'lmstudio/deepseek-coder-v2:16b'] : [], firstTokenTimeoutSeconds: 180,
-  'mcp.toolApprovals': { filesystem: { write_file: 'ask', move_file: 'never' } } };
+  'mcp.toolApprovals': { filesystem: { write_file: 'ask', move_file: 'never' } },
+  // ?density=compact&text=small|large&motion=reduced: Settings → Appearance (the host sets the same <body> data attributes).
+  'appearance.density': q.get('density') || 'comfortable', 'appearance.textSize': q.get('text') || 'default', 'appearance.motion': q.get('motion') || 'system' };
+Object.assign(document.body.dataset, { density: defaults['appearance.density'], textSize: defaults['appearance.textSize'], motion: defaults['appearance.motion'] });
 /** Fields added with command rules, provider health, MCP tool lists and the shortcut table (sent with every state). */
 const extra = () => ({
   // Free space where colibri downloads models (?colidisk=low: less than the smallest model needs).

@@ -109,13 +109,15 @@
     bot: '<svg viewBox="0 0 16 16"><rect x="2.5" y="5" width="11" height="8.5" rx="2"/><path d="M8 2.5V5M6 9h.01M10 9h.01M1 9v1.5M15 9v1.5"/></svg>',
     sort: '<svg viewBox="0 0 16 16"><path d="M5 6.5L8 3.5l3 3M5 9.5l3 3 3-3"/></svg>',
     sortDown: '<svg viewBox="0 0 16 16"><path d="M8 3v10M4.5 9.5L8 13l3.5-3.5"/></svg>',
+    palette: '<svg viewBox="0 0 16 16"><path d="M8 2a6 6 0 0 0 0 12c.9 0 1.4-.6 1.4-1.3 0-.4-.2-.7-.4-1-.3-.3-.4-.6-.4-1 0-.7.6-1.2 1.3-1.2H11a3 3 0 0 0 3-3C14 4.3 11.3 2 8 2z"/><path d="M4.8 7.6h.01M6.6 5h.01M9.6 4.8h.01M11.5 7.2h.01" stroke-width="2"/></svg>',
   };
   const SECTIONS = [
     ['providers', 'Providers', I.server], ['models', 'Models', I.cpu], ['gallery', 'Model gallery', I.gallery], ['skills', 'Skills & subagents', I.book], ['marketplace', 'Marketplace', I.download], ['customize', 'Customize', I.scale], ['agent', 'Agent & approvals', I.shield], ['completions', 'Inline completions', I.ghost],
     ['web', 'Web search', I.globe], ['documents', 'Markdown & PDF', I.file], ['memory', 'Memory & history', I.brain], ['continuity', 'Continuity & sync', I.cloud], ['secrets', 'Secrets', I.key], ['mcp', 'MCP servers', I.plug], ['dashboard', 'Dashboard', I.gauge], ['telemetry', 'Telemetry', I.pulse], ['shortcuts', 'Keyboard shortcuts', I.keyboard], ['advanced', 'Advanced', I.wrench],
+    ['appearance', 'Appearance', I.palette],
   ];
-  /** Sidebar order: the Dashboard overview on top (never folds), then where models come from, how the agent behaves, what it can reach, and what it keeps. */
-  const NAV_HOME = ['dashboard'];
+  /** Sidebar order: the Dashboard overview and Appearance on top (never fold), then where models come from, how the agent behaves, what it can reach, and what it keeps. */
+  const NAV_HOME = ['dashboard', 'appearance'];
   const NAV_GROUPS = [
     { id: 'models', label: 'Models', items: ['providers', 'models', 'gallery'] },
     { id: 'agent', label: 'Agent', items: ['agent', 'skills', 'marketplace', 'customize', 'completions'] },
@@ -143,6 +145,7 @@
     telemetry: 'telemetry metrics usage record retention redis otlp opentelemetry otel collector traces grafana langfuse export delete',
     advanced: 'setup welcome terminal cli settings.json logs chat location about',
     shortcuts: 'keyboard shortcuts keys keybindings hotkeys bindings change customize',
+    appearance: 'look theme style density compact comfortable spacing dense roomy text size font size bigger smaller larger zoom readability motion animation animations reduced motion accessibility preferences',
   };
   /** publisher.name from package.json, for the "@ext:" filter of VS Code's Settings editor. */
   const EXT_ID = 'localpilot.localpilot-agent';
@@ -196,6 +199,7 @@
     ['agent', 'healing.checkTiming', 'When checks run'], ['agent', 'healing.checkTimeoutSeconds', 'Time limit per check'], ['agent', 'healing.checkTimeBudgetSeconds', 'Time limit per verification run'], ['agent', 'healing.baseline', 'Failures that were there before'],
     ['agent', 'healing.memory', 'Remember failures and fixes'], ['agent', 'healing.dependencyInstall', 'Installing missing packages'], ['agent', 'healing.securityCheck', 'Security check'], ['agent', 'healing.gitConflicts', 'Git conflicts'],
     ['agent', 'healing.checks', 'Checks'], ['agent', 'healing.policies', 'Retry policies'],
+    ['appearance', 'appearance.density', 'Density (comfortable or compact)'], ['appearance', 'appearance.textSize', 'Text size (font size)'], ['appearance', 'appearance.motion', 'Motion (animations)'],
   ];
   /** Every query word must hit the entry; label-prefix hits rank first, then label, key, then section words. */
   function findSettings(q) {
@@ -430,7 +434,8 @@
    *  head first and then rebuilds; expanding marks the label, and the rebuilt card grows from its head the next frame.
    *  The chevron turns on a spring either way. */
   let revealLabel = '';
-  const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  /** Reduced motion: the OS asks for it, or Settings → Appearance → Motion is Reduced (body[data-motion], like settings.css). */
+  const calm = () => document.body.dataset.motion === 'reduced' || matchMedia('(prefers-reduced-motion: reduce)').matches;
   const SPRING = 'cubic-bezier(.34,1.56,.64,1)'; const GLIDE = 'cubic-bezier(.2,.8,.2,1)';
   function disclosure(head, open, label, toggle) {
     if (!head) { return; }
@@ -967,7 +972,7 @@
     const go = (a) => {
       if (state.section === a.dataset.sec) { a.focus({ preventScroll: true }); return; }
       const swap = () => { state.section = a.dataset.sec; state.expanded = null; render(); };
-      if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) { document.startViewTransition(swap); } else { swap(); }
+      if (document.startViewTransition && !calm()) { document.startViewTransition(swap); } else { swap(); }
       a.focus({ preventScroll: true });
     };
     side.querySelectorAll('[data-sec]').forEach((a) => {
@@ -1112,7 +1117,7 @@
     if (state.section !== 'dashboard' && state.dash.timer) { stopDashboardTimer(); }
     const sec = el('section', 'sec');
     if (enteredSection !== state.section) { sec.classList.add('enter'); enteredSection = state.section; }
-    ({ providers: secProviders, models: secModels, gallery: secGallery, marketplace: secMarketplace, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, continuity: secContinuity, secrets: secSecrets, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, shortcuts: secShortcuts, advanced: secAdvanced }[state.section] || secProviders)(sec);
+    ({ providers: secProviders, models: secModels, gallery: secGallery, marketplace: secMarketplace, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, continuity: secContinuity, secrets: secSecrets, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, shortcuts: secShortcuts, advanced: secAdvanced, appearance: secAppearance }[state.section] || secProviders)(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
@@ -2613,6 +2618,34 @@
       field('inlineCompletion.maxTokens', 'Max tokens per suggestion', '', 'number', { min: 16, max: 1024, step: 16 })
     ));
     sec.querySelectorAll('[data-sec]').forEach((a) => (a.onclick = () => { state.section = a.dataset.sec; render(); }));
+  }
+
+  // ------------------------------------------------------------------ appearance
+  /** Same contract as the chat view: <body data-density data-text-size data-motion>, set by the host's html() and kept
+   *  current here (an 'appearance' message as soon as the setting changes, and every state push). settings.css does the rest. */
+  const LOOK = { density: ['comfortable', 'compact'], textSize: ['small', 'default', 'large'], motion: ['system', 'reduced'] };
+  function applyAppearance(a) {
+    if (!a) { return; }
+    const b = document.body.dataset;
+    for (const [k, attr] of [['density', 'density'], ['textSize', 'textSize'], ['motion', 'motion']]) { if (LOOK[k].includes(a[k])) { b[attr] = a[k]; } }
+  }
+  const appearanceFrom = (settings) => settings && { density: (settings['appearance.density'] || {}).value, textSize: (settings['appearance.textSize'] || {}).value, motion: (settings['appearance.motion'] || {}).value };
+  function secAppearance(sec) {
+    head(sec, 'Appearance', 'How the chat and this page look. Changes apply at once, in every LocalPilot view; colours follow your VS Code theme.');
+    // A static sample in the page's own tokens: it changes with the page, so it shows what the chat will look like.
+    const sample = el('div', 'look-sample');
+    sample.setAttribute('aria-hidden', 'true');
+    sample.innerHTML = `<div class="ls-bar"><span class="ls-dot"></span><b>Chat preview</b><span class="spacer"></span><span class="badge">sample</span></div>
+      <div class="ls-msg ls-user">Why does the build fail on Windows?</div>
+      <div class="ls-msg ls-bot"><p>The path is joined with <code>/</code>. Use <code>path.join</code> so it works everywhere:</p><pre><span class="k">const</span> out = path.join(root, <span class="s">'dist'</span>);</pre></div>`;
+    sec.appendChild(sample);
+    sec.appendChild(card(
+      field('appearance.density', 'Density', 'Spacing in the chat and on this page. Compact fits more on screen.', 'seg', { options: [['comfortable', 'Comfortable'], ['compact', 'Compact']] }),
+      field('appearance.textSize', 'Text size', 'Relative to VS Code\'s own UI font; code follows it too.', 'seg', { options: [['small', 'Small'], ['default', 'Default'], ['large', 'Large']] }),
+      field('appearance.motion', 'Motion', 'System follows your operating system\'s reduce-motion setting. Reduced turns off fades and slides everywhere in LocalPilot; spinners still show work in progress.', 'seg', { options: [['system', 'System'], ['reduced', 'Reduced']] })
+    ));
+    const more = el('p', 'muted small look-more', `Colours, fonts and the editor's zoom come from VS Code. <button class="inline-link" data-cmd="workbench.action.selectTheme">Change the colour theme…</button>`);
+    sec.appendChild(more);
   }
 
   // ------------------------------------------------------------------ web search
@@ -5217,6 +5250,7 @@
       case 'state': {
         const prev = state.data;
         state.data = m;
+        applyAppearance(appearanceFrom(m.settings));
         const nav = !prev || m.navigate !== false;
         const navChanged = nav && ((m.page && m.page !== state.page) || (m.section && m.section !== state.section));
         // Entering the wizard starts from the current settings, so finishing it without changes keeps them.
@@ -5333,6 +5367,7 @@
         if (state.section === 'skills') { renderSkillRegistry(); }
         if (state.section === 'marketplace') { renderMarket(); }
         break;
+      case 'appearance': applyAppearance(m); break;
       case 'busy':
         state.busy = m.busy;
         if (!m.busy) { render(); }

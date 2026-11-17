@@ -2,7 +2,16 @@
 (function () {
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
-  const calmMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Unknown values fall back to the defaults, so a stale or hand-edited setting can never leave the page unstyled.
+  function applyAppearance(m) {
+    const pick = (v, ok, d) => (ok.includes(v) ? v : d);
+    const b = document.body.dataset;
+    b.density = pick(m.density, ['comfortable', 'compact'], 'comfortable');
+    b.textSize = pick(m.textSize, ['small', 'default', 'large'], 'default');
+    b.motion = pick(m.motion, ['system', 'reduced'], 'system');
+  }
+  // The OS preference or localpilot.appearance.motion = reduced (body[data-motion], set by the host): either one calms scrolling too.
+  const calmMotion = () => document.body.dataset.motion === 'reduced' || matchMedia('(prefers-reduced-motion: reduce)').matches;
   const els = {
     messages: $('messages'), input: $('input'), send: $('btnSend'), stop: $('btnStop'), pause: $('btnPause'), status: $('status'), statusText: $('statusText'),
     modeBtn: $('modeBtn'), modeLabel: $('modeLabel'), modeIcon: $('modeIcon'), modelBtn: $('modelBtn'), modelLabel: $('modelLabel'), skillsBtn: $('skillsBtn'), skillsLabel: $('skillsLabel'), ctx: $('ctxMeter'), usage: $('usagePill'),
@@ -85,6 +94,8 @@
     cursor: '<svg viewBox="0 0 16 16"><path d="M3 2l10 6-4.5 1L6 13z"/></svg>',
     memory: '<svg viewBox="0 0 16 16"><path d="M3 3h10v10H3z"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>',
     plan: '<svg viewBox="0 0 16 16"><path d="M10.5 3h1A1.5 1.5 0 0 1 13 4.5v8a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 12.5v-8A1.5 1.5 0 0 1 4.5 3h1"/><path d="M6 2h4v2H6zM5.5 7.5l1 1L8 7M9.5 8h1.5M5.5 11h5.5"/></svg>',
+    // Appearance: a text-size glyph (a large and a small A).
+    palette: '<svg viewBox="0 0 16 16"><path d="M8 2a6 6 0 0 0 0 12c.9 0 1.4-.6 1.4-1.3 0-.4-.2-.7-.4-1-.3-.3-.4-.6-.4-1 0-.7.6-1.2 1.3-1.2H11a3 3 0 0 0 3-3C14 4.3 11.3 2 8 2z"/><path d="M4.8 7.6h.01M6.6 5h.01M9.6 4.8h.01M11.5 7.2h.01" stroke-width="2"/></svg>',
     gear: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1.8l1.1 1.6 1.9-.4.4 1.9 1.6 1.1-1 1.6 1 1.6-1.6 1.1-.4 1.9-1.9-.4L8 14.2l-1.1-1.6-1.9.4-.4-1.9-1.6-1.1 1-1.6-1-1.6 1.6-1.1.4-1.9 1.9.4z"/></svg>',
     key: '<svg viewBox="0 0 16 16"><circle cx="5.5" cy="10.5" r="3"/><path d="M7.6 8.4L13.5 2.5M11.5 4.5l1.5 1.5M10 6l1.2 1.2"/></svg>',
     ask: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M6.2 6.2a1.8 1.8 0 1 1 2.6 1.6c-.6.4-.8.7-.8 1.4M8 11.5h.01"/></svg>',
@@ -4789,6 +4800,7 @@
         { label: 'Prompt library…', desc: 'Search your saved prompts and insert one (/prompts)', icon: I.bookmark, onPick: () => openPromptLib({ opener: els.btnComposerMore }) },
         { label: 'Save as prompt…', desc: draft ? 'Keep this message to reuse it, also as a /command' : 'Write the prompt in the message box first', icon: I.plus, disabled: !draft, onPick: () => (draft ? openPromptLib({ edit: { body: draft }, opener: els.btnComposerMore }) : toast('Write the prompt in the message box first')) },
         { label: 'Marketplace…', desc: 'Install skills, MCP servers, plugins and subagents', icon: I.download, onPick: () => post({ type: 'openSettings', section: 'marketplace' }) },
+        { label: 'Appearance…', desc: 'Density, text size and motion of the chat', icon: I.palette, onPick: () => post({ type: 'openSettings', section: 'appearance' }) },
         ...(narrow ? [
           { hr: true },
           { label: `Skills: ${pinned ? `${pinned} pinned` : SKILL_MODES[effectiveSkillsMode()].label}`, desc: 'Skill lookups and pinned skills for this chat', icon: I.book, onPick: () => openSkillsMenu(els.btnComposerMore) },
@@ -5421,6 +5433,8 @@
   }
   function dispatch(m) {
     switch (m.type) {
+      // localpilot.appearance.*: the stylesheet reads these attributes (density and text-size tokens, reduced motion).
+      case 'appearance': applyAppearance(m); break;
       case 'init': post({ type: 'requestOpenFiles' }); setTimeout(() => post({ type: 'nav', seq: 0, view: 'all', projectId: 'this', limit: 1 }), 2500); state.sessions = m.sessions || []; state.models = m.models || []; state.modelsLoading = !state.models.length; state.defaultModel = m.defaultModel; state.contextWindow = Number(m.contextWindow) || 0; state.skills = m.skills || []; state.agents = m.agents || []; state.commands = m.commands || []; state.skillsMode = m.skillsMode || 'auto'; state.running = new Set(m.running || []); state.paused = new Map((m.paused || []).map((id) => [id, { paused: true, holding: true }])); state.platform = m.platform || ''; if (m.workspace) { state.workspace = m.workspace; } syncShortcutTitles(); state.activeHint = m.activeSessionId || null; if (!state.openTabs) { state.openTabs = new Set(state.sessions.slice().sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (b.updatedAt - a.updatedAt)).slice(0, 8).map((s) => s.id)); } syncModel(); renderTabs(); break;
       case 'sessions': state.sessions = m.sessions || []; for (const id of [...state.unread]) { if (!state.sessions.some((s) => s.id === id)) { state.unread.delete(id); } } renderTabs(); if (state.session) { updateCtx(); } if (hist.open) { histRefresh(); } break;
       case 'sessionPage': histPage(m); break;

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <!-- Generated copy of settings-preview.html with the self-healing mocks (inlined below): open ?section=dashboard (?rec=empty|off, ?rectab=queue) or ?section=agent (?untrusted=1).
-     Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|… and ?light=1 (?web=0: web search off) -->
+     Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|appearance|… and ?light=1 (?web=0: web search off; ?density=compact&text=large&motion=reduced: appearance) -->
 <style>
 :root{
 --vscode-button-secondaryBackground:#313131;--vscode-button-secondaryForeground:#cccccc;--vscode-button-secondaryHoverBackground:#3c3c3c;--vscode-button-border:#ffffff12;--vscode-icon-foreground:#cccccc;
@@ -154,7 +154,10 @@ const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWi
   'models.autoTune': 'auto', 'colibri.modelsDir': '', 'colibri.backend': 'auto', 'telemetry.otlp.enabled': false, 'telemetry.otlp.endpoint': 'http://localhost:4318', 'telemetry.otlp.headers': {},
   'telemetry.otlp.metricsInterval': 60, 'telemetry.otlp.exporters': ['otlp'], 'telemetry.otlp.traceSamplePercent': 100, 'telemetry.otlp.recordContent': false, maxConsecutiveMistakes: 6, disabledTools: [],
   'markdownViewer.scrollSync': true, 'markdownViewer.outlineDepth': 3, 'markdownViewer.frontMatter': 'collapsed', 'markdownViewer.mermaid': true, 'markdownViewer.exportTheme': 'light', 'pdfViewer.pageColors': 'auto',
-  'pdfViewer.sidebar': 'auto', 'pdfViewer.defaultZoom': 'auto', 'pdfViewer.rangeThresholdMB': 16, 'pdfViewer.maxFileSizeMB': 1024, 'pdf.maxReadSizeMB': 100, 'pdf.maxChars': 60000 };
+  'pdfViewer.sidebar': 'auto', 'pdfViewer.defaultZoom': 'auto', 'pdfViewer.rangeThresholdMB': 16, 'pdfViewer.maxFileSizeMB': 1024, 'pdf.maxReadSizeMB': 100, 'pdf.maxChars': 60000,
+  // ?density=compact&text=small|large&motion=reduced: Settings → Appearance (the host sets the same <body> data attributes).
+  'appearance.density': q.get('density') || 'comfortable', 'appearance.textSize': q.get('text') || 'default', 'appearance.motion': q.get('motion') || 'system' };
+Object.assign(document.body.dataset, { density: defaults['appearance.density'], textSize: defaults['appearance.textSize'], motion: defaults['appearance.motion'] });
 const settings = {};
 for (const [k, v] of Object.entries(defaults)) settings[k] = { value: v, default: v, scope: k === 'defaultModel' || k === 'providers' ? 'user' : 'default', userValue: k === 'defaultModel' ? v : undefined };
 if (q.get('web') === '0') settings['webSearch.enabled'] = { value: false, default: true, scope: 'user', userValue: false };

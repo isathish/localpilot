@@ -66,6 +66,8 @@ body{margin:0}
 // ?light=1 and ?hc=1 mimic VS Code's theme kinds: the body class drives the stylesheet's light / high-contrast rules.
 (() => { const q = new URLSearchParams(location.search); if (q.get('light')) document.documentElement.classList.add('light');
   document.body.classList.add(q.get('hc') ? (q.get('light') ? 'vscode-high-contrast-light' : 'vscode-high-contrast') : q.get('light') ? 'vscode-light' : 'vscode-dark');
+  // ?density=compact, ?text=small|large, ?motion=reduced: localpilot.appearance.*, on <body> like chatViewProvider.ts renders it.
+  Object.assign(document.body.dataset, { density: q.get('density') || 'comfortable', textSize: q.get('text') || 'default', motion: q.get('motion') || 'system' });
   if (q.get('hc')) document.documentElement.style.setProperty('--vscode-contrastBorder', q.get('light') ? '#0f4a85' : '#6fc3df'); })();
 </script>
 <script>

@@ -11,7 +11,7 @@ import { nextInQueue, queueFiles, reviewSummary } from '../agent/reviewQueue';
 import { ChangedFile, gitCheckpoint, relativeIn, RestoreType } from '../agent/checkpoints';
 import { rewindAttachments } from './rewindDraft';
 import { SkillManager } from '../agent/skills';
-import { configTarget, getConfig, setDefaultModel, setSkillEnabled } from '../config';
+import { configTarget, getConfig, LocalPilotConfig, setDefaultModel, setSkillEnabled } from '../config';
 import { ContextManager, effectiveContextWindow, tokenCalibration } from '../context/contextManager';
 import { currentEditor, EditorState, WorkspaceContext } from '../context/workspaceContext';
 import { FileIndex, FileIndexStatus } from '../context/fileIndex';
@@ -107,7 +107,16 @@ export interface WorkspaceInfo {
   index?: FileIndexStatus;
 }
 
+/** `localpilot.appearance.*` as the webview applies it: `data-density`, `data-text-size` and `data-motion` on <body>. */
+export type AppearanceMsg = { type: 'appearance' } & LocalPilotConfig['appearance'];
+export function appearanceMsg(): AppearanceMsg {
+  const a = getConfig().appearance;
+  return { type: 'appearance', density: a.density, textSize: a.textSize, motion: a.motion };
+}
+
 export type ToWebview =
+  /** Density, text size and motion changed in Settings (or settings.json): the chat restyles in place. */
+  | AppearanceMsg
   /** The rating card above the composer (null: hidden), and the follow-up after a star was picked. */
   | { type: 'rating'; card: RatingCard | null }
   | { type: 'rated'; stars: number; store: RatingCard['store']; issue: boolean }
@@ -658,6 +667,8 @@ export class ChatController implements vscode.Disposable {
       vscode.workspace.onDidChangeConfiguration((e) => affectsAutoApprove(e) && this.broadcast(autoApproveState(this.log))),
       onDidChangeWorkspaceGrants(() => this.broadcast(autoApproveState(this.log))),
       vscode.workspace.onDidChangeConfiguration((e) => affectsUiPrefs(e) && this.broadcast(uiPrefsMsg(this.whatsNew?.pending))),
+      // Appearance applies live in every chat webview (sidebar, panel, editor tab) without a reload.
+      vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('localpilot.appearance') && this.broadcast(appearanceMsg())),
       store.onDidChange(() => this.broadcast({ type: 'sessions', sessions: store.list() })),
       // Retention pruning and history clearing drop chats in the store: release their snapshots too.
       store.onDidDelete((id) => {
@@ -3199,6 +3210,8 @@ export class ChatController implements vscode.Disposable {
       setTimeout(() => void this.mentionIndex.list(), 1500);
     }
     post(uiPrefsMsg(this.whatsNew?.pending));
+    // The page was rendered with the appearance of its time; a change while it booted would otherwise be missed.
+    post(appearanceMsg());
     post({ type: 'rating', card: this._rating?.pending ?? null });
     post(this.connectivity);
     // Commands that outlive a run (detached dev servers) keep their Stop control on rows this webview draws later.

@@ -118,6 +118,8 @@ export interface LocalPilotConfig {
   compactionThreshold: number; // 0..1 fraction of context before compaction
   /** Rotate short feature tips in the chat's status row while the agent thinks. */
   showTips: boolean;
+  /** Look of the chat and Settings webviews; applied live. */
+  appearance: { density: 'comfortable' | 'compact'; textSize: 'small' | 'default' | 'large'; motion: 'system' | 'reduced' };
   /** How a full context is compacted: a model-written summary, a deterministic digest without a model call, or not at all. */
   compactionStrategy: 'agentic' | 'basic' | 'off';
   /** Tools that need the internet (web_search, web_fetch, browser_*) are offered and @url mentions fetched. */
@@ -280,6 +282,11 @@ export function getConfig(): LocalPilotConfig {
     temperature: (() => { const t = c.get<number>('temperature', -1); return typeof t === 'number' && t >= 0 ? Math.min(2, t) : undefined; })(),
     compactionThreshold: c.get<number>('compactionThreshold', 0.75),
     showTips: c.get<boolean>('showTips', true),
+    appearance: {
+      density: (['comfortable', 'compact'] as const).find((v) => v === c.get<string>('appearance.density', 'comfortable')) ?? 'comfortable',
+      textSize: (['small', 'default', 'large'] as const).find((v) => v === c.get<string>('appearance.textSize', 'default')) ?? 'default',
+      motion: (['system', 'reduced'] as const).find((v) => v === c.get<string>('appearance.motion', 'system')) ?? 'system',
+    },
     compactionStrategy: (['agentic', 'basic', 'off'] as const).find((m) => m === c.get<string>('compaction.strategy', 'agentic')) ?? 'agentic',
     webEnabled: c.get<boolean>('webSearch.enabled', true) !== false,
     preferredLanguage: (c.get<string>('preferredLanguage', 'auto') ?? 'auto').trim() || 'auto',

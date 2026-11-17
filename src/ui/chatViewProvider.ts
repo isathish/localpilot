@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ChatController, FromWebview, ToWebview } from './chatController';
+import { appearanceMsg, ChatController, FromWebview, ToWebview } from './chatController';
 import { currentEditor } from '../context/workspaceContext';
 import { attachmentKind } from '../context/extractors';
 
@@ -322,6 +322,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const mermaidSrc = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'dist', 'webview', 'mermaid.js'));
     const nonce = Array.from({ length: 24 }, () => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[Math.floor(Math.random() * 62)]).join('');
     const svg = (d: string) => `<svg viewBox="0 0 16 16" aria-hidden="true">${d}</svg>`;
+    // localpilot.appearance.*: the first paint already has the user's density, text size and motion (no restyle flash);
+    // later changes arrive as the 'appearance' message. getConfig() only returns the enum values, so they are safe here.
+    const look = appearanceMsg();
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -332,7 +335,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <link rel="stylesheet" href="${media('continuity.css')}" />
 <title>LocalPilot</title>
 </head>
-<body data-mermaid="${mermaidSrc}">
+<body data-mermaid="${mermaidSrc}" data-density="${look.density}" data-text-size="${look.textSize}" data-motion="${look.motion}">
 <div id="app">
   <div id="boot" class="boot" role="status" aria-label="Loading LocalPilot"><div class="boot-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><path d="M12 3V1.5"/><circle cx="12" cy="1.2" r=".8" fill="currentColor" stroke="none"/></svg></div><span class="boot-dots"><i></i><i></i><i></i></span></div>
   <div id="progress" class="progress hidden" aria-hidden="true"></div>

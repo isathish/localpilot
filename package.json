@@ -2338,6 +2338,27 @@
           "default": true,
           "markdownDescription": "While the agent has been thinking for more than a few seconds, show short feature tips (steering, `@` mentions, `/compact`, checkpoints, …) in the chat's status row. Tips are built in; nothing is fetched."
         },
+        "localpilot.appearance.density": {
+          "type": "string",
+          "enum": ["comfortable", "compact"],
+          "enumDescriptions": ["Roomy spacing, easier to scan.", "Tighter spacing, more of the conversation and settings on screen."],
+          "default": "comfortable",
+          "markdownDescription": "Spacing in the chat and the Settings page. Applies at once, without a reload."
+        },
+        "localpilot.appearance.textSize": {
+          "type": "string",
+          "enum": ["small", "default", "large"],
+          "enumDescriptions": ["About 8% smaller than the editor's UI text.", "The size VS Code uses for its own views.", "About 12% larger, for readability."],
+          "default": "default",
+          "markdownDescription": "Text size in the chat and the Settings page, relative to VS Code's own UI font. Code blocks follow it too. Applies at once."
+        },
+        "localpilot.appearance.motion": {
+          "type": "string",
+          "enum": ["system", "reduced"],
+          "enumDescriptions": ["Subtle animations, turned off when the operating system asks for reduced motion.", "No fades, slides or pulses; spinners still show work in progress."],
+          "default": "system",
+          "markdownDescription": "Animations in the chat and the Settings page."
+        },
         "localpilot.compaction.strategy": {
           "type": "string",
           "enum": [

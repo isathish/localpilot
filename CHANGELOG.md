@@ -4,6 +4,13 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Added
+- **Appearance settings.** New **Settings → Appearance** (also **Appearance…** in the chat's ⋯ menu) with a live sample: `localpilot.appearance.density` (`comfortable` or `compact`), `localpilot.appearance.textSize` (`small`, `default` or `large`, code included) and `localpilot.appearance.motion` (`system` follows the OS; `reduced` turns fades and slides off, spinners stay). They apply at once to the chat, its Continuity pages and the Settings page, without a reload.
+
+### Changed
+- **A calmer, more modern chat.** Your messages sit in a soft bubble without an outline, tabs, **Add context** and code blocks drop extra borders, and the message box has a gentle focus ring instead of a heavy border. Text, headings and pressed buttons behave the same everywhere. High-contrast themes keep their outlines.
+- **A cleaner Settings page.** On a wide editor tab the form sits in a centred column beside the sidebar with readable line lengths; section headings are sentence case; cards share one quiet surface; segmented controls and the User/Workspace switch show the choice with a ring, not colour alone; buttons and inputs share one height.
+
 ## 1.9.0 — 2026-11-17
 
 ### Changed
