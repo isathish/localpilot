@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.10.1 — 2026-11-17
+
 ### Fixed
 - **A clear prompt after an in-place update.** When VS Code updated LocalPilot without reloading the window, every new setting (such as **Appearance**) failed with *"… is not a registered configuration"*, once per click. Settings now says once that the window needs a reload, with a **Reload window** button.
 
