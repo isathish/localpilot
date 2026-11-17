@@ -502,7 +502,10 @@ export async function continuitySmoke(check: Check): Promise<void> {
   const croot = tmp('open');
   const c = await Continuity.open({ dataDir: croot, writer: 'cli', appVersion: 'test', secrets: memorySecretBox(), log: quiet, settings: () => ({ dataDir: '', trashRetentionDays: 30, historyDays: 90, indexMaxMB: 256, backup: { enabled: false, intervalDays: 7, keep: 4 } }), wasmPath: process.env.LOCALPILOT_SQLJS_WASM ?? '', workerPath: process.env.LOCALPILOT_CONTINUITY_WORKER ?? '', schedules: false, migration: makeFixture().sources });
   await c.ready;
-  check(`open on the calling thread: ${c.openMs.toFixed(1)} ms (budget 50 ms)`, !c.degraded && c.openMs < 50);
+  // 50 ms on a developer machine; shared CI runners (Windows especially) stall for tens of ms at random, so they get
+  // 250 ms. Either budget still catches the real regression: work moved back onto the calling thread takes seconds.
+  const openBudget = process.env.CI ? 250 : 50;
+  check(`open on the calling thread: ${c.openMs.toFixed(1)} ms (budget ${openBudget} ms)`, !c.degraded && c.openMs < openBudget);
   for (let i = 0; i < 40 && c.migration.status().state !== 'partial' && c.migration.status().state !== 'done'; i++) {
     await new Promise((r) => setTimeout(r, 100));
   }
