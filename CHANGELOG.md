@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.10.0 — 2026-11-17
+
 ### Added
 - **Appearance settings.** New **Settings → Appearance** (also **Appearance…** in the chat's ⋯ menu) with a live sample: `localpilot.appearance.density` (`comfortable` or `compact`), `localpilot.appearance.textSize` (`small`, `default` or `large`, code included) and `localpilot.appearance.motion` (`system` follows the OS; `reduced` turns fades and slides off, spinners stay). They apply at once to the chat, its Continuity pages and the Settings page, without a reload.
 
