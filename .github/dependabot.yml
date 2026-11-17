@@ -19,6 +19,16 @@ updates:
       # "build:" is not a releasable commit type (scripts/auto-bump.js), so dependency bumps never cut a release alone.
       prefix: build
     open-pull-requests-limit: 10
+    ignore:
+      # @types/vscode must never be newer than engines.vscode (scripts/check-version.js fails the build): it moves only
+      # together with the minimum VS Code version, by hand.
+      - dependency-name: '@types/vscode'
+      # Major versions of the compiler and of the Node types need a deliberate migration (and @types/node tracks the
+      # oldest Node the CLI supports), so Dependabot proposes only their minor and patch updates.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]

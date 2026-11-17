@@ -9,6 +9,7 @@ const workspaceFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'localpilot-test-w
 // plugins, MCP trust, handoffs, evals, memory, skills, worktrees, telemetry…) can read or write the developer's
 // real ~/.localpilot. VS Code itself is unaffected: the test runner passes --user-data-dir and --extensions-dir.
 const realHome = os.homedir();
+const isolateHome = !(process.platform === 'darwin' && process.env.CI);
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'localpilot-test-home-'));
 const lp = path.join(home, '.localpilot');
 fs.mkdirSync(lp, { recursive: true });
@@ -17,9 +18,10 @@ export default defineConfig({
 	files: 'out/test/**/*.test.js',
 	workspaceFolder,
 	env: {
-		HOME: home,
-		USERPROFILE: home,
-		LOCALPILOT_TEST_HOME: home,
+		// Except on macOS CI runners: there VS Code's own secret storage finds the login keychain through HOME, and a
+		// throwaway HOME leaves it waiting for a keychain dialog nobody can answer (the whole run hung at start-up). The
+		// runner's home is disposable anyway, and the LOCALPILOT_* overrides below still keep tests apart.
+		...(isolateHome ? { HOME: home, USERPROFILE: home, LOCALPILOT_TEST_HOME: home } : {}),
 		// Explicit overrides as well, for modules that have one. LOCALPILOT_DATA_DIR and LOCALPILOT_CONTINUITY_DIR stay
 		// unset on purpose: the home folder already covers them, and without them each continuity test gets its own
 		// throwaway folder and the extension does not import CLI chats (see src/ui/continuityData.ts).
