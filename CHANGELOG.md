@@ -4,6 +4,14 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **One failure, one card.** A model or provider failure showed a red error box *and* a red Self-healing card with its own Retry and a Detect → … → Regression pipeline that had not run. It is now one calm card: what happened, the next step, **Retry** plus the fix that fits (Pick another model, Start Ollama, Check provider, Set API key), with the raw provider error under **Details**. Real code-healing cards keep their stages.
+- **Recovery buttons work.** Retry, Pick another model, Set API key and Start server on a self-healing card did nothing; they now act.
+- **The ring next to Send is a meter, not a spinner.** The context-usage ring was drawn in the "working" colour and looked like something was loading; it is now a quiet pie that turns amber or red only when the context fills up.
+- **The model chip shows the model you picked** (`gemma4:12b`, not `gemma4`), keeping the size tag when space is short.
+- **Narrow sidebars:** code-block headers keep the file name, interrupted-run cards keep their buttons on one row, and skill-suggestion chips truncate instead of overflowing.
+- **Provider settings.** A saved key reads *Saved — type to replace* instead of being cut off; **Get an API key ↗** keeps its icon on the same line; Azure OpenAI shows **Deployments** with the deployments found; other providers show the models found; **Default model** offers the discovered models (with **Other…** for any id); the two buttons are **Remove key** and **Remove provider**. The self-healing retry table no longer wraps its headers or draws stray lines.
+
 ## 1.10.3 — 2026-11-18
 
 ### Fixed
