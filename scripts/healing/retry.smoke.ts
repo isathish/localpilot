@@ -183,4 +183,5 @@ export async function retrySmoke(check: Check): Promise<void> {
   check('isTransient(overload) is true (legacy retries)', isTransient('overload'));
   check('errorKind(overload) -> server', errorKind('overload') === 'server' && errorKind('server') === 'server');
   check('describeModelError has an overload wording', /ran out of memory/.test(describeModelError('overload', 'HTTP 500 from x: CUDA error', 'qwen')));
+  check('describeModelError: a missing model says install or pick another', /gemma4:12b is not installed on its server.*pick another model/.test(describeModelError('other', `HTTP 404 from http://localhost:11434/api/chat: {"error":"model 'gemma4:12b' not found"}`, 'gemma4:12b')));
 }

@@ -4,6 +4,9 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+### Fixed
+- **A refused request no longer says "start the model server".** When a provider answered but refused a request (an API the model does not support, an unknown model or deployment), the chat said *the model server is unavailable* and offered **Start server**. It now says *the provider rejected the request* and offers **Pick another model** and **Retry**. A model that is not on its server (Ollama's *model … not found*) says so and points to installing it or picking another.
+
 ## 1.10.2 — 2026-11-18
 
 ### Fixed

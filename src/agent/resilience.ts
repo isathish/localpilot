@@ -114,6 +114,11 @@ export function modelRetryDelayMs(kind: ModelFailure, e: unknown, attempt: numbe
 }
 
 /** One-line, actionable wording for the chat; the raw message stays in the log. */
+/** An HTTP 4xx the classifier could not name (unsupported API, unknown model or deployment): the provider is up but refuses this request. */
+export function isRejectedRequest(kind: ModelFailure, e: unknown): boolean {
+  return kind === 'other' && e instanceof HttpError && e.status >= 400 && e.status < 500;
+}
+
 export function describeModelError(kind: ModelFailure, raw: string, modelName: string): string {
   const detail = raw.replace(/^HTTP \d+ from \S+:\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 240);
   switch (kind) {
@@ -135,8 +140,14 @@ export function describeModelError(kind: ModelFailure, raw: string, modelName: s
       return `The conversation no longer fits ${modelName}'s context window even after compacting. Start a new chat, raise the context window in Settings → Models, or pick a model with a larger window.`;
     case 'stall':
       return `${modelName} stopped responding. ${detail}. The request was cancelled — try again; if it keeps happening, the model may be too large for this machine.`;
-    default:
+    default: {
+      // Ollama and llama.cpp: the chosen model is not on this server (removed, or set as a default on another machine).
+      const missing = /model ['"]?([^'"\s]+)['"]? not found/i.exec(raw)?.[1];
+      if (missing) {
+        return `The model ${missing} is not installed on its server. Install it (Settings → Models → Model gallery), or pick another model.`;
+      }
       return detail || raw;
+    }
   }
 }
 

@@ -23,7 +23,7 @@ const attempt = (n: number, over: Partial<AttemptRecord> = {}): AttemptRecord =>
 
 const ALL: EscalationReason[] = [
   'exhausted', 'duplicate', 'deadline', 'loop', 'mistake_limit', 'approval_needed', 'credentials', 'git_conflict', 'security',
-  'data_corruption', 'model_blocked', 'user_edit_conflict', 'model_unavailable',
+  'data_corruption', 'model_blocked', 'user_edit_conflict', 'model_unavailable', 'model_rejected',
 ];
 
 export async function escalationSmoke(check: Check): Promise<void> {
@@ -41,6 +41,8 @@ export async function escalationSmoke(check: Check): Promise<void> {
   check('credentials actions', acts('credentials') === 'setApiKey,pickModel');
   check('data_corruption actions', acts('data_corruption') === 'restoreCheckpoint,dismiss');
   check('model_unavailable actions', acts('model_unavailable') === 'retry,startServer');
+  check('model_rejected actions: no Start server', acts('model_rejected') === 'pickModel,retry');
+  check('model_rejected -> failed', outcomeFor('model_rejected') === 'failed');
   for (const r of ['exhausted', 'duplicate', 'deadline', 'loop', 'mistake_limit', 'model_blocked', 'user_edit_conflict'] as EscalationReason[]) {
     check(`${r} actions`, acts(r) === 'retryWithGuidance,resume,rollback,dismiss', acts(r));
   }
@@ -100,6 +102,8 @@ export async function escalationSmoke(check: Check): Promise<void> {
   const mu = report(state(), buildIntervention(state(), 'model_unavailable', { now: 1, model: 'qwen3:8b', detail: 'ECONNREFUSED' }));
   check('model unavailable -> Failed', mu.startsWith('Failed: The model server is unavailable (qwen3:8b): ECONNREFUSED.'), mu);
   check('no Tried line without attempts', !/Tried:/.test(mu));
+  const mr = report(state(), buildIntervention(state(), 'model_rejected', { now: 1, model: 'azure/claude', detail: 'api_not_supported' }));
+  check('model rejected -> Failed, names the provider, not the server', mr.startsWith('Failed: The provider rejected the request (azure/claude): api_not_supported.') && /Pick another model|pick another model/.test(mr) && !/start the model server/i.test(mr), mr);
   check('every reason produces a report', ALL.every((r) => {
     const t = report(state(), buildIntervention(state(), r, { now: 1 }));
     return /^(Blocked|Incomplete|Failed): \S/.test(t) && /\nNext: \S/.test(t);

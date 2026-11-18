@@ -51,7 +51,7 @@ const BLOCKED: readonly EscalationReason[] = ['approval_needed', 'credentials', 
 
 export function outcomeFor(reason: EscalationReason): TaskOutcome {
   if (BLOCKED.includes(reason)) {return 'blocked';}
-  if (reason === 'model_unavailable') {return 'failed';}
+  if (reason === 'model_unavailable' || reason === 'model_rejected') {return 'failed';}
   return 'incomplete';
 }
 
@@ -80,6 +80,7 @@ const ACTIONS_BY_REASON: Record<EscalationReason, RecoveryActionKind[]> = {
   credentials: ['setApiKey', 'pickModel'],
   data_corruption: ['restoreCheckpoint', 'dismiss'],
   model_unavailable: ['retry', 'startServer'],
+  model_rejected: ['pickModel', 'retry'],
   exhausted: ['retryWithGuidance', 'resume', 'rollback', 'dismiss'],
   duplicate: ['retryWithGuidance', 'resume', 'rollback', 'dismiss'],
   deadline: ['retryWithGuidance', 'resume', 'rollback', 'dismiss'],
@@ -248,6 +249,8 @@ function title(state: RecoveryState, reason: EscalationReason, f: Failure | unde
       return `${files ?? 'a file'} changed outside the agent during a fix, so the fix was not rolled back`;
     case 'model_unavailable':
       return `the model server is unavailable${model}${detail ? `: ${detail}` : ''}`;
+    case 'model_rejected':
+      return `the provider rejected the request${model}${detail ? `: ${detail}` : ''}`;
   }
 }
 
@@ -268,6 +271,8 @@ function nextText(reason: EscalationReason, ctx: EscalationContext): string {
       return 'restore the checkpoint or inspect the data manually. No automatic writes were made.';
     case 'model_unavailable':
       return 'start the model server, then "Retry".';
+    case 'model_rejected':
+      return 'pick another model, or check the provider in Settings → Providers (endpoint, API type, model or deployment name), then "Retry".';
     case 'model_blocked':
       return 'answer the question above, then reply with that, or "Resume" to try again with your guidance.';
     case 'user_edit_conflict':

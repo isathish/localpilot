@@ -250,7 +250,9 @@ export type ResourceAdjustment =
 
 export type EscalationReason =
   | 'exhausted' | 'duplicate' | 'deadline' | 'loop' | 'mistake_limit' | 'approval_needed' | 'credentials'
-  | 'git_conflict' | 'security' | 'data_corruption' | 'model_blocked' | 'user_edit_conflict' | 'model_unavailable';
+  | 'git_conflict' | 'security' | 'data_corruption' | 'model_blocked' | 'user_edit_conflict' | 'model_unavailable'
+  /** The provider answered but refused the request (HTTP 4xx such as an unsupported API or unknown model): another server start will not help. */
+  | 'model_rejected';
 
 export type Decision =
   | { action: 'cancel' }

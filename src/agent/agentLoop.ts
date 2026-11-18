@@ -21,7 +21,7 @@ import { addUsage } from './usage';
 import { withCost } from '../providers/pricing';
 import { ParallelPool } from './parallel';
 import { buildSystemPrompt, buildTurnContext } from './prompts';
-import { callKey, classifyModelError, describeModelError, isTransient, ModelFailure, modelRetryDelayMs, sleep, withWatchdog, onAbort } from './resilience';
+import { callKey, classifyModelError, describeModelError, isRejectedRequest, isTransient, ModelFailure, modelRetryDelayMs, sleep, withWatchdog, onAbort } from './resilience';
 import { assessRequest, clarificationSteer, gatherRequestContext, hasContextBlocks, needsQuestions, questionSteer, userText } from './clarify';
 import { asksToRemember, clampSkillBody, namesTool, PreloadReason, recommendSkills, shouldPreload, SkillLearner, skillHint, SkillMatch, skillPreloadNote } from './skillRecommender';
 import { RunControl } from './runControl';
@@ -1539,7 +1539,7 @@ export class AgentRunner {
           // meta.error lets the transcript show the failure as an error box (with Retry) after the live turn is gone.
           session.messages.push({ role: 'assistant', content: text || `(error: ${friendly})`, meta: { timestamp: Date.now(), error: friendly } });
           // No turn_end follows: the outcome (failed / blocked) and the intervention are persisted before the throw.
-          await heal?.escalate(kind === 'auth' || kind === 'quota' ? 'credentials' : 'model_unavailable', { detail: friendly }).catch((x) => this.log.warn(`Self-healing: could not record the model failure: ${String(x)}`));
+          await heal?.escalate(kind === 'auth' || kind === 'quota' ? 'credentials' : isRejectedRequest(kind, e) ? 'model_rejected' : 'model_unavailable', { detail: friendly }).catch((x) => this.log.warn(`Self-healing: could not record the model failure: ${String(x)}`));
           const err = e instanceof Error ? e : new Error(msg);
           (err as Error & { reported?: boolean }).reported = true;
           throw err;
