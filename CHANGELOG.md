@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.11.0 — 2026-11-18
+
 ### Added
 - **Agent map.** New **LocalPilot: Open Agent Map** (also in the Agents view title bar and Settings → Skills & subagents) shows every agent LocalPilot has and how work flows between them: Auto and its routing rules, the model roles with the model each resolves to right now, the modes and specialists with what each may do, built-in and your own subagents (workspace, user and plugin), every skill with its state and recent use, and the tools and MCP servers with their approval levels and status. Type in **Try a message** to watch Auto pick a mode, specialist and model and say why. Click any box to change its model role, switch a skill, tool or MCP server on or off, set an approval level, open or customize an agent or skill, or create a new subagent or skill; changes go through the same settings as the Settings page and the CLI, and the map updates live. A pan-and-zoom graph and an accessible list view (used automatically in narrow windows).
 - **Review Changes** on finished agents in the Agents view, next to Accept and Reject.
