@@ -9,6 +9,7 @@ import {
   ProviderUsage,
   StreamEvent,
 } from '../types';
+import { AnthropicProvider } from './anthropic';
 import { lookupCatalog } from './catalog';
 import { completeViaChat, isAzureUrl, isCloudProvider, isNonChatModel, knownContextWindow, knownVision, resolveApiKey, resolveHeaders } from './cloud';
 import { colibriHealth, colibriSlots, colibriSpec, COLIBRI_OWNER } from './colibri';
@@ -44,6 +45,14 @@ interface OpenAIModel {
   top_provider?: { context_length?: number };
   /** colibri: `["text"]` or `["text", "image"]`. */
   input_modalities?: string[];
+  /** Azure OpenAI deployments: the model behind the deployment (`gpt-4o`), for context window, vision and prices. */
+  base?: string;
+}
+/** One entry of Azure OpenAI's data-plane deployment list. */
+interface AzureDeployment {
+  id?: string;
+  model?: string;
+  status?: string;
 }
 interface OpenAIChunk {
   choices?: {
@@ -133,6 +142,11 @@ export class OpenAICompatProvider implements LLMProvider {
     return this.engine === 'colibri' && STOCK_NAMES.test(this.configuredName) ? 'colibri' : this.configuredName;
   }
 
+  /** Azure deployment name → the model behind it, from the last deployment list. */
+  private readonly deploymentBase = new Map<string, string>();
+  /** Claude deployments on Azure answer only Anthropic's Messages API (`/anthropic/v1/messages` on the same resource). */
+  private azureClaude?: AnthropicProvider;
+
   constructor(cfg: ProviderConfig) {
     this.cfg = cfg;
     this.id = cfg.id;
@@ -155,6 +169,43 @@ export class OpenAICompatProvider implements LLMProvider {
     return withApiVersion(`${this.baseUrl}${path}`, this.cfg.apiVersion);
   }
 
+  /**
+   * Azure OpenAI's deployments (what a chat request names as `model`), from the data-plane list that API-key auth can
+   * read. Undefined when this is not an Azure resource URL, the URL already names one deployment, a models URL is set,
+   * or the resource does not answer (the call is not in every api-version).
+   */
+  private async azureDeployments(signal?: AbortSignal): Promise<OpenAIModel[] | undefined> {
+    if (!isAzureUrl(this.baseUrl) || /\/deployments\//i.test(this.baseUrl) || this.cfg.modelsUrl?.trim()) {
+      return undefined;
+    }
+    let origin: string;
+    try {
+      origin = new URL(this.baseUrl).origin;
+    } catch {
+      return undefined;
+    }
+    for (const version of ['2023-03-15-preview', '2022-12-01']) {
+      try {
+        const res = await getJson<{ data?: AzureDeployment[] | null }>(`${origin}/openai/deployments?api-version=${version}`, this.headers, withTimeout(5000, signal));
+        if (Array.isArray(res?.data)) {
+          for (const d of res.data) {
+            if (typeof d?.id === 'string' && typeof d.model === 'string') {
+              this.deploymentBase.set(d.id, d.model);
+            }
+          }
+          return res.data
+            .filter((d): d is AzureDeployment & { id: string } => typeof d?.id === 'string' && !!d.id && (!d.status || d.status === 'succeeded'))
+            .map((d) => ({ id: d.id, base: typeof d.model === 'string' ? d.model : undefined }));
+        }
+      } catch (e) {
+        if (signal?.aborted) {
+          throw e;
+        }
+      }
+    }
+    return undefined;
+  }
+
   private get modelsUrl(): string {
     return this.cfg.modelsUrl?.trim() || this.url('/models');
   }
@@ -173,8 +224,16 @@ export class OpenAICompatProvider implements LLMProvider {
     let models: OpenAIModel[] = [];
     try {
       // Together AI answers with a bare array instead of `{ data: [...] }`.
-      const res = await getJson<OpenAIModel[] | { data?: OpenAIModel[] | null }>(this.modelsUrl, this.headers, withTimeout(5000, signal));
-      models = Array.isArray(res) ? res : (res?.data ?? []);
+      // Azure OpenAI: chat requests name a deployment, and /models lists the base models the resource could deploy,
+      // so list the deployments instead when the resource answers for them.
+      const deployments = await this.azureDeployments(signal);
+      if (deployments) {
+        models = deployments;
+      } else {
+        // Together AI answers with a bare array instead of `{ data: [...] }`.
+        const res = await getJson<OpenAIModel[] | { data?: OpenAIModel[] | null }>(this.modelsUrl, this.headers, withTimeout(5000, signal));
+        models = Array.isArray(res) ? res : (res?.data ?? []);
+      }
     } catch (e) {
       if (!(e instanceof HttpError) || !this.explicitModels?.length) {
         throw e;
@@ -201,13 +260,14 @@ export class OpenAICompatProvider implements LLMProvider {
     const listed = models
       .filter((m) => !/^(embeddings?|image|rerank|moderation|audio|transcribe|video)$/i.test(m.type ?? '') && !/embed/i.test(m.id))
       // Cloud listings mix in speech, image and moderation models; Mistral flags the ones that cannot chat.
-      .filter((m) => !this.remote || (!isNonChatModel(m.id) && capabilityList(m)?.includes('completion_chat') !== false))
+      .filter((m) => !this.remote || (!isNonChatModel(m.base ?? m.id) && canChat(m)))
       // colibri decision (System One) and picture models cannot chat.
       .filter((m) => m.owned_by !== COLIBRI_OWNER || !m.capabilities || !!capabilityList(m)?.includes('chat'))
       .map((m) => {
-        const facts = this.remote ? (modelFacts(m.id, this.factsKey) ?? anyModelFacts(m.id)) : undefined;
+        const base = m.base ?? m.id;
+        const facts = this.remote ? (modelFacts(base, this.factsKey) ?? anyModelFacts(base)) : undefined;
         const ctx =
-          m.max_model_len ?? m.loaded_context_length ?? m.max_context_length ?? m.context_length ?? m.context_window ?? m.top_provider?.context_length ?? native?.get(m.id) ?? this.configuredCtx ?? (this.remote ? (facts?.contextWindow ?? knownContextWindow(m.id)) : undefined) ?? 32768;
+          m.max_model_len ?? m.loaded_context_length ?? m.max_context_length ?? m.context_length ?? m.context_window ?? m.top_provider?.context_length ?? native?.get(m.id) ?? this.configuredCtx ?? (this.remote ? (facts?.contextWindow ?? knownContextWindow(base)) : undefined) ?? 32768;
         const caps = capabilityList(m);
         if (m.owned_by === COLIBRI_OWNER) {
           const spec = colibriSpec(m.id);
@@ -230,13 +290,13 @@ export class OpenAICompatProvider implements LLMProvider {
             parallelSlots: slots,
           } satisfies ModelInfo;
         }
-        const vision = caps?.includes('vision') || (m.architecture?.input_modalities?.includes('image') ?? (this.remote ? !!facts?.vision || knownVision(m.id) : undefined));
+        const vision = caps?.includes('vision') || (m.architecture?.input_modalities?.includes('image') ?? (this.remote ? !!facts?.vision || knownVision(base) : undefined));
         const info: ModelInfo = {
           id: `${this.id}/${m.id}`,
           providerId: this.id,
           modelId: m.id,
           name: m.id,
-          family: m.owned_by,
+          family: m.base ?? m.owned_by,
           contextWindow: ctx,
           maxOutputTokens: outputLimit(facts, ctx, this.remote),
           // Most local OpenAI-compatible servers advertise tool support; we fall back to prompt-based tools otherwise.
@@ -247,7 +307,7 @@ export class OpenAICompatProvider implements LLMProvider {
           supportsThinking: facts?.reasoning || undefined,
           remote: this.remote || undefined,
           // Only the API the prices belong to is priced: a gateway's own prices are unknown.
-          pricing: pricingOf(modelFacts(m.id, this.factsKey), this.factsKey),
+          pricing: pricingOf(modelFacts(base, this.factsKey), this.factsKey),
         };
         // Local servers (Docker Model Runner, LM Studio, llama.cpp) say nothing about vision: go by the catalog, then the name.
         if (vision === undefined) {
@@ -258,7 +318,26 @@ export class OpenAICompatProvider implements LLMProvider {
     return applyModelOverrides(listed, this.cfg.modelOverrides);
   }
 
+  /** The Anthropic client for a Claude deployment on this Azure resource; undefined for every other model. */
+  private claudeOnAzure(model: string): AnthropicProvider | undefined {
+    if (!isAzureUrl(this.baseUrl) || !/claude/i.test(this.deploymentBase.get(model) ?? model)) {
+      return undefined;
+    }
+    let origin: string;
+    try {
+      origin = new URL(this.baseUrl).origin;
+    } catch {
+      return undefined;
+    }
+    return (this.azureClaude ??= new AnthropicProvider({ ...this.cfg, type: 'anthropic', baseUrl: `${origin}/anthropic/v1`, modelsUrl: undefined, apiVersion: undefined }));
+  }
+
   async *chat(opts: ChatRequestOptions): AsyncIterable<StreamEvent> {
+    const claude = this.claudeOnAzure(opts.model);
+    if (claude) {
+      yield* claude.chat(opts);
+      return;
+    }
     const messages = pairToolCalls(opts.messages).map((m) => toOpenAIMessage(m, isGeminiUrl(this.baseUrl)));
     if (isMistral(this.baseUrl, opts.model)) {
       mistralToolCallIds(messages);
@@ -442,6 +521,12 @@ export class OpenAICompatProvider implements LLMProvider {
 }
 
 /** Capabilities as a list, whether the server sends one (LM Studio, vLLM) or Mistral's `{ function_calling: true, … }`. */
+/** Whether a cloud listing says the model can chat: Mistral flags `completion_chat`, Azure OpenAI `chat_completion`. */
+function canChat(m: OpenAIModel): boolean {
+  const caps = capabilityList(m);
+  return !caps || caps.includes('completion_chat') || caps.includes('chat_completion') || caps.includes('chat');
+}
+
 function capabilityList(m: OpenAIModel): string[] | undefined {
   const c = m.capabilities;
   return !c ? undefined : Array.isArray(c) ? c : Object.keys(c).filter((k) => c[k] === true);
