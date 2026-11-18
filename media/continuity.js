@@ -14,6 +14,8 @@
     offline: I.offline || '<svg viewBox="0 0 16 16"><path d="M5.2 12.5H4.5a2.5 2.5 0 0 1-.4-5A4 4 0 0 1 10.7 5M12.4 7.2a2.7 2.7 0 0 1-.9 5.3H8.3M2.5 2.5l11 11"/></svg>',
   };
   const TITLES = { trash: 'Trash', versions: 'Versions', memory: 'Memory', context: 'Context', checkpoints: 'Checkpoints', sync: 'Sync', compare: 'Compare answers' };
+  /** Each page's icon in its header, the same glyph its row has under Knowledge & continuity in the navigator. */
+  const ICONS = { trash: I.trash, versions: J.history, memory: I.memory, context: I.layers, checkpoints: I.restore, sync: I.sync, compare: I.compare };
   const root = el('div', 'cpage hidden');
   root.id = 'cpage'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true');
   (document.getElementById('app') || document.body).appendChild(root);
@@ -34,7 +36,7 @@
     const a = document.activeElement; const keep = !a || a === document.body || root.contains(a);
     const was = keep && a && root.contains(a) ? focusKey(a) : '';
     root.innerHTML = '';
-    const head = el('div', 'cp-head', `<button class="cp-back" data-c="back" title="Back (Esc)" aria-label="Back">${J.back}</button><div class="cp-title"><h2>${esc(title)}</h2>${sub ? `<span class="cp-sub">${sub}</span>` : ''}</div><span class="cp-acts">${actions || ''}</span>`);
+    const head = el('div', 'cp-head', `<button class="cp-back" data-c="back" title="Back (Esc)" aria-label="Back">${J.back}</button>${cur && ICONS[cur.page] ? `<span class="cp-ico" aria-hidden="true">${ICONS[cur.page]}</span>` : ''}<div class="cp-title"><h2>${esc(title)}</h2>${sub ? `<span class="cp-sub">${sub}</span>` : ''}</div><span class="cp-acts">${actions || ''}</span>`);
     const body = el('div', 'cp-body'); body.setAttribute('tabindex', '-1');
     root.append(head, body);
     root.setAttribute('aria-label', title);

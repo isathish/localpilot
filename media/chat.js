@@ -52,6 +52,7 @@
     diff: '<svg viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3M8 6.5v3M6.5 8h3M6.5 11.5h3"/></svg>',
     bot: '<svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H13l-4.5 4v-4h-2A2.5 2.5 0 0 1 4 13.5z"/><circle cx="9" cy="9.5" r="1" fill="currentColor"/><circle cx="15" cy="9.5" r="1" fill="currentColor"/></svg>',
     warn: '<svg viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3M8 11.8v.2"/></svg>',
+    alert: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.8"/><path d="M8 5v3.4M8 10.8v.2"/></svg>',
     book: '<svg viewBox="0 0 16 16"><path d="M3 3h4a2 2 0 0 1 2 2v9a1.5 1.5 0 0 0-1.5-1.5H3zM13 3H9a2 2 0 0 0-2 2v9a1.5 1.5 0 0 1 1.5-1.5H13z"/></svg>',
     closeOthers: '<svg viewBox="0 0 16 16"><rect x="2.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M5.5 3.5V3.5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-.5M5 8l3 3M8 8l-3 3"/></svg>',
     rules: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v11M5.5 13.5h5M3 4.5h10"/><path d="M3 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0zM13 4.5l-1.8 4.2a1.9 1.9 0 0 0 3.6 0z"/></svg>',
@@ -203,7 +204,9 @@
    */
   function toast(text, level, action) {
     const lv = level || 'info';
-    const t = el('div', `toast ${lv}`, `<span class="tt">${esc(text)}</span>`); t.title = text;
+    // Warnings and errors carry an icon and a spoken level as well as their border colour (never colour alone).
+    const ico = lv === 'error' ? I.alert : lv === 'warn' ? I.warn : '';
+    const t = el('div', `toast ${lv}`, `${ico ? `<span class="ti" aria-hidden="true">${ico}</span>` : ''}<span class="tt">${ico ? `<span class="sr-only">${lv === 'error' ? 'Error' : 'Warning'}: </span>` : ''}${esc(text)}</span>`); t.title = text;
     if (action && action.label && action.msg) { const b = el('button', 'ta', esc(action.label)); b.onclick = () => { post(action.msg); t.remove(); }; t.appendChild(b); }
     const x = el('button', 'tx', I.x); x.setAttribute('aria-label', 'Dismiss'); x.title = 'Dismiss'; x.onclick = () => t.remove(); t.appendChild(x);
     const ms = lv === 'info' ? (action ? 10000 : 3200) : Math.max(8000, String(text).length * 60);
@@ -1955,8 +1958,12 @@
     const wrap = el('div', 'empty');
     const news = whatsNewCard(); if (news) { wrap.appendChild(news); }
     const ws = state.workspace || {}; const noFolder = ws.folders === 0;
-    const hero = el('div', 'hero', `<h2>What are we building today?</h2><p class="sub">Ask a question, or describe a task: LocalPilot plans it, edits files, runs commands and checks the result.</p><p class="modeline"><span class="txt"></span> <span class="chg"><span aria-hidden="true">· </span><button class="link" data-a="mode" aria-haspopup="listbox" aria-label="Change mode">change</button></span></p>`);
-    hero.querySelector('[data-a="mode"]').onclick = (e) => { e.stopPropagation(); openModeMenu(); };
+    const hero = el('div', 'hero', `<span class="mark" aria-hidden="true">${I.bot}</span><h2>What are we building today?</h2><p class="sub">Ask a question, or describe a task: LocalPilot plans it, edits files, runs commands and checks the result.</p>`);
+    // The mode this chat will run in, as one control: icon, name, what it does (Auto: how it picks), its permission tag.
+    const mc = el('button', 'modecard', `<span class="mc-ico" aria-hidden="true"></span><span class="mc-txt"><span class="mc-k"></span><span class="mc-d"></span></span><span class="mc-tag hidden"></span><span class="mc-chev" aria-hidden="true">${I.chevDown}</span>`);
+    mc.type = 'button'; mc.dataset.a = 'mode'; mc.setAttribute('aria-haspopup', 'listbox'); mc.title = `Change mode (${kb('Mod+.')})`;
+    mc.onclick = (e) => { e.stopPropagation(); openModeMenu(mc); };
+    hero.appendChild(mc);
     wrap.appendChild(hero);
     const strip = el('div', 'ctx-strip'); strip.setAttribute('role', 'status'); strip.setAttribute('aria-label', 'Workspace and status');
     strip.onclick = (e) => {
@@ -1971,8 +1978,10 @@
     // Without a model nothing can answer: setting one up comes first, and the suggestions wait for it.
     const noModels = !state.models.length && !state.modelsLoading;
     if (noModels) {
-      const n = el('div', 'notice', `<b>No local models found.</b><br>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.<div class="row"><button class="btn primary" data-a="setup">${I.play}<span>Set up automatically</span></button><button class="btn" data-a="refresh">${I.refresh}<span>Refresh models</span></button><button class="btn" data-a="settings">${I.gear}<span>Manage models</span></button></div>`);
-      n.onclick = (e) => { const a = e.target.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
+      const n = el('div', 'notice setupcard', `<div class="sc-h"><span class="sc-ico" aria-hidden="true">${I.chip}</span><b>No local models found</b></div><p>LocalPilot can start or install <b>Ollama</b> and download a starter coder model sized for this machine. Or start <b>LM Studio</b>, <b>llama.cpp</b> or <b>vLLM</b> yourself and refresh.</p><div class="row"><button class="btn primary" data-a="setup">${I.play}<span>Set up automatically</span></button><button class="btn" data-a="refresh">${I.refresh}<span>Refresh models</span></button><button class="btn" data-a="settings">${I.gear}<span>Manage models</span></button></div>`);
+      n.setAttribute('role', 'region'); n.setAttribute('aria-label', 'Set up a model');
+      // closest(): a click on a button's icon or label still counts as the button.
+      n.onclick = (e) => { const b = e.target.closest('[data-a]'); const a = b && b.dataset.a; if (a === 'setup') { state.modelsRequested = true; post({ type: 'autoSetupModels' }); toast('Setting up models…'); } if (a === 'refresh') { state.modelsRequested = true; post({ type: 'detectModels' }); toast('Looking for model servers…'); } if (a === 'settings') { post({ type: 'openSettings', section: 'models' }); } };
       wrap.appendChild(n);
     }
     // One row per starter. `send` runs at once (in `mode` for that turn only); otherwise the chat switches to `mode` and
@@ -3125,12 +3134,19 @@
     els.modeBtn.setAttribute('aria-label', `Mode: ${v.label}${v.baseLabel ? `, runs in ${v.baseLabel}` : ''}${v.pick ? `, last message ran in ${v.pick}` : ''}. Change mode`);
     syncModeLine();
   }
-  /** The welcome screen's "Agent mode: edits files… · change" line follows the picker. */
+  /** The welcome screen's mode card ("Agent mode · Edit files, run commands, verify · edits files ⌄") follows the picker.
+   *  Auto explains how it picks; a specialist names the mode it runs in. */
   function syncModeLine() {
-    const line = els.messages.querySelector(':scope > .empty .modeline .txt'); if (!line) { return; }
-    const v = modeView(state.session);
-    const what = v.baseLabel ? v.hint : v.desc;
-    line.textContent = v.label === 'Auto' ? 'Auto mode: each message picks Ask, Plan, Agent, Debug or a specialist from what it asks' : `${v.label} mode${v.baseLabel ? ` (runs in ${v.baseLabel})` : ''}: ${what.charAt(0).toLowerCase()}${what.slice(1)}`;
+    const card = els.messages.querySelector(':scope > .empty .modecard'); if (!card) { return; }
+    const v = modeView(state.session); const auto = v.label === 'Auto';
+    const what = auto ? 'Each message picks Ask, Plan, Agent, Debug or a specialist from what it asks, and says why' : v.baseLabel ? `${v.hint}; runs in ${v.baseLabel}` : v.desc;
+    const tag = auto ? '' : v.tag || '';
+    card.querySelector('.mc-ico').innerHTML = v.icon || '';
+    card.querySelector('.mc-k').textContent = `${v.label} mode`;
+    card.querySelector('.mc-d').textContent = what;
+    const t = card.querySelector('.mc-tag'); t.textContent = tag; t.classList.toggle('hidden', !tag);
+    card.classList.toggle('auto', auto);
+    card.setAttribute('aria-label', `${v.label} mode: ${what}${tag ? ` (${tag})` : ''}. Change mode`);
   }
   /** Keyboard mode switch (Shift+Tab with a draft, Ctrl/Cmd+.). The toast sits in the polite #toasts live region, so it is
    *  also what a screen reader hears: "Mode: Plan — investigate and prepare a plan…". */
@@ -3154,13 +3170,14 @@
   /** No folder open: the modes that edit files cannot work (the host refuses them too). */
   function needsFolder(mode) { return !!state.workspace && state.workspace.folders === 0 && MODES[mode] && MODES[mode].tag === 'edits files'; }
   const NEEDS_FOLDER = { text: 'Needs a folder', cls: 'nf', title: 'Open a folder so LocalPilot can edit files and run commands' };
-  function openModeMenu() {
+  /** `anchor`: the control the menu hangs from (the welcome screen's mode card); the composer's mode picker otherwise. */
+  function openModeMenu(anchor) {
     const s = state.session; const auto = !!(s && s.autoMode); const cur = s && !auto ? s.mode : ''; const sp = auto ? undefined : specOf(s);
     const refuse = (label) => () => toast(`${label} needs a folder: open one to edit files and run commands`);
     const items = [{ group: 'Modes', label: AUTO.label, desc: AUTO.hint, title: AUTO.desc, icon: I.sparkle, tags: [{ text: 'per message', cls: 'ro', title: 'Read-only or editing, depending on what the message asks' }], selected: auto, onPick: setAuto }].concat(Object.entries(MODES).map(([k, m]) => ({ group: 'Modes', label: m.label, desc: m.hint, title: needsFolder(k) ? `${m.desc}. Needs a folder.` : m.desc, icon: m.icon, disabled: needsFolder(k), tags: [needsFolder(k) ? NEEDS_FOLDER : { text: m.tag, cls: m.tag === 'read-only' ? 'ro' : 'rw' }], selected: cur === k && !sp, onPick: needsFolder(k) ? refuse(m.label) : () => setMode(k) })))
       .concat(Object.entries(SPECIALISTS).map(([k, x]) => { const b = MODES[x.base]; const nf = needsFolder(x.base); return { group: 'More modes', label: x.label, desc: x.hint, title: `${x.desc}. Runs in ${b.label} mode${nf ? ', which needs a folder' : ''}.`, icon: x.icon, disabled: nf, tags: [nf ? NEEDS_FOLDER : { text: b.tag, cls: b.tag === 'read-only' ? 'ro' : 'rw', title: `Runs in ${b.label} mode` }], selected: sp === k, onPick: nf ? refuse(x.label) : () => setMode(x.base, k) }; }))
       .concat([{ hr: true }, { label: 'Manage modes…', desc: 'Skills and subagents in Settings', icon: I.gear, onPick: () => post({ type: 'openSettings', section: 'skills' }) }]);
-    openMenu(els.modeBtn, items, { label: 'Mode', cls: 'modes', foot: `<span><kbd>${esc(kb('Mod+.'))}</kbd> to switch</span>` });
+    openMenu(anchor && anchor.nodeType === 1 ? anchor : els.modeBtn, items, { label: 'Mode', cls: 'modes', foot: `<span><kbd>${esc(kb('Mod+.'))}</kbd> to switch</span>` });
   }
   /** What the router resolves Auto to right now (sent by the host); falls back to the default model until it arrives. */
   function autoModelId() { return state.autoModel || state.defaultModel || ''; }
@@ -6101,7 +6118,7 @@
   }, 1000);
   function whatsNewCard() {
     const w = uiPrefs.whatsNew; if (!w || !Array.isArray(w.bullets) || !w.bullets.length) { return null; }
-    const c = el('div', 'whatsnew', `<div class="wn-h"><b>What's new in v${esc(w.version)}</b><button class="ib" data-w="close" title="Dismiss" aria-label="Dismiss what's new">${I.x}</button></div><ul>${w.bullets.map((b) => `<li>${esc(b)}</li>`).join('')}</ul><button class="wn-log" data-w="log">Open changelog</button>`);
+    const c = el('div', 'whatsnew', `<div class="wn-h"><span class="wn-k">${I.sparkle}<b>What's new</b></span><span class="wn-v">v${esc(w.version)}</span><button class="ib" data-w="close" title="Dismiss" aria-label="Dismiss what's new">${I.x}</button></div><ul>${w.bullets.map((b) => `<li>${esc(b)}</li>`).join('')}</ul><button class="wn-log" data-w="log">Open changelog</button>`);
     c.setAttribute('role', 'note'); c.setAttribute('aria-label', `What's new in version ${w.version}`);
     c.onclick = (e) => {
       const b = e.target.closest('[data-w]'); if (!b) { return; }

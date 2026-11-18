@@ -84,6 +84,9 @@ Click the history button in the chat's title bar (or run **LocalPilot: Open Conv
   terminal. A conversation of another project, or one archived away, opens in this window when you click it.
 - **Knowledge & continuity**: Memory manager, Context library, Checkpoints, Sync manager, Trash and Settings.
 
+Each Knowledge & continuity page opens over the chat with its icon, title and a one-line summary at the top, **Back**
+(<kbd>Esc</kbd>) on the left and its actions on the right; its sections are labelled in small capitals.
+
 In a narrow sidebar (under 360 px) the views fold into one **Show** menu. Opened in an editor tab wider than 800 px, the
 navigator has two panes: views, projects and Knowledge & continuity on the left, the list on the right.
 

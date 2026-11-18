@@ -90,12 +90,12 @@ Auto-detection also probes Docker Model Runner, Jan, SGLang, KoboldCpp and Docke
 
 ![Setup step 3: Careful, Balanced (the default) or Autonomous, and an optional switch for inline completions]({{ '/assets/screenshots/setup-approvals.png' | relative_url }})
 
-You can rerun the wizard with *LocalPilot: Open Setup*. To switch models later, use the picker under the composer or the model name in the status bar. If the picker says *No models found*, click **Set up automatically**, or start your server and press **Refresh**.
+You can rerun the wizard with *LocalPilot: Open Setup*. To switch models later, use the picker under the composer or the model name in the status bar. If no model is found, the empty chat shows a **No local models found** card with **Set up automatically**, **Refresh models** and **Manage models**, and the picker says *Set up a model*.
 
 ## 5. Run your first task
 
 1. Open a project folder.
-2. Make sure the mode picker under the composer shows **Agent**.
+2. Check the mode. A new chat shows it as a card under the heading, for example **Agent mode** · *Edit files, run commands, verify* · `edits files`; the same mode is the pill at the start of the composer. Click either one to change it. In **Auto** mode the card says how it picks: each message runs in Ask, Plan, Agent, Debug or a specialist, depending on what it asks.
 3. Type a small, concrete task, for example:
 
    > Add input validation to the login form and write tests for it.

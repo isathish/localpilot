@@ -21,6 +21,23 @@ The chat is a vanilla-JS webview. Markup lives in `src/ui/chatViewProvider.ts`, 
 7. **Accessible.** Everything works from the keyboard and has a visible focus. Icon-only buttons have an `aria-label`. Live regions announce run state. There are no inline handlers (CSP).
 8. **Evolve, don't rewrite.** New UI reuses the existing pieces: `.step` rows, `.note`, `.work` strip, `errorBox`/`errorActions`, `openMenu`, `.pick` chips, the `.rec` recovery card and the Changes panel.
 
+### Design scale (chat core, 1.11)
+
+The chat core (welcome screen, composer, message stream, toasts and banners, the navigator and the continuity pages) draws from one scale defined in `media/chat.css` `:root`. Existing tokens are never renamed or removed; other surfaces read them.
+
+| Token | Value | Use |
+|---|---|---|
+| `--space-1` … `--space-5` | 4 / 8 / 12 / 16 / 24 px | gaps and padding |
+| `--radius-ctl` / `--radius-card` / `--radius-pill` | 6 / 10 / 999 px | buttons and pickers / cards, the message box, code blocks, toasts / chips, tags, the mode picker |
+| `--fs` / `--fs-sm` / `--fs-label` | 13 / 12 / 11 px × `--fs-scale` | body / secondary / section labels |
+| `--track-label` | `.06em` | section labels: caps, weight 600, muted |
+| `--lh` | 1.45 (1.42 compact) | body copy |
+| `--dur-fast` / `--dur` / `--dur-panel` | 120 / 180 / 250 ms | hover and press / reveal / pages and sheets |
+| `--ease-out` | `cubic-bezier(.2, .8, .2, 1)` | every transition |
+| `--shadow-pop` (and `--shadow`) | from `--vscode-widget-shadow` | popovers, toasts; nothing else is elevated |
+
+One label style: the welcome groups (START, FOR dice.py, RECENT, SAVED PROMPTS), menu groups, the navigator's KNOWLEDGE & CONTINUITY and the continuity page sections are all 11 px caps with `--track-label`. Motion stops under the reduced-motion flag (the OS setting or `localpilot.appearance.motion`).
+
 ## Modes
 
 ### Core modes
@@ -83,11 +100,15 @@ Each section lists the layout, the states, the copy and the narrow-width rules, 
 
 ```
 ┌──────────────────────────────────────┐
+│ [◉]                                  │  ← brand mark (hidden ≤ 360 px, short panels)
 │ What are we building today?          │
 │ Ask a question, or describe a task:  │
 │ LocalPilot plans it, edits files,    │
 │ runs commands and checks the result. │
-│ Agent mode: edits files… · change    │
+│ ┌──────────────────────────────────┐ │
+│ │[▣] Agent mode      edits files ⌄ │ │  ← mode card (opens the mode menu)
+│ │    Edit files, run commands, …   │ │
+│ └──────────────────────────────────┘ │
 │                                      │
 │ ▢ my-project  ⎇ main  ● Ready        │  ← ctx strip
 │                                      │
@@ -126,6 +147,11 @@ States of the ctx strip:
 
 Behaviour:
 
+- The **mode card** shows the mode the chat will run in: its icon on a tile, the name, what it does and its permission tag (`read-only` / `edits files`, hidden under 340 px). A specialist adds "runs in Plan" (or its base mode). In **Auto** the card explains how it picks: "Each message picks Ask, Plan, Agent, Debug or a specialist from what it asks, and says why", with the sparkle on a brand tile. Clicking it opens the mode menu under the card; the composer's mode picker is a tinted pill with the same menu.
+- In a wide editor tab the welcome column (560 px at most) is centred above the message box instead of hugging the left edge.
+- Starters carry their icon on a small tile; recent chats keep a bare icon, one step quieter.
+- No model: a setup card (No local models found, why, then **Set up automatically**, **Refresh models**, **Manage models**) sits above the starters, which wait, dimmed, until a model is there.
+- What's new (after an update): a card with a WHAT'S NEW label, the version as a pill, the top changelog items and **Open changelog**; ✕ dismisses it for good.
 - **Build a feature** switches to Agent and prefills `Build ` without sending. **Fix a bug** switches to Debug and prefills `Fix: `. Its tag shows the diagnostics count when there are errors. **Create an agent** starts the skill/agent creation flow. **Understand codebase** sends the overview prompt in Ask.
 - The file-aware picks ("For dice.py") keep today's behaviour and send at once.
 - Recent rows use the chat's mode icon, or a live dot when the chat is running.
@@ -141,8 +167,18 @@ Behaviour:
 | Workspace + status line | exists (multi-root: the folder is a picker; Indexing and the large-repo note come from the file index scan) | — |
 | Placeholder + hint row, `#codebase` | exists (typing `#` opens the context variables; the hint row's `#` attaches `#codebase`) | — |
 | Footer disclaimer | exists | — |
-| Mode line under the hero | exists | — |
+| Mode card under the hero (Auto explains how it picks) | exists | — |
 | Pending interventions row | exists (as the strip's "N tasks need you · Review" status) | — |
+
+### Chat core surfaces (1.11)
+
+- **Tab strip.** The open chat is the tab with a light fill and a 2 px underline in the focus colour on the bar's edge (it grows in over `--dur`). Running, unread, needs-you and pinned states keep their icons; close and stop stay keyboard reachable.
+- **Composer.** The message box is a 10 px card; focus is a 1 px ring in the focus colour. The mode picker is a tinted pill (the main state of the box); model, thinking and skills are plain text pickers next to it. "@ Add context" and the context chips are pills. At 300 px the mode keeps its icon, the model its short name, and the rest move into ⋯ as before.
+- **Message stream.** Your message is a tinted 10 px bubble; code blocks, error boxes, the rating card, the sticky prompt strip and remote / context banners share the card radius. The answer footer (model, speed, Copy, Regenerate, Compare, Open as document, Trace) is unchanged in behaviour.
+- **Toasts.** Warnings and errors carry an icon (a warning triangle, an alert circle) and a spoken "Warning:" / "Error:" prefix as well as the border colour, so the level never rests on colour alone. They use `--shadow-pop` and fade in over `--dur`.
+- **Continuity pages** (Memory, Context, Checkpoints, Sync, Trash, Versions, Compare): the header shows the page's icon on a tile (the glyph of its row in the navigator), a 14 px title, and the sections use the caps label style. Rows tint on hover; Compare's columns and the Sync status are 10 px cards. Pages slide in over `--dur-panel`.
+
+Preview: `scripts/ui-preview.html?empty=1&auto=1` (Auto mode card), `?empty=1&spec=review&mode=ask` (a specialist), `?empty=1&whatsnew=1`, `?empty=1&nomodels=1`, `?toast=info|warn|error`.
 
 ### 02 Code generation
 
