@@ -44,7 +44,8 @@ suite('Settings page: self-healing', () => {
     assert.ok(fn, 'healingPolicies() is found');
     assert.match(fn, /'Retry configuration'/, 'the table has its heading');
     assert.match(fn, /for \(const p of h\.policies\)/, 'one row per category sent by the host');
-    assert.match(fn, /<th scope="col">Attempts<\/th><th scope="col">Waits between retries<\/th><th scope="col">Time limit per attempt<\/th>/, 'attempts, backoff and timeout columns');
+    // One-line headers keep the header row short; the full names are in their titles.
+    assert.match(fn, /<th scope="col">Attempts<\/th><th scope="col" title="Waits between retries[^"]*">Waits<\/th><th scope="col" title="Time limit per attempt[^"]*">Time limit<\/th>/, 'attempts, backoff and timeout columns');
     assert.match(fn, /num\(ov\.attempts \?\? Math\.min\(p\.attempts, p\.max\), 0, p\.max, 'attempts'\)/, 'attempts are limited to the category maximum');
     assert.match(fn, /num\(ov\.timeoutSeconds \?\? p\.timeoutSeconds, 1, 3600, /, 'the timeout follows the package.json range');
     assert.match(fn, /set\('healing\.policies', next\)/, 'a change writes the merged healing.policies object');

@@ -39,7 +39,7 @@ function loadRecovery(): Rec {
     noteStatus: noop, setStatus: noop, setPhase: noop, followLive: noop, rotateBody: noop,
     childStatus: (...a: unknown[]) => childStatus.push(a),
   };
-  const names = ['recHeader', 'recBody', 'recMerge', 'reportOutcome', 'outcomeBadge', 'recCode', 'recCache', 'onRecovery', 'recTurnEnd', 'wrappedChild', 'onChildRecovery', 'recReplay', 'renderInterrupted', 'userTurns'];
+  const names = ['recHeader', 'recBody', 'recMerge', 'reportOutcome', 'outcomeBadge', 'recCode', 'recCache', 'onRecovery', 'recTurnEnd', 'wrappedChild', 'onChildRecovery', 'recReplay', 'renderInterrupted', 'userTurns', 'foldRecCards'];
   vm.runInNewContext(`${line('const esc = ')}\n${line('function el(')}\n${line('function short(')}\n${src.slice(start, end)}\nout_ = { ${names.join(', ')} };`, sandbox, { timeout: 5_000 });
   return { fns: sandbox.out_ as Record<string, Fn>, state: state as unknown as Rec['state'], els, posted, childStatus, doc };
 }
@@ -279,5 +279,90 @@ suite('Chat self-healing card: run-card details', () => {
     rec.state.session = { id: 's1', messages: [] };
     rec.fns.renderInterrupted();
     assert.strictEqual(rec.els.messages.querySelectorAll('.rec-int').length, 0, 'nothing to show, and no ReferenceError outside the section');
+  });
+
+  // A model failure is one card: the error box the turn already shows gains the escalation's next step, with no second
+  // "Self-healing" card and no Detect → … → Regression stepper (no code-fix stage ran).
+  const modelEsc = (reason: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'm1', phase: 'failed', outcome: 'failed', checks: [], patches: [],
+    intervention: { id: 'iv1', reason, next: 'start the model server, then "Retry".', nextActions: [{ action: 'retry', label: 'Retry' }, { action: 'startServer', label: 'Start server' }] }, ...extra,
+  });
+  const errBox = (rec: Rec, root: MiniElement): MiniElement => {
+    const box = root.insertBefore(rec.doc.createElement('div'), root.querySelector(':scope > .body'));
+    box.className = 'error-box'; box.innerHTML = '<div class="err-head"><b>Something went wrong</b></div><span class="msg">x</span>';
+    return box;
+  };
+
+  test('a model escalation folds into the error box instead of drawing a second card', () => {
+    for (const reason of ['model_unavailable', 'model_rejected', 'credentials']) {
+      const rec = loadRecovery(); const live = liveTurn(rec); const box = errBox(rec, live.root);
+      rec.fns.onRecovery(live, 's1', modelEsc(reason), true);
+      assert.strictEqual(live.root.querySelectorAll(':scope > .rec').length, 0, `${reason}: no self-healing card`);
+      assert.match(box.querySelector(':scope > .err-next')!.textContent, /Start the model server/);
+    }
+    // The escalation arriving first (its card already drawn) folds once the error box exists.
+    const rec = loadRecovery(); const live = liveTurn(rec);
+    rec.fns.onRecovery(live, 's1', modelEsc('model_unavailable'), true);
+    assert.strictEqual(live.root.querySelectorAll(':scope > .rec').length, 1);
+    const box = errBox(rec, live.root); rec.fns.foldRecCards(live.root);
+    assert.strictEqual(live.root.querySelectorAll(':scope > .rec').length, 0);
+    assert.ok(box.querySelector(':scope > .err-next'));
+  });
+
+  test('model recoveries hide the healing stepper; code-healing escalations keep their card and stepper', () => {
+    const rec = loadRecovery(); const live = liveTurn(rec);
+    rec.fns.onRecovery(live, 's1', { id: 'm2', phase: 'retrying', category: 'model_unavailable', attempt: 1, max: 3, decision: 'retry in 1s' }, true);
+    assert.ok(live.root.querySelector(':scope > .rec[data-rid="m2"]')!.classList.contains('model'));
+    const live2 = liveTurn(rec); errBox(rec, live2.root);
+    rec.fns.onRecovery(live2, 's1', { id: 'c1', phase: 'incomplete', outcome: 'incomplete', attempt: 3, max: 3, category: 'typescript', patches: [{ file: 'a.ts', added: 1, removed: 0 }], intervention: { id: 'i9', reason: 'exhausted', nextActions: [{ action: 'retryWithGuidance', label: 'Retry with guidance' }] } }, true);
+    const card = live2.root.querySelector(':scope > .rec[data-rid="c1"]')!;
+    assert.ok(card, 'a code-healing escalation keeps its card');
+    assert.ok(!card.classList.contains('model'));
+    assert.ok(card.querySelector('.rec-stepper'));
+  });
+
+  test('a model escalation\'s Retry on a card sends the last message again instead of an unknown recovery action', () => {
+    const rec = loadRecovery(); const live = liveTurn(rec);
+    rec.fns.onRecovery(live, 's1', modelEsc('model_unavailable'), true);
+    click(live.root.querySelector('.rec-final button[data-ra="retry"]')!);
+    assert.deepStrictEqual(rec.posted.map((m) => m.type), ['retry']);
+  });
+
+  test('replay folds a model escalation into the failed turn\'s error box', () => {
+    const rec = loadRecovery();
+    rec.state.session = { id: 's1', messages: [{ role: 'user', content: 'a' }, { role: 'assistant', content: '(error: x)', meta: { error: 'x' } }] };
+    const c = rec.fns.recCache('s1') as { cards: Map<string, unknown>; at?: number };
+    c.cards.set('m1', rec.fns.recMerge(undefined, modelEsc('model_rejected', { intervention: { id: 'iv2', reason: 'model_rejected', next: 'pick another model', nextActions: [{ action: 'pickModel', label: 'Pick another model' }] } })));
+    const t = rec.els.messages.appendChild(rec.doc.createElement('div')); t.className = 'turn assistant';
+    const box = errBox(rec, t);
+    rec.fns.recReplay('s1');
+    assert.strictEqual(t.querySelectorAll('.rec').length, 0);
+    assert.match(box.querySelector('.err-next')!.textContent, /Pick another model/);
+  });
+});
+
+suite('Chat error box: friendly message first, raw provider text apart', () => {
+  const src = fs.readFileSync(path.join(EXT_ROOT, 'media', 'chat.js'), 'utf8');
+  const start = src.indexOf('  function splitErr('); const end = src.indexOf('  function errorHead(');
+  const sb: Record<string, unknown> = {};
+  vm.runInNewContext(`${src.slice(start, end)}\nout_ = splitErr;`, sb);
+  const split = sb.out_ as (t: string) => { text: string; raw: string; missing: string };
+
+  test('a bare JSON body is read for its message, the JSON goes to Details', () => {
+    const r = split('{"error":"model \'gemma4:12b\' not found"}');
+    assert.strictEqual(r.missing, 'gemma4:12b');
+    assert.match(r.text, /^The model gemma4:12b is not installed/);
+    assert.strictEqual(r.raw, '{"error":"model \'gemma4:12b\' not found"}');
+    assert.strictEqual(split('{"error":{"message":"bad deployment"}}').text, 'The model server said: bad deployment');
+  });
+
+  test('describeModelError\'s trailing detail moves to Details; plain messages stay whole', () => {
+    const a = split('Could not reach the model server for x. Check that it is running and try again. (fetch failed: ECONNREFUSED 127.0.0.1:11434)');
+    assert.strictEqual(a.text, 'Could not reach the model server for x. Check that it is running and try again.');
+    assert.strictEqual(a.raw, 'fetch failed: ECONNREFUSED 127.0.0.1:11434');
+    const b = split('The provider rejected the request for gpt-5-mini (HTTP 400 from https://h/x: {"error":{"code":"DeploymentNotFound"}})');
+    assert.strictEqual(b.text, 'The provider rejected the request for gpt-5-mini.');
+    assert.match(b.raw, /^HTTP 400 from https:\/\/h\/x: \{"error"/);
+    assert.deepStrictEqual({ ...split('gemma4:12b stopped responding. The model produced nothing for 180s.') }, { text: 'gemma4:12b stopped responding. The model produced nothing for 180s.', raw: '', missing: '' });
   });
 });

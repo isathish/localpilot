@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vm from 'vm';
+import * as cloud from '../providers/cloud';
 
 const EXT_ROOT = path.resolve(__dirname, '..', '..');
 const read = (rel: string) => fs.readFileSync(path.join(EXT_ROOT, rel), 'utf8');
@@ -66,5 +67,52 @@ suite('Settings → Appearance', () => {
     assert.strictEqual(css.match(/prefers-reduced-motion/g)?.length, 1, 'no second, diverging guard');
     assert.doesNotMatch(css, /font-size: ?1[0-4](\.5)?px/, 'text sizes go through the --fs-* ramp so Text size scales them');
     assert.match(read('media/settings.js'), /const calm = \(\) => document\.body\.dataset\.motion === 'reduced' \|\| matchMedia/, 'scripted motion follows the setting too');
+  });
+});
+
+suite('Settings → Providers card', () => {
+  /** One `const name = …;` of media/settings.js (a line, or a block up to its closing `  };`), run as is. */
+  const lift = <T>(name: string, ctx: Record<string, unknown> = {}): T => {
+    const src = read('media/settings.js');
+    const m = new RegExp(`\\n  const ${name} = (?:[^\\n]*\\{\\n[^]*?\\n  \\};|[^\\n]+)`).exec(src);
+    assert.ok(m, `${name} not found in media/settings.js`);
+    const sb: Record<string, unknown> = { ...ctx };
+    vm.runInNewContext(`${m[0]}\nout_ = ${name};`, sb, { timeout: 5_000 });
+    return sb.out_ as T;
+  };
+
+  test('detects Azure OpenAI resources like isAzureUrl in src/providers/cloud.ts', () => {
+    const page = lift<(u: string) => boolean>('isAzureUrl');
+    const { isAzureUrl } = cloud;
+    for (const u of ['https://res.openai.azure.com/openai/v1', 'https://res.services.ai.azure.com/models', 'https://res.cognitiveservices.azure.com', 'https://res.openai.azure.com:443/x', 'https://api.openai.com/v1', 'http://localhost:1234/v1', 'https://openai.azure.com.evil.example/v1']) {
+      assert.strictEqual(page(u), isAzureUrl(u), u);
+    }
+  });
+
+  test('external links keep their icon on the same line as the last word', () => {
+    const esc = (s: string) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+    const extLink = lift<(url: string, text: string) => string>('extLink', { esc, I: { external: '<svg></svg>' } });
+    assert.match(extLink('https://portal.azure.com', 'Get an API key'), /Get an API <span class="nowrap">key<svg><\/svg><\/span><\/a>$/);
+    assert.match(extLink('https://x', 'Docs'), /<span class="nowrap">Docs<svg><\/svg><\/span>/);
+    assert.doesNotMatch(read('media/settings.js'), /↗/, 'no text arrow that can wrap on its own');
+    assert.match(read('media/settings.css'), /\.nowrap \{ white-space: nowrap; \}/);
+  });
+
+  test('the saved-key placeholder is short, and the two Remove buttons say what they remove', () => {
+    const js = read('media/settings.js');
+    assert.doesNotMatch(js, /saved in the secret store — type to replace/);
+    assert.strictEqual(js.match(/'Saved — type to replace'/g)?.length, 2, 'both the own and the organization provider card');
+    assert.strictEqual(js.match(/\$\{I\.trash\}Remove key`/g)?.length, 2);
+    assert.match(js, /<button class="btn danger" id="rm"[^>]*>\$\{I\.trash\}Remove provider<\/button>/, 'only the provider removal is a danger button');
+    assert.doesNotMatch(js, /class="btn[^"]*danger[^"]*"[^>]*>\$\{I\.trash\}Remove key/);
+  });
+
+  test('Models becomes Deployments for Azure, shows what was found, and the default model offers it', () => {
+    const js = read('media/settings.js');
+    assert.match(js, /row\(azure \? 'Deployments' : 'Models'/);
+    assert.match(js, /foundList\(found, azure \? plural\(found\.length, 'deployment'\)/);
+    // The page state's model list counts too, so a card opened before its check still offers the models.
+    assert.match(js, /const knownIds = \(p, probe\) => \{[^]*?state\.data\.models/);
+    assert.match(js, /const ids = knownIds\(p, probe\);[^]*?<option value="\$\{OTHER\}">Other…<\/option>/);
   });
 });

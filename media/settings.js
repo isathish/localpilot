@@ -1381,21 +1381,55 @@
   }
   /** Model ids the provider's last check listed (without the `provider/` prefix). */
   const listedIds = (p, probe) => (probe && probe.ok ? probe.models.map((m) => (String(m.id).startsWith(`${p.id}/`) ? String(m.id).slice(p.id.length + 1) : String(m.id))) : []);
+  /** Model ids known for the provider: its last check, else the model list the page state carries (the extension's background discovery). */
+  const knownIds = (p, probe) => {
+    if (probe && probe.ok) { return listedIds(p, probe); }
+    const ms = ((state.data && state.data.models) || []).filter((m) => m.providerId === p.id);
+    return ms.map((m) => String(m.modelId || (String(m.id).startsWith(`${p.id}/`) ? String(m.id).slice(p.id.length + 1) : m.id)));
+  };
+  /** Mirrors isAzureUrl in src/providers/cloud.ts: an Azure OpenAI / AI Foundry resource, whose models are its deployments. */
+  const isAzureUrl = (u) => /\.(openai\.azure\.com|services\.ai\.azure\.com|cognitiveservices\.azure\.com)(:|\/|$)/i.test(String(u || ''));
+  /** "2 deployments: a, b" under the Models field, so "found automatically" is not a mystery. */
+  function foundList(ids, label) {
+    const box = el('div', 'found');
+    box.innerHTML = `<span class="muted small">${esc(label)}:</span>${ids.slice(0, 12).map((v) => `<span class="chip-ro" title="${esc(v)}">${esc(v)}</span>`).join('')}${ids.length > 12 ? `<span class="muted small">+${ids.length - 12} more</span>` : ''}`;
+    return box;
+  }
+  /** An external link whose icon never wraps onto a line of its own. */
+  const extLink = (url, text) => {
+    const words = String(text).split(' '); const last = words.pop();
+    return `<a data-url="${esc(url)}" class="ext-link" title="${esc(url)}">${esc(words.length ? `${words.join(' ')} ` : '')}<span class="nowrap">${esc(last)}${I.external}</span></a>`;
+  };
   const datalist = (id, values) => { const dl = el('datalist'); dl.id = id; dl.innerHTML = values.map((v) => `<option value="${esc(v)}">`).join(''); return dl; };
-  /** The provider's default model: a dropdown of what the server lists, with loading and error states, or any typed id. */
+  /** The provider's default model: a dropdown of the models it lists (with "Other…" for any id), else a free-text id, with loading and error states. */
   function defaultModelCtl(p, probe, upd) {
-    const wrap = el('div', 'btnrow'); wrap.style.margin = '0';
-    const ids = listedIds(p, probe);
-    const loading = state.tests[p.id] === null || (!probe && state.busy);
-    const i = el('input'); i.type = 'text'; i.value = p.defaultModel || ''; i.setAttribute('list', `dm-${p.id}`); i.setAttribute('aria-label', 'Default model');
-    i.placeholder = loading ? 'Loading models…' : probe && !probe.ok ? 'type a model id' : ids.length ? `one of ${ids.length} listed, or any id` : 'type a model id';
+    const wrap = el('div', 'btnrow dm-ctl'); wrap.style.margin = '0';
+    const ids = knownIds(p, probe);
+    const loading = state.tests[p.id] === null || (!probe && !ids.length && state.busy);
+    const cur = p.defaultModel || '';
+    const i = el('input'); i.type = 'text'; i.value = cur; i.setAttribute('aria-label', 'Default model id');
+    i.placeholder = loading ? 'Loading models…' : 'type a model id';
     const commit = () => { const v = i.value.trim(); if ((p.defaultModel || '') !== v) { upd({ defaultModel: v || undefined }); } };
     i.onchange = commit; i.onblur = commit;
-    wrap.append(i, datalist(`dm-${p.id}`, ids));
+    if (ids.length) {
+      // A select (the page's model-picker pattern); "Other…" reveals the text field for an id the server does not list.
+      const OTHER = ' other'; // no model id has a space
+      const other = !!cur && !ids.includes(cur);
+      const sel = el('select'); sel.setAttribute('aria-label', 'Default model');
+      sel.innerHTML = `<option value="">Not set</option>${ids.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('')}<option value="${OTHER}">Other…</option>`;
+      sel.value = other ? OTHER : cur;
+      i.hidden = !other; i.placeholder = 'any model id';
+      sel.onchange = () => { if (sel.value === OTHER) { i.hidden = false; i.focus(); return; } i.hidden = true; i.value = sel.value; commit(); };
+      wrap.append(sel, i);
+    } else { wrap.appendChild(i); }
     if (loading) { wrap.appendChild(el('span', 'muted small', '<span class="spinner"></span>Loading models…')); }
-    else if (!probe || !probe.ok) {
-      const load = el('button', 'btn sm', `${I.refresh}${probe ? 'Retry' : 'Load models'}`);
-      if (probe) { load.title = `Could not list models: ${probe.error || 'unreachable'}`; wrap.appendChild(el('span', 'err-text', esc(probe.error || 'Could not list models'))); }
+    else if (probe && !probe.ok) {
+      const load = el('button', 'btn sm', `${I.refresh}Retry`); load.title = `Could not list models: ${probe.error || 'unreachable'}`;
+      wrap.appendChild(el('span', 'err-text', esc(probe.error || 'Could not list models')));
+      load.onclick = () => { state.tests[p.id] = null; render(); post({ type: 'test', provider: p }); };
+      wrap.appendChild(load);
+    } else if (!probe && !ids.length) {
+      const load = el('button', 'btn sm', `${I.refresh}Load models`);
       load.onclick = () => { state.tests[p.id] = null; render(); post({ type: 'test', provider: p }); };
       wrap.appendChild(load);
     }
@@ -1559,7 +1593,7 @@
     const keyIn = el('input'); keyIn.type = /^\$\{env:/.test(key || '') ? 'text' : 'password';
     const stored = isSecretRef(key);
     keyIn.value = stored ? '' : key || '';
-    keyIn.placeholder = stored ? '•••••••• saved in the secret store — type to replace' : 'paste your key';
+    keyIn.placeholder = stored ? 'Saved — type to replace' : 'paste your key';
     const saveKey = (v) => {
       const next = providersList(); const i = next.findIndex((x) => x.id === p.id);
       if (i >= 0) { next[i] = { ...next[i], apiKey: v || undefined }; } else if (v) { next.push({ id: p.id, type: p.type, baseUrl: p.baseUrl, apiKey: v }); }
@@ -1568,7 +1602,7 @@
     const commitKey = () => { const v = keyIn.value.trim(); if (stored && !v) { return; } if ((key || '') !== v) { saveKey(v); } };
     keyIn.onchange = commitKey; keyIn.onblur = commitKey;
     const keyCtl = el('div', 'btnrow'); keyCtl.style.margin = '0'; keyCtl.appendChild(keyIn);
-    if (key) { const forget = el('button', 'btn sm', `${I.trash}Remove`); forget.title = 'Remove your API key for this provider'; forget.onclick = () => saveKey(''); keyCtl.appendChild(forget); }
+    if (key) { const forget = el('button', 'btn sm', `${I.trash}Remove key`); forget.title = 'Remove your API key for this provider'; forget.onclick = () => saveKey(''); keyCtl.appendChild(forget); }
     const envBtn = keyEnvButton(p, key); if (envBtn) { keyCtl.appendChild(envBtn); }
     const keyRow = el('div', 'field'); keyRow.innerHTML = `<div><div class="lbl">Your API key</div><div class="desc">${ks.note ? `<b>${ks.note}</b> ` : ''}Kept in LocalPilot's encrypted secret store, which the <code>localpilot</code> CLI shares (Data &amp; system → Secrets).</div></div>`;
     const kc = el('div', 'ctl'); kc.appendChild(keyCtl); keyRow.appendChild(kc);
@@ -1594,7 +1628,9 @@
     const h = p.enabled === false ? undefined : probe ? probeHealth(probe, p) : ((state.data && state.data.health) || {})[p.id];
     const status = h ? ({ ok: 'ok', slow: 'warn', down: 'err', nokey: 'err' })[h.state] || '' : state.busy ? 'busy' : '';
 
-    const n = probe && probe.ok ? `${probe.models.length} model${probe.models.length === 1 ? '' : 's'} · ${probe.latencyMs} ms` : probe ? 'unreachable' : (state.data.models || []).filter((m) => m.providerId === p.id).length ? `${(state.data.models || []).filter((m) => m.providerId === p.id).length} models` : '';
+    const noun = isAzureUrl(p.baseUrl) ? 'deployment' : 'model';
+    const known = (state.data.models || []).filter((m) => m.providerId === p.id).length;
+    const n = probe && probe.ok ? `${plural(probe.models.length, noun)} · ${probe.latencyMs} ms` : probe ? 'unreachable' : known ? plural(known, noun) : '';
     // Header: name, then "where · which API"; badges only for what needs attention or tells the models apart.
     const ks = keyState(p);
     let where = String(p.baseUrl || '').replace(/^https?:\/\//, '');
@@ -1622,7 +1658,7 @@
     const typeSel = el('select', '', `<option value="ollama">Ollama (native API)</option><option value="openai">OpenAI-compatible (/v1)</option><option value="anthropic">Anthropic (Claude Messages API)</option><option value="vscode-lm">VS Code language models (Copilot)</option>`);
     typeSel.value = p.type; typeSel.onchange = () => upd({ type: typeSel.value });
     body.appendChild(row('Display name', '', text('displayName', p.id)));
-    body.appendChild(row('ID', 'Used in model ids as <code>id/model</code>. Lowercase letters, digits, - and _.', text('id', 'ollama', 'text', (v) => /^[a-z0-9_-]+$/.test(v) && !list.some((o) => o !== p && o.id === v))));
+    body.appendChild(row('ID', 'Used in model ids as <code>id/model</code>. Lowercase letters, digits, <span class="nowrap">- and _.</span>', text('id', 'ollama', 'text', (v) => /^[a-z0-9_-]+$/.test(v) && !list.some((o) => o !== p && o.id === v))));
     body.appendChild(row('API type', '', typeSel));
     // VS Code's own models: no URL, key, cloud switch or context window to set (VS Code decides all four).
     const lm = p.type === 'vscode-lm';
@@ -1633,14 +1669,14 @@
     const keyIn = el('input'); keyIn.type = /^\$\{env:/.test(p.apiKey || '') ? 'text' : 'password';
     const stored = isSecretRef(p.apiKey);
     keyIn.value = stored ? '' : p.apiKey || '';
-    keyIn.placeholder = stored ? '•••••••• saved in the secret store — type to replace' : isCloud(p) ? 'paste the key' : 'not required for local servers';
+    keyIn.placeholder = stored ? 'Saved — type to replace' : isCloud(p) ? 'paste the key' : 'not required for local servers';
     const commitKey = () => { const v = keyIn.value.trim(); if (stored && !v) { return; } if ((p.apiKey || '') !== v) { upd({ apiKey: v || undefined }); } };
     keyIn.onchange = commitKey; keyIn.onblur = commitKey;
     const keyCtl = el('div', 'btnrow'); keyCtl.style.margin = '0'; keyCtl.appendChild(keyIn);
-    if (p.apiKey) { const forget = el('button', 'btn sm', `${I.trash}Remove`); forget.title = 'Remove this provider\'s API key'; forget.onclick = () => upd({ apiKey: undefined }); keyCtl.appendChild(forget); }
+    if (p.apiKey) { const forget = el('button', 'btn sm', `${I.trash}Remove key`); forget.title = 'Remove this provider\'s API key'; forget.onclick = () => upd({ apiKey: undefined }); keyCtl.appendChild(forget); }
     if (!lm) { const envBtn = keyEnvButton(p, p.apiKey); if (envBtn) { keyCtl.appendChild(envBtn); } }
     const pr = presetOf(p);
-    const getKey = pr && pr.keyUrl ? ` <a data-url="${esc(pr.keyUrl)}">${pr.group === 'gateway' ? 'Setup guide' : 'Get an API key'} ↗</a>` : '';
+    const getKey = pr && pr.keyUrl ? ` ${extLink(pr.keyUrl, pr.group === 'gateway' ? 'Setup guide' : 'Get an API key')}` : '';
     const keyRow = lm ? null : body.appendChild(row('API key', `${ks.note ? `<b>${ks.note}</b> ` : ''}${isCloud(p) && isRemoteUrl(p.baseUrl) ? 'Required.' : 'Optional for local servers.'} A pasted key is kept in LocalPilot's encrypted secret store (shared with the <code>localpilot</code> CLI), never in settings.json.${getKey}`, keyCtl));
     // For a cloud API the key is the one field that matters: right under the name, before ID / API type / URL.
     if (keyRow && isCloud(p) && isRemoteUrl(p.baseUrl)) { body.insertBefore(keyRow, body.children[1]); }
@@ -1661,10 +1697,15 @@
     const cw = el('input'); cw.type = 'number'; cw.min = 1024; cw.step = 1024; cw.value = p.contextWindow ?? ''; cw.placeholder = 'auto';
     cw.onchange = () => upd({ contextWindow: cw.value ? Number(cw.value) : undefined });
     if (!lm) { body.appendChild(row('Context window', 'Fallback when the server does not report one.', cw)); }
-    const models = el('input'); models.type = 'text'; models.value = (p.models || []).join(', '); models.placeholder = 'auto-discover';
+    // Azure OpenAI lists the resource's deployments as its models (src/providers/openaiCompat.ts azureDeployments).
+    const azure = !lm && isAzureUrl(p.baseUrl);
+    const found = knownIds(p, probe);
+    const models = el('input'); models.type = 'text'; models.value = (p.models || []).join(', '); models.placeholder = azure ? 'found automatically' : 'auto-discover';
+    models.setAttribute('aria-label', azure ? 'Deployments' : 'Models');
     models.onchange = () => upd({ models: models.value.split(',').map((s) => s.trim()).filter(Boolean) });
-    body.appendChild(row('Models', lm ? 'Comma-separated model ids or families to offer, e.g. <code>gpt-4o</code>. Empty offers every model VS Code lists.' : 'Comma-separated list for servers whose <code>/models</code> endpoint is empty (some llama.cpp builds).', models));
-    body.appendChild(row('Default model', `What <code>${esc(p.id)}</code> alone means as a model (<code>-m ${esc(p.id)}</code>). Pick one the server lists or type any id.`, defaultModelCtl(p, probe, upd)));
+    const modelsRow = body.appendChild(row(azure ? 'Deployments' : 'Models', lm ? 'Comma-separated model ids or families to offer, e.g. <code>gpt-4o</code>. Empty offers every model VS Code lists.' : azure ? 'Found automatically from the resource; list deployment names here (comma-separated) only if none appear.' : `Found automatically from the server${p.type === 'ollama' ? '' : '\'s <code>/models</code>'}; list ids here (comma-separated) only if it reports none (some llama.cpp builds).`, models));
+    if (found.length && !lm) { modelsRow.querySelector('.ctl').appendChild(foundList(found, azure ? plural(found.length, 'deployment') : `${plural(found.length, 'model')} found`)); }
+    body.appendChild(row('Default model', `What <code>${esc(p.id)}</code> alone means as a model (<code>-m ${esc(p.id)}</code>). Pick one the ${azure ? 'resource deploys' : 'server lists'} or choose Other… for any id.`, defaultModelCtl(p, probe, upd)));
     const more = state.provMore === p.id;
     const moreRow = el('div', 'btnrow prov-more');
     const moreBtn = el('button', 'btn sm', `<span class="chev" style="transform:rotate(${more ? 90 : 0}deg)">${I.chev}</span>Headers, timeout and model settings`);
@@ -1677,13 +1718,14 @@
     const foot = el('div', 'prov-foot');
     // Gateways LocalPilot can install and start (OmniRoute, LiteLLM) get a Start button next to Test connection.
     const gw = pr && pr.group === 'gateway' ? pr.key : '';
-    foot.innerHTML = `<button class="btn primary" id="test">${I.signal}Test connection</button>${gw ? `<button class="btn" data-cmd="localpilot.startGateway" data-args='${JSON.stringify([gw])}' title="Install it if needed, start it on 127.0.0.1 and check what it can route to">${I.play || I.bolt}Start ${esc(pr.label)}</button>` : ''}<span class="spacer"></span><button class="btn danger" id="rm">${I.trash}Remove</button>`;
+    foot.innerHTML = `<button class="btn primary" id="test">${I.signal}Test connection</button>${gw ? `<button class="btn" data-cmd="localpilot.startGateway" data-args='${JSON.stringify([gw])}' title="Install it if needed, start it on 127.0.0.1 and check what it can route to">${I.play || I.bolt}Start ${esc(pr.label)}</button>` : ''}<span class="spacer"></span><button class="btn danger" id="rm" title="Remove ${esc(p.displayName || p.id)} from LocalPilot's providers">${I.trash}Remove provider</button>`;
     foot.querySelector('#test').onclick = () => { state.tests[p.id] = null; const d = c.querySelector('.dot'); d.className = 'dot busy'; post({ type: 'test', provider: p }); };
     foot.querySelector('#rm').onclick = () => { saveProviders(list.filter((o) => o !== p)); state.expanded = null; render(); };
     body.appendChild(foot);
     if (probe) {
       const r = el('div', `prov-result ${probe.ok ? 'ok' : 'err'}`);
-      r.innerHTML = probe.ok ? `${I.check} Connected in ${probe.latencyMs} ms${probe.models.length ? `<div class="models">${probe.models.slice(0, 24).map((m) => `<span title="${esc(m.id)}">${esc(m.name)}</span>`).join('')}${probe.models.length > 24 ? `<span>+${probe.models.length - 24} more</span>` : ''}</div>` : '<div class="models muted">Connected, but the server reported no models. Load a model or list them in the Models field.</div>'}` : `${I.x} ${esc(probe.error || 'Unreachable')}`;
+      // The Models / Deployments field already shows what was found, so the result line only counts them there.
+      r.innerHTML = probe.ok ? `${I.check} Connected in ${probe.latencyMs} ms${probe.models.length && !lm ? ` · ${plural(probe.models.length, isAzureUrl(p.baseUrl) ? 'deployment' : 'model')}` : probe.models.length ? `<div class="models">${probe.models.slice(0, 24).map((m) => `<span title="${esc(m.id)}">${esc(m.name)}</span>`).join('')}${probe.models.length > 24 ? `<span>+${probe.models.length - 24} more</span>` : ''}</div>` : `<div class="models muted">${isAzureUrl(p.baseUrl) ? 'Connected, but the resource listed no deployments. Deploy a model in Azure AI Foundry or list deployment names in the Deployments field.' : 'Connected, but the server reported no models. Load a model or list them in the Models field.'}</div>`}` : `${I.x} ${esc(probe.error || 'Unreachable')}`;
       body.appendChild(r);
     }
     c.appendChild(body);
@@ -2537,22 +2579,23 @@
     else {
       const tw = el('div', 'tblwrap');
       const t = el('table', 'tbl heal-pol-tbl');
-      t.innerHTML = '<thead><tr><th scope="col">Failure</th><th scope="col">Attempts</th><th scope="col">Waits between retries</th><th scope="col">Time limit per attempt</th><th scope="col"><span class="sr">Reset</span></th></tr></thead>';
+      // Short one-line headers (the units sit next to each input); the long names are in the titles and the inputs' labels.
+      t.innerHTML = '<thead><tr><th scope="col">Failure</th><th scope="col">Attempts</th><th scope="col" title="Waits between retries, in milliseconds; the last one repeats">Waits</th><th scope="col" title="Time limit per attempt, in seconds">Time limit</th><th scope="col"><span class="sr">Reset</span></th></tr></thead>';
       const tb = el('tbody');
       for (const p of h.policies) {
         const ov = cur[p.category] && typeof cur[p.category] === 'object' ? cur[p.category] : {};
         const fixed = p.max === 0;
         const name = HEAL_CAT_LABEL[p.category] || p.category;
         const tr = el('tr', fixed ? 'fixed' : '');
-        tr.innerHTML = `<th scope="row">${esc(name)}<span class="cat">${esc(p.category)}</span></th><td></td><td></td><td></td><td class="act"></td>`;
+        tr.innerHTML = `<th scope="row">${esc(name)}<span class="heal-cat">${esc(p.category)}</span></th><td></td><td></td><td></td><td class="act"></td>`;
         const [, tdA, tdW, tdT, tdR] = tr.children;
         const fk = (f) => `healing.policies:${p.category}:${f}`;
         const num = (value, min, max, label, placeholder) => {
           const i = el('input'); i.type = 'number'; i.min = min; i.max = max; i.step = 1; i.value = value ?? ''; i.placeholder = placeholder || ''; i.setAttribute('aria-label', `${name}: ${label}`); i.dataset.fk = fk(label); return i;
         };
         const att = num(ov.attempts ?? Math.min(p.attempts, p.max), 0, p.max, 'attempts');
-        const waits = el('input'); waits.type = 'text'; waits.value = (Array.isArray(ov.backoffMs) ? ov.backoffMs : p.backoffMs).join(', '); waits.placeholder = 'none'; waits.setAttribute('aria-label', `${name}: waits between retries in milliseconds`); waits.dataset.fk = fk('waits');
-        const tmo = num(ov.timeoutSeconds ?? p.timeoutSeconds, 1, 3600, 'time limit', 'default');
+        const waits = el('input'); waits.type = 'text'; waits.value = (Array.isArray(ov.backoffMs) ? ov.backoffMs : p.backoffMs).join(', '); waits.placeholder = 'none'; waits.setAttribute('aria-label', `${name}: waits between retries in milliseconds`); waits.dataset.fk = fk('waits'); waits.title = waits.value;
+        const tmo = num(ov.timeoutSeconds ?? p.timeoutSeconds, 1, 3600, 'time limit', 'default'); tmo.classList.add('tmo');
         const unit = (input, u) => { const r = el('div', 'row unit-row'); r.append(input, el('span', 'unit', u)); return r; };
         tdA.appendChild(fixed ? el('span', 'fixed-val', `${I.lock}0`) : unit(att, `max ${p.max}`));
         tdW.appendChild(unit(waits, 'ms'));

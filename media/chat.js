@@ -358,7 +358,9 @@
     }
     const file = codePath(info, prevLine, code.split('\n', 1)[0]);
     const lines = code.split('\n').length;
-    const head = file ? `<span class="lang path-link" data-path="${esc(file)}" title="Open ${esc(file)}">${esc(file)}</span>` : `<span class="lang">${esc(lang || 'text')}</span>`;
+    // The folder gives way before the file name does: "tests/unit/te…" said nothing, "…/test_parse_notation.py" does.
+    const cut = file ? file.lastIndexOf('/') + 1 : 0;
+    const head = file ? `<span class="lang path-link" data-path="${esc(file)}" title="Open ${esc(file)}">${cut ? `<span class="dir">${esc(file.slice(0, cut))}</span>` : ''}<span class="fn">${esc(file.slice(cut))}</span></span>` : `<span class="lang">${esc(lang || 'text')}</span>`;
     // Apply names its target; once the host says the file does not exist, the same button turns into Create (codeApplyButton).
     const base = file ? file.split('/').pop() : '';
     const apply = file ? `<button data-code="apply" data-target="${esc(file)}" title="Apply to ${esc(file)}: preview the change in a diff, then it waits for review" aria-label="Apply to ${esc(base)}">${I.apply}<span>Apply</span></button>` : `<button data-code="apply" title="Apply to the active file: preview the change in a diff, then it waits for review" aria-label="Apply to the active file">${I.apply}<span>Apply</span></button>`;
@@ -1532,17 +1534,34 @@
    * set the API key when it was rejected, compact and retry when the prompt was too long; Retry otherwise. Change model
    * stays the secondary action and Show log is always there.
    */
+  /**
+   * The failed turn's actions, every one labelled: Retry (or Compact and retry) is the one primary; then the fixes the
+   * escalation names (Pick another model, Start server, Set API key), the fix the error's kind suggests, Change model,
+   * and Show log. Each action appears once.
+   */
   function errorActions(box, sid) {
+    box.dataset.sid = sid;
+    const old = box.querySelector(':scope > .err-acts'); if (old) { old.remove(); }
     if (box.dataset.kind === 'mistake_limit') { mistakeActions(box, sid); return; }
     const kind = box.dataset.kind || '', ollama = box.dataset.provider === 'ollama';
-    const fix = kind === 'connection' ? (ollama ? { a: 'ollama', icon: I.play, label: 'Start Ollama', title: 'Start the local Ollama server (and pull a model if none is installed), then Retry' } : { a: 'models', icon: I.gear, label: 'Open model settings', title: 'Check the model server and its models in Settings, then Retry' })
-      : kind === 'auth' ? { a: 'key', icon: I.key, label: 'Set API key…', title: 'Enter a valid API key in Settings → Providers, then Retry' }
-      : kind === 'quota' ? { a: 'key', icon: I.key, label: 'Provider settings…', title: 'Check the account or key in Settings → Providers, or pick another model' }
-      : kind === 'context' ? { a: 'compact', icon: I.compact, label: 'Compact and retry', title: 'Summarise older messages to make room, then send the last message again' }
-      : null;
-    const retryBtn = `<button class="btn sm ${fix ? '' : 'primary'}" data-a="retry" title="Send the last message again">${I.refresh}<span>Retry</span></button>`;
-    const raise = kind === 'context' ? `<button class="btn sm ghost" data-a="ctxwin" title="Settings → Models → Context window: give the model a larger window">${I.gear}<span>Raise context window</span></button>` : '';
-    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log" aria-label="Show log">${I.file}<span>Show log</span></button>${raise}<button class="btn sm" data-a="model" title="Pick another model for this chat, then Retry" aria-label="Change model">${I.chip}<span>Change model</span></button>${fix && fix.a !== 'compact' ? retryBtn : ''}${fix ? `<button class="btn sm primary" data-a="${fix.a}" title="${esc(fix.title)}">${fix.icon}<span>${esc(fix.label)}</span></button>` : retryBtn}`);
+    const list = []; const add = (x) => { if (x && !list.some((y) => y.a === x.a)) { list.push(x); } };
+    add(kind === 'context' ? { a: 'compact', icon: I.compact, label: 'Compact and retry', title: 'Summarise older messages to make room, then send the last message again' } : { a: 'retry', icon: I.refresh, label: 'Retry', title: 'Send the last message again' });
+    const server = { a: 'server', icon: ollama ? I.play : I.gear, label: ollama ? 'Start Ollama' : 'Check provider', title: ollama ? 'Start the local Ollama server (and pull a model if none is installed), then Retry' : 'Open this chat\'s provider in Settings → Providers to check its endpoint, model and key, then Retry' };
+    const model = { a: 'model', icon: I.chip, label: 'Change model', title: 'Pick another model for this chat, then Retry' };
+    const key = { a: 'key', icon: I.key, label: 'Set API key', title: 'Enter a valid API key in Settings → Providers, then Retry' };
+    const ESC = { retry: null, startServer: server, pickModel: model, setApiKey: key };
+    const iv = box.__esc && box.__esc.intervention;
+    for (const x of (iv && Array.isArray(iv.nextActions) ? iv.nextActions : [])) {
+      if (!x || !x.action || x.action === 'acceptRisk' || (x.action === 'startServer' && kind === 'missing')) { continue; }
+      const m = x.action in ESC ? ESC[x.action] : { a: `ra:${x.action}`, icon: '', label: x.label || x.action, title: x.label || x.action };
+      // Mapped fixes keep the box's wording (Start Ollama names the server); "Pick another model" is the escalation's.
+      if (m) { add(x.action === 'pickModel' ? Object.assign({}, m, { label: 'Pick another model' }) : m); }
+    }
+    add(kind === 'connection' ? server : kind === 'auth' ? key : kind === 'quota' ? Object.assign({}, key, { label: 'Provider settings', title: 'Check the account or key in Settings → Providers, or pick another model' }) : kind === 'missing' ? Object.assign({}, model, { label: 'Pick another model' }) : kind === 'rejected' ? server : null);
+    if (kind === 'context') { add({ a: 'ctxwin', icon: I.gear, label: 'Raise context window', title: 'Settings → Models → Context window: give the model a larger window' }); }
+    add(model);
+    const btn = (x, i) => `<button class="btn sm${i === 0 ? ' primary' : ''}" type="button" data-a="${esc(x.a)}" title="${esc(x.title)}">${x.icon || ''}<span>${esc(x.label)}</span></button>`;
+    const acts = el('div', 'err-acts', `${list.map(btn).join('')}<button class="btn sm ghost err-log" type="button" data-a="log" title="Open the LocalPilot output log" aria-label="Show log">${I.list}<span>Show log</span></button>`);
     // Rate limited: Retry counts down the moment the server is likely to accept requests again.
     if (kind === 'ratelimit') {
       const span = acts.querySelector('[data-a="retry"] span'); let left = 10;
@@ -1556,18 +1575,25 @@
       if (state.running.has(sid)) { return; }
       if (a === 'retry') { b.disabled = true; b.classList.add('busy'); post({ type: 'retry', sessionId: sid }); }
       else if (a === 'compact') { b.disabled = true; b.classList.add('busy'); post({ type: 'compactNow', sessionId: sid, retry: true }); }
-      else if (a === 'ollama') { post({ type: 'autoSetupModels' }); }
-      else if (a === 'models') { post({ type: 'openSettings', section: 'models' }); }
-      // Deep links: the chat's provider card opens with its key field focused; the context window setting is highlighted.
-      else if (a === 'key') { const cm = currentModel(); post({ type: 'openSettings', section: 'providers', ...(cm ? { expand: cm.providerId } : {}) }); }
+      else if (a.startsWith('ra:')) { b.disabled = true; recPost(sid, box.dataset.rid || (box.__esc && box.__esc.id) || '', a.slice(3)); }
       else if (a === 'ctxwin') { post({ type: 'openSettings', section: 'models', key: 'contextWindow' }); }
-      else { els.modelBtn.click(); }
+      else { modelFix(a === 'server' ? (ollama ? 'ollama' : 'providers') : a); }
     };
     box.appendChild(acts);
   }
+  /**
+   * The model fixes the error box and a recovery card share: start Ollama, open the chat's provider (its key field
+   * focused for `key`), or open the model picker. Recovery actions with these names are handled here, not by the host.
+   */
+  function modelFix(a) {
+    const cm = currentModel();
+    if (a === 'ollama') { post({ type: 'autoSetupModels' }); }
+    else if (a === 'providers' || a === 'key') { post({ type: 'openSettings', section: 'providers', ...(cm ? { expand: cm.providerId } : {}) }); }
+    else { els.modelBtn.click(); }
+  }
   /** The mistake limit: Continue with guidance (a short note, sent as the next message), Restore checkpoint, Show log. */
   function mistakeActions(box, sid) {
-    const acts = el('span', 'err-acts', `<button class="btn sm ghost" data-a="log" title="Open the LocalPilot log" aria-label="Show log">${I.file}<span>Show log</span></button><button class="btn sm" data-a="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button><button class="btn sm primary" data-a="guide" title="Tell LocalPilot what to do differently; it continues from here">${I.play}<span>Continue with guidance</span></button>`);
+    const acts = el('div', 'err-acts', `<button class="btn sm primary" type="button" data-a="guide" title="Tell LocalPilot what to do differently; it continues from here">${I.play}<span>Continue with guidance</span></button><button class="btn sm" type="button" data-a="restore" title="Put the files and the chat back as they were before your last message">${I.restore}<span>Restore checkpoint</span></button><button class="btn sm ghost err-log" type="button" data-a="log" title="Open the LocalPilot output log">${I.list}<span>Show log</span></button>`);
     acts.onclick = (e) => {
       const b = e.target.closest('[data-a]'); if (!b) { return; }
       if (b.dataset.a === 'log') { post({ type: 'showLog' }); return; }
@@ -2357,12 +2383,32 @@
   function guessProvider() { const cm = currentModel(); return cm ? (/ollama/i.test(`${cm.providerId} ${state.providerNames && state.providerNames[cm.providerId] || ''}`) && !cm.remote ? 'ollama' : '') : (!state.models.length ? 'ollama' : ''); }
   /** Error row for an `error` event or a stored failure; the mistake limit names the latest failure and how to carry on. */
   /** The error box's title by kind: what went wrong in a few words, the message below says why and what to do. */
-  const ERR_TITLE = { connection: 'Cannot reach the model server', auth: 'API key rejected', quota: 'Out of credits', ratelimit: 'Rate limited', stall: 'Model stopped responding', context: 'Prompt too large', server: 'Model server error', mistake_limit: 'Stopped after repeated errors', other: 'Something went wrong' };
+  const ERR_TITLE = { connection: 'Cannot reach the model server', auth: 'API key rejected', quota: 'Out of credits', ratelimit: 'Rate limited', stall: 'Model stopped responding', context: 'Prompt too large', server: 'Model server error', missing: 'Model not installed', rejected: 'Request rejected', mistake_limit: 'Stopped after repeated errors', other: 'Something went wrong' };
+  /**
+   * The friendly sentence first, the provider's raw text apart: a bare JSON body (`{"error":"model 'x' not found"}`) is
+   * read for its message, and describeModelError's trailing "(HTTP 400 from …: {…})" / "(fetch failed: …)" detail moves
+   * into Details. Returns `{ text, raw, missing }` (`missing`: the model a "not found" names).
+   */
+  function splitErr(t) {
+    const s = String(t || '').trim();
+    const miss = (x) => (/model ['"]?([^'"\s]+)['"]? not found/i.exec(x) || [])[1] || '';
+    if (/^[{[]/.test(s)) {
+      let msg = ''; try { const j = JSON.parse(s); const e = j && (j.error !== undefined ? j.error : j.message); msg = typeof e === 'string' ? e : e && typeof e.message === 'string' ? e.message : ''; } catch { /* not JSON after all */ }
+      const m = miss(msg || s);
+      return { text: m ? `The model ${m} is not installed on its server. Install it (Settings → Models → Model gallery), or pick another model.` : msg ? `The model server said: ${msg}` : 'The model server returned an error.', raw: s, missing: m };
+    }
+    const x = /^([^]*?[^\s(])\s\(((?:HTTP \d{3}|fetch failed|[A-Z][A-Z_]{3,}|\{)[^]*)\)\.?$/.exec(s) || /^([^]*?\.)\s\(([^]{24,})\)\.?$/.exec(s);
+    return x ? { text: /[.!?]$/.test(x[1]) ? x[1] : `${x[1]}.`, raw: x[2], missing: miss(s) } : { text: s, raw: '', missing: miss(s) };
+  }
   function errorHead(kind, text) {
-    const h = el('div', 'err-head', `<span class="ico">${I.warn}</span><b>${esc(ERR_TITLE[kind] || ERR_TITLE.other)}</b><button class="err-copy" type="button" title="Copy error" aria-label="Copy error">${I.copy}</button>`);
+    const h = el('div', 'err-head', `<span class="ico" aria-hidden="true">${I.warn}</span><b>${esc(ERR_TITLE[kind] || ERR_TITLE.other)}</b><button class="err-copy" type="button" title="Copy the full error" aria-label="Copy the full error">${I.copy}</button>`);
     h.querySelector('.err-copy').onclick = (e) => { e.stopPropagation(); copyTo(e.currentTarget, text); };
     return h;
   }
+  /**
+   * One calm card per failed turn: title, the friendly message, the provider's raw text folded under Details, the next
+   * step self-healing named (foldEscalation), then the actions (errorActions). Only the icon and border carry the colour.
+   */
   function errorBox(p) {
     if (p && typeof p === 'object' && p.kind === 'mistake_limit') {
       const box = el('div', 'error-box mistake-limit', `<span class="msg">LocalPilot ran into ${esc(p.count)} errors in a row and stopped.<br>Latest: <code>${esc(p.latest || 'unknown error')}</code><br>Tell it what to do differently and it carries on, or go back to before this turn.</span>`);
@@ -2370,11 +2416,12 @@
       box.prepend(errorHead('mistake_limit', `LocalPilot ran into ${p.count} errors in a row and stopped. Latest: ${p.latest || 'unknown error'}`));
       return box;
     }
-    const box = el('div', 'error-box', `<span class="msg">${esc(errorText(p))}</span>`);
-    const obj = p && typeof p === 'object';
-    box.dataset.kind = obj && p.kind ? String(p.kind) : guessErrorKind(errorText(p));
+    const obj = p && typeof p === 'object'; const full = errorText(p); const sp = splitErr(full);
+    const box = el('div', 'error-box', `<span class="msg">${esc(sp.text)}</span>`);
+    box.dataset.kind = obj && p.kind && !(p.kind === 'other' && sp.missing) ? String(p.kind) : sp.missing ? 'missing' : guessErrorKind(full);
     box.dataset.provider = obj && p.provider ? String(p.provider) : guessProvider();
-    box.prepend(errorHead(box.dataset.kind, errorText(p)));
+    box.prepend(errorHead(box.dataset.kind, full));
+    if (sp.raw) { const d = el('details', 'err-raw', `<summary><span class="chev" aria-hidden="true">${I.chev}</span>Details</summary><code></code>`); d.querySelector('code').textContent = sp.raw; box.appendChild(d); }
     box.setAttribute('role', 'alert');
     return box;
   }
@@ -2391,6 +2438,31 @@
     return el('div', 'note nudge', `${I.warn}<span>${esc(why)}</span>`);
   }
   // ------------------------------------------------------------------ self-healing (recovery card, outcome badge)
+  /** Self-healing escalations about the model or provider: no code fix ran, so the stepper and a second card say nothing new. */
+  const MODEL_REASONS = ['model_unavailable', 'model_rejected', 'credentials'];
+  const recModelOnly = (p) => !!(p && p.intervention && MODEL_REASONS.includes(p.intervention.reason)) && !(Array.isArray(p.patches) && p.patches.length) && !(Array.isArray(p.checks) && p.checks.length);
+  /** A recovery about the model (retrying it, or handing it back) shows no Detect → … → Regression stepper. */
+  const recModelish = (p) => recModelOnly(p) || (/^model_/.test(String(p && p.category || '')) && !(Array.isArray(p.patches) && p.patches.length) && !(Array.isArray(p.checks) && p.checks.length));
+  /** The failed turn's error box, if it has one: the escalation folds into it. */
+  const turnErrorBox = (root) => root && [...root.querySelectorAll(':scope > .error-box:not(.mistake-limit)')].pop();
+  /** Folds a model escalation into the turn's error box: its next step once, its actions merged with the box's own. */
+  function foldEscalation(box, p) {
+    box.__esc = p; box.dataset.rid = p.id || '';
+    const iv = p.intervention || {};
+    if (iv.reason === 'model_rejected' && (!box.dataset.kind || box.dataset.kind === 'other')) { box.dataset.kind = 'rejected'; box.querySelector(':scope > .err-head b').textContent = 'Request rejected'; }
+    let nx = box.querySelector(':scope > .err-next');
+    // The server answered "model not found": it is running, so "start the server" would mislead; the message says what to do.
+    if (iv.next && !(box.dataset.kind === 'missing' && iv.reason === 'model_unavailable')) {
+      if (!nx) { nx = el('div', 'err-next'); box.querySelector(':scope > .msg').after(nx); }
+      const t = String(iv.next); nx.innerHTML = `<span class="k">Next</span><span>${esc(t.charAt(0).toUpperCase() + t.slice(1))}</span>`;
+    } else if (nx) { nx.remove(); }
+    if (box.dataset.sid) { errorActions(box, box.dataset.sid); }
+  }
+  /** Folds the model escalations among a turn's recovery cards into its error box and drops those cards. */
+  function foldRecCards(root) {
+    const box = turnErrorBox(root); if (!box) { return; }
+    for (const c of root.querySelectorAll(':scope > .rec')) { const p = c.__p; if (p && recTerminal(p.outcome) && recModelOnly(p) && !c.querySelector('.rec-rows > *')) { foldEscalation(box, p); c.remove(); } }
+  }
   const REC_STEPS = [['Detect', ['detecting', 'classifying', 'retrying']], ['Diagnose', ['diagnosing', 'resolving', 'escalating']], ['Fix', ['fixing', 'rolling_back']], ['Validate', ['verifying', 'validating']], ['Regression', ['regression', 'completing']]];
   const REC_CAT = { model_timeout: 'Model timeout', model_unavailable: 'Model unavailable', model_overload: 'Model overloaded', model_output: 'Model output', compile: 'Compile', typescript: 'TypeScript', lint: 'Lint', build: 'Build', dependency: 'Dependency', unit_test: 'Unit test', integration_test: 'Integration test', runtime: 'Runtime', database: 'Database', data_corruption: 'Data corruption', mcp: 'MCP', git_conflict: 'Git conflict', security: 'Security', tool: 'Tool', permission: 'Permission', check_timeout: 'Check timeout', loop: 'Agent loop', unknown: 'Unknown' };
   const REC_REASON = { model_rejected: 'the provider rejected the request', exhausted: 'fix attempts used up', duplicate: 'the same error keeps coming back', deadline: 'recovery time limit reached', loop: 'the agent kept repeating itself', mistake_limit: 'too many errors in a row', approval_needed: 'an approval is needed', credentials: 'credentials are missing or rejected', git_conflict: 'a git conflict needs your review', security: 'a security finding needs your decision', data_corruption: 'possible data corruption, nothing was written', model_blocked: 'the model reported it is blocked', user_edit_conflict: 'you changed the same files', model_unavailable: 'the model server is unavailable' };
@@ -2519,6 +2591,9 @@
     box.onclick = (e) => {
       const b = e.target.closest('button[data-ra]'); if (!b || b.disabled) { return; }
       const a = b.dataset.ra;
+      // Model fixes run here (the host has no recovery action for them); Retry sends the last message again.
+      if (a === 'pickModel' || a === 'setApiKey' || a === 'startServer') { modelFix(a === 'pickModel' ? 'model' : a === 'setApiKey' ? 'key' : guessProvider() === 'ollama' ? 'ollama' : 'providers'); return; }
+      if (a === 'retry') { if (state.running.has(card.dataset.sid)) { return; } b.disabled = true; post({ type: 'retry', sessionId: card.dataset.sid }); return; }
       if (a === 'retryWithGuidance') {
         let form = box.querySelector('.rec-guide');
         if (!form) {
@@ -2541,6 +2616,7 @@
     const body = card.querySelector(':scope > .rec-body');
     if (body.dataset.sig !== sig) { body.dataset.sig = sig; body.innerHTML = recBody(p); }
     card.classList.toggle('running', !(p.outcome && recTerminal(p.outcome)));
+    card.classList.toggle('model', recModelish(p));
     recFinal(card, p);
   }
   function recCardEl(sid, p) {
@@ -2583,6 +2659,9 @@
     if (!p || typeof p !== 'object') { return; }
     const cache = recCache(sid);
     const m = recMerge(cache.cards.get(p.id) || cache.cards.get(''), p); cache.cards.delete(''); cache.cards.set(p.id, m);
+    // A model failure handed back with nothing fixed: the turn's error box already says it, so it gains the next step instead of a second card.
+    const box = recTerminal(m.outcome) && recModelOnly(m) && turnErrorBox(live.root);
+    if (box) { const c = live.root.querySelector(`:scope > .rec[data-rid="${CSS.escape(p.id || '')}"]`); if (c && !c.querySelector('.rec-rows > *')) { c.remove(); } foldEscalation(box, m); followLive(live); return; }
     recPaint(recLiveCard(live, sid, p.id), m);
     if (!recTerminal(m.outcome)) { const t = `Self-healing: ${REC_PHASE[m.phase] || m.phase}${m.decision ? ` · ${m.decision}` : ''}`; noteStatus(sid, t); if (visible) { setStatus(t); } setPhase(live, 'Self-healing'); }
     followLive(live);
@@ -2644,7 +2723,8 @@
     if (rc.cards.size) {
       const stored = [...turn.querySelectorAll(':scope > .rec.settled')].pop();
       const ref = stored || [...turn.querySelectorAll(':scope > .body')].pop() || turn.querySelector(':scope > .afoot');
-      const cards = rc.els && rc.els.length ? rc.els : [...rc.cards.values()].map((p) => recSettled(sid, p));
+      const box = turnErrorBox(turn);
+      const cards = (rc.els && rc.els.length ? rc.els : [...rc.cards.values()].map((p) => recSettled(sid, p))).filter((c) => !(box && c.__p && recTerminal(c.__p.outcome) && recModelOnly(c.__p) && (foldEscalation(box, c.__p), true)));
       for (const card of cards) { card.classList.remove('running'); if (ref) { turn.insertBefore(card, ref); } else { turn.appendChild(card); } }
       if (stored) { stored.remove(); }
     }
@@ -2672,7 +2752,7 @@
     // The files changed so far (not yet kept or reverted), so Resume / Rollback are not a blind choice.
     const changed = (state.changes && state.changes.get(s.id)) || [];
     const files = changed.slice(0, 6).map((f) => `<li title="${esc(f.path || f.fsPath || '')}">${esc(f.path || f.fsPath || '')}</li>`).join('') + (changed.length > 6 ? `<li class="more">+${changed.length - 6} more</li>` : '');
-    const review = changed.length ? `<button class="btn sm ghost" data-run="review" title="Open the changes this chat made so far">${I.diff || ''}<span>Review changes so far</span></button>` : '';
+    const review = changed.length ? `<button class="btn sm ghost" data-run="review" title="Open the changes this chat made so far">${I.diff || ''}<span class="long">Review changes so far</span><span class="short">Review changes</span></button>` : '';
     const card = el('div', 'rec rec-int warn', `<div class="rec-head"><span class="ico">${I.pause}</span><span class="t">Recovery interrupted</span></div><div class="rec-body"><div class="rec-title">${esc(facts)}</div>${cause ? `<div class="rec-cause"><span>Root cause:</span> ${esc(cause)}</div>` : ''}${fails ? `<ul class="rec-fails">${fails}</ul>` : ''}${files ? `<div class="rec-vh">${changed.length} file${changed.length === 1 ? '' : 's'} changed so far</div><ul class="rec-files">${files}</ul>` : ''}</div><div class="rec-final"><div class="rec-acts"><button class="btn sm primary" data-ra="resume" title="Re-run the checks, then continue fixing where it stopped">${I.play}<span>Resume</span></button><button class="btn sm" data-ra="rollback" title="Undo the files the interrupted fix attempts changed">${I.undo}<span>Rollback fixes</span></button>${review}<button class="btn sm ghost" data-ra="dismiss" title="Keep the files as they are and forget this recovery">${I.x}<span>Dismiss</span></button></div></div>`);
     card.querySelector('.rec-acts').onclick = (e) => {
       const r = e.target.closest('button[data-run]'); if (r) { post({ type: 'runAction', sessionId: s.id, action: r.dataset.run }); return; }
@@ -2999,7 +3079,7 @@
       }
       case 'waiting': showWait(live, sid, e.payload || {}); break;
       case 'route': routeNote(live, sid, e.payload || {}); break;
-      case 'error': { clearWait(live); if (live.retryRow) { live.retryRow.className = 'note retry failed'; live.retryRow.querySelector('.ico').innerHTML = I.warn; live.retryRow = null; } rotateBody(live); live.failed = true; setPhase(live, e.payload && e.payload.kind === 'mistake_limit' ? 'Stopped' : 'Failed'); const box = errorBox(e.payload); errorActions(box, sid); enter(box); live.root.insertBefore(box, live.body); break; }
+      case 'error': { clearWait(live); if (live.retryRow) { live.retryRow.className = 'note retry failed'; live.retryRow.querySelector('.ico').innerHTML = I.warn; live.retryRow = null; } rotateBody(live); live.failed = true; setPhase(live, e.payload && e.payload.kind === 'mistake_limit' ? 'Stopped' : 'Failed'); const box = errorBox(e.payload); errorActions(box, sid); enter(box); live.root.insertBefore(box, live.body); foldRecCards(live.root); break; }
       case 'recovery': onRecovery(live, sid, e.payload, visible); for (const n of live.root.querySelectorAll('.step.has-tests')) { syncHealLink(n); } break;
       case 'turn_end': noteStatus(sid, 'Finishing…'); recTurnEnd(live, sid, e.payload, visible); if (e.payload && typeof e.payload.durationMs === 'number') { live.durationMs = e.payload.durationMs; } if (visible && e.payload && typeof e.payload.contextTokens === 'number') { state.session.contextTokens = e.payload.contextTokens; updateCtx(); } break;
     }
@@ -3015,7 +3095,7 @@
     if (ready) {
       const row = el('div', 'learn');
       row.appendChild(el('span', 'lbl', `${I.check || ''}“${esc(ready.name)}” is installed. Run the request again with it:`));
-      const use = el('button', 'chip brand', `${I.play || ''}Use “${esc(ready.name)}”`); use.title = `Prefills /skill ${ready.name} with your last request — press Enter to send`;
+      const use = el('button', 'chip brand', `${I.play || ''}<span>Use “${esc(ready.name)}”</span>`); use.title = `Prefills /skill ${ready.name} with your last request — press Enter to send`;
       use.onclick = () => { els.input.value = `/skill ${ready.name} ${ready.prompt || ''}`.trim(); autoGrow(); updateSendEnabled(); els.input.focus(); };
       row.appendChild(use); n.appendChild(row);
     }
@@ -3044,7 +3124,7 @@
     if (available) {
       const wrap = el('div', 'learn');
       wrap.appendChild(el('span', 'lbl', `The “${esc(available.name)}” skill from ${esc(available.repo)} matches this request but is not installed.`));
-      const get = el('button', 'chip brand', `${I.download || ''}Install “${esc(available.name)}”`); get.title = `${available.description || ''}\n\nDownloads the skill into your skills folder (localpilot.skills.autoInstallScope). Switch this chat to “Auto” in the Skills menu to skip this step.`;
+      const get = el('button', 'chip brand', `${I.download || ''}<span>Install “${esc(available.name)}”</span>`); get.title = `${available.description || ''}\n\nDownloads the skill into your skills folder (localpilot.skills.autoInstallScope). Switch this chat to “Auto” in the Skills menu to skip this step.`;
       get.dataset.install = available.name;
       get.onclick = () => { post({ type: 'installCatalogSkill', name: available.name, repo: available.repo, sessionId: sid }); get.disabled = true; get.innerHTML = `${I.spin || ''}Installing…`; };
       const no = el('button', 'chip', 'Not now'); no.title = 'Do not offer this skill again'; no.onclick = () => { post({ type: 'dismissCatalogSkill', name: available.name, sessionId: sid }); prune(wrap); };
@@ -3053,9 +3133,9 @@
     if (create) {
       const wrap = el('div', 'learn');
       wrap.appendChild(el('span', 'lbl', `Requests like this have come up ${create.count}× with no skill covering them.`));
-      const mk = el('button', 'chip brand', `${I.plus || ''}Create “${esc(create.slug)}” skill`); mk.title = 'Prefills a prompt asking the agent to write .localpilot/skills/' + create.slug + '/SKILL.md from what worked here';
+      const mk = el('button', 'chip brand', `${I.plus || ''}<span>Create “${esc(create.slug)}” skill</span>`); mk.title = 'Prefills a prompt asking the agent to write .localpilot/skills/' + create.slug + '/SKILL.md from what worked here';
       mk.onclick = () => { els.input.value = `Create a reusable skill at .localpilot/skills/${create.slug}/SKILL.md for requests like: ${(create.samples || []).map((x) => `"${x}"`).join(', ')}. Use front-matter (name, description with quoted trigger phrases) and a step-by-step body based on how we handled it in this project, then reload skills.`; autoGrow(); updateSendEnabled(); els.input.focus(); };
-      const no = el('button', 'chip', 'Not now'); no.onclick = () => { post({ type: 'dismissSkillTopic', topic: create.topic }); prune(wrap); };
+      const no = el('button', 'chip', 'Not now'); no.title = 'Do not suggest a skill for requests like this again'; no.onclick = () => { post({ type: 'dismissSkillTopic', topic: create.topic }); prune(wrap); };
       wrap.appendChild(mk); wrap.appendChild(no); n.appendChild(wrap);
     }
     return n;
@@ -3190,9 +3270,9 @@
     if (!state.models.length) { els.modelLabel.innerHTML = state.modelsLoading ? '<span class="spinner"></span>Finding models…' : 'Set up a model'; els.modelBtn.title = state.modelsLoading ? 'Looking for local model servers…' : 'No models found — click to set one up, look again, or add a cloud provider'; els.modelBtn.removeAttribute('aria-label'); return; }
     const s = state.session; const explicit = s && s.model; const m = currentModel();
     const name = m ? m.name.replace(/-instruct|-chat/i, '') : explicit ? explicit.split('/').pop() : 'Auto';
-    // Narrow composers show the short form: no provider prefix, no ':latest' / ':14b' tag (the full id is in the title).
-    const shortName = name.split('/').pop().replace(/:[^:/]+$/, '') || name;
-    const label = `<span class="nm">${shortName === name ? esc(name) : `<span class="nm-full">${esc(name)}</span><span class="nm-short">${esc(shortName)}</span>`}</span>`;
+    // The same name the model menu shows ("gemma4:12b"): the base gives way with an ellipsis, the :size tag stays whole, the full id is in the title.
+    const tagAt = name.lastIndexOf(':'); const base = tagAt > 0 ? name.slice(0, tagAt) : name; const tag = tagAt > 0 ? name.slice(tagAt) : '';
+    const label = `<span class="nm"><span class="nb">${esc(base)}</span>${tag ? `<span class="nt">${esc(tag)}</span>` : ''}</span>`;
     // "<provider> · <model|Auto · resolved>" with a dot for where it runs; the provider gives way first as the composer narrows.
     const prov = m ? providerLabel(m.providerId) : '';
     const auto = m && !explicit;
@@ -3211,9 +3291,10 @@
   function fitModelChip() {
     if (fitPending) { return; } fitPending = true;
     requestAnimationFrame(() => {
-      fitPending = false; const l = els.modelLabel; if (!l.querySelector('.nm')) { return; }
+      fitPending = false; const l = els.modelLabel; const nb = l.querySelector('.nb'); if (!nb) { return; }
       l.classList.remove('no-prov', 'no-auto');
-      const over = () => l.scrollWidth > l.clientWidth;
+      // Over: the label overflows, or the model's own name is being cut while the provider / "Auto ·" still take room.
+      const over = () => l.scrollWidth > l.clientWidth || nb.scrollWidth > nb.clientWidth;
       if (over()) { l.classList.add('no-prov'); if (over()) { l.classList.add('no-auto'); } }
     });
   }
@@ -3678,7 +3759,7 @@
     const box = el('div', 'hist');
     const grid = el('div', 'navg');
     const head = el('div', 'nav-head');
-    const newBtn = el('button', 'btn primary nav-new', `${I.plus}<span>New conversation</span>`); newBtn.type = 'button'; newBtn.title = 'Start a new conversation — the current one keeps running'; newBtn.setAttribute('aria-label', 'New conversation');
+    const newBtn = el('button', 'btn nav-new', `${I.plus}<span>New conversation</span>`); newBtn.type = 'button'; newBtn.title = 'Start a new conversation — the current one keeps running'; newBtn.setAttribute('aria-label', 'New conversation');
     newBtn.onclick = () => { closeMenu(); post({ type: 'newSession', mode: newChatMode() }); };
     const search = el('input', 'search nav-search'); search.placeholder = 'Search conversations, code, errors…'; search.setAttribute('aria-label', 'Search conversations (filters: in:code from:user project: tag: is:favorite before: after:)'); search.title = 'Filters: in:code in:errors from:user from:assistant project:<name> tag:<name> model:<id> is:pinned|favorite|archived|trashed before:YYYY-MM-DD after:YYYY-MM-DD';
     head.append(search, newBtn);

@@ -27,7 +27,7 @@ html.light{
 }
 /* ?hc=1 (with ?light=1: high contrast light): the palettes of VS Code's Dark / Light High Contrast themes. */
 html.hc{
---vscode-editor-background:#000000;--vscode-foreground:#ffffff;--vscode-descriptionForeground:#ffffffb3;--vscode-widget-border:#6fc3df;--vscode-contrastBorder:#6fc3df;--vscode-contrastActiveBorder:#f38518;
+--vscode-editor-background:#000000;--vscode-foreground:#ffffff;--vscode-icon-foreground:#ffffff;--vscode-descriptionForeground:#ffffffb3;--vscode-widget-border:#6fc3df;--vscode-contrastBorder:#6fc3df;--vscode-contrastActiveBorder:#f38518;
 --vscode-sideBar-background:#000000;--vscode-editorWidget-background:#0c141f;--vscode-list-hoverBackground:transparent;
 --vscode-input-background:#000000;--vscode-input-foreground:#ffffff;--vscode-input-border:#6fc3df;
 --vscode-button-background:#000000;--vscode-button-foreground:#ffffff;--vscode-button-hoverBackground:#000000;--vscode-button-border:#6fc3df;--vscode-focusBorder:#f38518;
@@ -37,7 +37,7 @@ html.hc{
 --vscode-charts-blue:#3794ff;--vscode-charts-green:#89d185;--vscode-charts-red:#f48771;--vscode-charts-yellow:#ffd370;--vscode-charts-orange:#f38518;--vscode-charts-purple:#b180d7;--vscode-charts-lines:#ffffff;
 }
 html.hc.hcl{
---vscode-editor-background:#ffffff;--vscode-foreground:#292929;--vscode-descriptionForeground:#292929b3;--vscode-widget-border:#0f4a85;--vscode-contrastBorder:#0f4a85;--vscode-contrastActiveBorder:#006bbd;
+--vscode-editor-background:#ffffff;--vscode-foreground:#292929;--vscode-icon-foreground:#292929;--vscode-descriptionForeground:#292929b3;--vscode-widget-border:#0f4a85;--vscode-contrastBorder:#0f4a85;--vscode-contrastActiveBorder:#006bbd;
 --vscode-sideBar-background:#ffffff;--vscode-editorWidget-background:#ffffff;--vscode-list-hoverBackground:transparent;
 --vscode-input-background:#ffffff;--vscode-input-foreground:#292929;--vscode-input-border:#0f4a85;
 --vscode-button-background:#0f4a85;--vscode-button-foreground:#ffffff;--vscode-button-hoverBackground:#0f4a85;--vscode-focusBorder:#006bbd;--vscode-button-secondaryBackground:#ffffff;--vscode-button-secondaryForeground:#292929;
@@ -66,11 +66,13 @@ const providers = [
   { id: 'anthropic', type: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', displayName: 'Anthropic (Claude)', apiKey: '${secret:anthropic}' },
   { id: 'openai', type: 'openai', baseUrl: 'https://api.openai.com/v1', displayName: 'OpenAI', apiKey: '${env:OPENAI_API_KEY}' },
   { id: 'omniroute', type: 'openai', baseUrl: 'http://localhost:20128/v1', displayName: 'OmniRoute', cloud: true },
+  // An Azure OpenAI resource: its models are the resource's deployments (a Claude deployment is served through Anthropic's API).
+  { id: 'azure', type: 'openai', baseUrl: 'https://bhogarmodel.openai.azure.com/openai/v1', displayName: 'Azure OpenAI', apiKey: '${secret:azure}', cloud: true },
 ];
 // ?local=1: a first-run machine with only local servers (no cloud providers, nothing disabled), e.g. for the setup wizard.
 if (q.get('local')) { providers.splice(0, providers.length, ...providers.filter((p) => !/^https:/.test(p.baseUrl) && !p.cloud && p.enabled !== false)); }
 // Key status as the extension reports it (never the key): keychain ok, env var missing, gateway without a key.
-const keys = { anthropic: { source: 'keychain', ok: true }, openai: { source: 'env', ok: false, env: 'OPENAI_API_KEY' }, omniroute: { source: 'none', ok: false } };
+const keys = { anthropic: { source: 'keychain', ok: true }, openai: { source: 'env', ok: false, env: 'OPENAI_API_KEY' }, omniroute: { source: 'none', ok: false }, azure: { source: 'keychain', ok: true } };
 const models = [
   { id: 'ollama/gemma4:e4b', providerId: 'ollama', modelId: 'gemma4:e4b', name: 'gemma4:e4b', contextWindow: 131072, maxOutputTokens: 8192, supportsTools: true, supportsVision: true, supportsFim: false },
   { id: 'ollama/qwen2.5-coder:7b', providerId: 'ollama', modelId: 'qwen2.5-coder:7b', name: 'qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: false, supportsFim: true },
@@ -78,6 +80,8 @@ const models = [
   { id: 'docker/docker.io/ai/smollm2:latest', providerId: 'docker', modelId: 'docker.io/ai/smollm2:latest', name: 'smollm2:latest', contextWindow: 8192, maxOutputTokens: 2048, supportsTools: true, supportsVision: false },
   { id: 'anthropic/claude-sonnet-4-6', providerId: 'anthropic', modelId: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 1000000, maxOutputTokens: 64000, supportsTools: true, supportsVision: true, supportsFim: false, remote: true },
   { id: 'lmstudio/qwen2.5-vl-7b', providerId: 'lmstudio', modelId: 'qwen2.5-vl-7b', name: 'qwen2.5-vl-7b', contextWindow: 32768, maxOutputTokens: 4096, supportsTools: true, supportsVision: true },
+  { id: 'azure/FW-Kimi-K3', providerId: 'azure', modelId: 'FW-Kimi-K3', name: 'FW-Kimi-K3', contextWindow: 262144, maxOutputTokens: 16384, supportsTools: true, supportsVision: false, remote: true },
+  { id: 'azure/claude-opus-5-5-fast', providerId: 'azure', modelId: 'claude-opus-5-5-fast', name: 'claude-opus-5-5-fast', contextWindow: 1000000, maxOutputTokens: 64000, supportsTools: true, supportsVision: true, remote: true },
 ];
 const defaults = { providers, defaultModel: 'ollama/qwen2.5-coder:7b', contextWindow: 32768, maxOutputTokens: 4096, temperature: 0.2, thinking: 'off', keepAlive: '30m', compactionThreshold: 0.75, maxToolOutputChars: 24000,
   'approvals.terminal': 'ask', 'approvals.write': 'always', 'approvals.delete': 'ask', 'approvals.network': 'always', 'parallel.maxConcurrency': 4, 'parallel.maxSubagentDepth': 2, autoClarify: true, 'routing.fast': '', 'routing.coding': '',
@@ -186,6 +190,7 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
     { id: 'anthropic', displayName: 'Anthropic (Claude)', type: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', configured: true, enabled: true, ok: true, latencyMs: 210, models: [{ id: 'anthropic/claude-opus-5-5', name: 'Claude Opus 5.5', contextWindow: 1000000, supportsTools: true, supportsVision: true }, { id: 'anthropic/claude-sonnet-5-5', name: 'Claude Sonnet 5.5', contextWindow: 1000000, supportsTools: true, supportsVision: true }], source: 'settings' },
     { id: 'openai', displayName: 'OpenAI', type: 'openai', baseUrl: 'https://api.openai.com/v1', configured: true, enabled: true, ok: false, latencyMs: 0, models: [], error: 'Environment variable OPENAI_API_KEY is not set in VS Code\'s environment', source: 'settings' },
     { id: 'omniroute', displayName: 'OmniRoute', type: 'openai', baseUrl: 'http://localhost:20128/v1', configured: true, enabled: true, ok: true, latencyMs: 18, models: [{ id: 'omniroute/auto/coding', name: 'auto/coding', contextWindow: 131072, supportsTools: true, supportsVision: false }], source: 'settings' },
+    { id: 'azure', displayName: 'Azure OpenAI', type: 'openai', baseUrl: 'https://bhogarmodel.openai.azure.com/openai/v1', configured: true, enabled: true, ok: true, latencyMs: 420, models: models.filter(m => m.providerId === 'azure'), source: 'settings' },
   ] }), 300);
   if (m.type === 'test') setTimeout(() => send({ type: 'testResult', id: m.provider.id, result: { id: m.provider.id, displayName: m.provider.displayName, type: m.provider.type, baseUrl: m.provider.baseUrl, configured: true, enabled: true, ok: true, latencyMs: 18, models } }), 300);
   const sendModels = () => {
@@ -422,7 +427,8 @@ window.acquireVsCodeApi = () => ({ getState: () => JSON.parse(localStorage.getIt
 <script src="../media/settings.js"></script>
 <script>
 // ?expand=<provider id> opens that provider card, to check the editor without clicking.
-if (q.get('expand')) setTimeout(() => document.querySelector(`.prov[data-prov="${q.get('expand')}"] .prov-head`)?.click(), 400);
+// Retried until the card is open: a render that lands between the click and the next frame can close it again.
+if (q.get('expand')) { let n = 0; const open = () => { const c = document.querySelector(`.prov[data-prov="${q.get('expand')}"]`); if (c && c.querySelector('.prov-body')) return; if (c && !c.dataset.clicked) { c.dataset.clicked = 1; c.querySelector('.prov-head')?.click(); } if (++n < 20) setTimeout(open, 150); }; setTimeout(open, 400); }
 // ?scope=workspace selects the Workspace scope; ?find=<text> types into the header search; ?click=<selector> clicks once
 // (e.g. ?failSave=1&click=.field .toggle to watch a refused write flip the switch back).
 if (q.get('scope') === 'workspace') setTimeout(() => document.querySelector('.top .scope [data-s="workspace"]')?.click(), 300);

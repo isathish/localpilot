@@ -467,10 +467,10 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .note.skills .lbl { margin-right: 2px; }
 .note.skills .learn { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
 .note .chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; font: inherit; font-size: var(--fs-sm); color: var(--fg); background: var(--bg-alt, transparent); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
-.note .chip svg { width: 11px; height: 11px; }
+.note .chip svg { width: 11px; height: 11px; flex: none; }
 .note .chip:hover { border-color: var(--brand); color: var(--brand-text); }
 .note .chip.brand { border-color: var(--brand); color: var(--brand-text); }
-.error-box { margin: 6px 0; padding: 8px 10px; font-size: var(--fs-sm); color: var(--error-text); border: 1px solid color-mix(in srgb, var(--error) 50%, transparent); background: color-mix(in srgb, var(--error) 8%, transparent); border-radius: var(--radius-card); display: flex; align-items: flex-start; gap: 10px; }
+.error-box { margin: 6px 0; padding: 8px 10px; font-size: var(--fs-sm); color: var(--fg); border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border-soft)); background: var(--card); border-radius: var(--radius-card); display: flex; align-items: flex-start; gap: 10px; }
 .error-box .msg { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .error-box .retry-btn { flex: none; color: var(--fg); }
 .error-box .retry-btn svg { animation: none; }
@@ -749,8 +749,9 @@ body.running #tasksMeter i { background: var(--brand); }
 .note.skills .chip.on small { color: var(--muted); font-size: .9em; margin-left: 2px; }
 .ctx { display: inline-flex; align-items: center; gap: 5px; height: var(--ctl-h); font-size: var(--fs-xs); color: var(--muted); padding: 0 6px; flex: none; font-variant-numeric: tabular-nums; border-radius: var(--radius-sm); }
 .ctx:hover { background: var(--tint); }
-.ctx .ring { width: 14px; height: 14px; border-radius: 50%; background: conic-gradient(var(--ring-color, var(--brand)) calc(var(--pct, 0) * 1%), var(--tint-2) 0); position: relative; flex: none; }
-.ctx .ring::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--input-bg); }
+/* A static fill gauge, not a spinner: a pie of the used share inside a thin outline, in the muted text colour (amber
+   means "working" elsewhere, so it is not used here); only a nearly full window takes the warning colours. */
+.ctx .ring { width: 13px; height: 13px; border-radius: 50%; background: conic-gradient(var(--ring-color, var(--muted)) calc(var(--pct, 0) * 1%), transparent 0); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring-color, var(--muted)) 70%, transparent); border: 1.5px solid var(--input-bg); position: relative; flex: none; }
 .ctx.warn { --ring-color: var(--warn); } .ctx.danger { --ring-color: var(--error); color: var(--error-text); }
 /* Tokens and cost of the open chat, beside the context ring; collapses before the model name does. */
 .usage { display: inline-flex; align-items: center; gap: 6px; height: var(--ctl-h); padding: 0 4px; font-size: var(--fs-xs); color: var(--muted); flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
@@ -1018,14 +1019,11 @@ body.vscode-high-contrast .hist-filter .fchipb.on, body.vscode-high-contrast-lig
 /* 300–360 px: Skills, Rules and Improve prompt move into the ⋯ menu, and the model picker takes the freed room with its
    short name (no provider prefix or :tag). The context ring and Send stay. */
 .ib.narrow-only { display: none; }
-.pick.model .nm-short { display: none; }
 @container (max-width: 360px) {
   .pick.skills, #btnRules, #btnImprove { display: none; }
   #btnComposerMore { display: inline-grid; }
   .pick.mode .chev { display: none; }
   .pick.model { flex: 1 1 auto; min-width: 72px; max-width: none; }
-  .pick.model .nm-full { display: none; }
-  .pick.model .nm-short { display: inline; }
 }
 @container (max-width: 260px) { .pick.model { flex: none; min-width: 0; } }
 /* The row never overflows the composer: the thinking picker keeps only its bulb, the model name gives way first, and
@@ -1090,6 +1088,12 @@ body.vscode-high-contrast .hist-filter .fchipb.on, body.vscode-high-contrast-lig
 .code-head .meta { font-size: var(--fs-xs); color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .code-head .lang.path-link { color: var(--link); cursor: pointer; }
 .code-head .lang.path-link:hover { text-decoration: underline; }
+.code-head .lang[data-path] { display: flex; min-width: 0; }
+.code-head .lang .dir { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-head .lang .fn { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Narrowest: Apply / Create keep their icon and tooltip so the file name keeps the room. */
+@container messages (max-width: 420px) { .code-head:has(.fn) .meta, .code-head:has(.fn) [data-code="copy"] span { display: none; } }
+@container messages (max-width: 280px) { .code-head [data-code="apply"] span, .code-head [data-code="create"] span { display: none; } }
 .code pre { tab-size: 4; }
 .code pre code { font-variant-ligatures: none; }
 
@@ -1291,13 +1295,17 @@ button.copied, button.copied:hover { color: var(--ok-text) !important; }
 @container messages (max-width: 340px) { .suggestion .mode { display: none; } }
 .empty-i.searching { display: flex; align-items: center; gap: 8px; }
 
-/* Failed turn: message, then Change model / Retry on their own row. */
-.error-box { flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 10px; }
-.error-box .msg { flex: 1 1 200px; }
-.err-acts { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; flex: 0 1 auto; max-width: 100%; color: var(--fg); }
-/* Narrow sidebar: the secondary actions keep their icons and titles, the fix keeps its label. */
-@container messages (max-width: 380px) { .err-acts [data-a="log"] span, .err-acts [data-a="model"] span { display: none; } }
-.err-acts .btn svg { width: 12px; height: 12px; }
+/* Failed turn: title, message, Details, the next step, then one row of labelled actions (Retry first, Show log last). */
+.error-box { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 10px; }
+.error-box .msg { flex: none; }
+.err-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; min-width: 0; color: var(--fg); }
+.err-acts .btn { max-width: 100%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.err-acts .btn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.err-acts .btn svg { width: 12px; height: 12px; flex: none; }
+.err-acts .err-log { margin-left: auto; color: var(--muted); }
+.err-acts .err-log:hover { color: var(--fg); }
+/* Narrow sidebar: Show log keeps its icon and tooltip; every other action keeps its label. */
+@container messages (max-width: 300px) { .err-acts .err-log span { display: none; } .err-acts .err-log { padding: 0 6px; } }
 
 .approval .actions { gap: 6px; }
 
@@ -1561,6 +1569,9 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) :is(.meter i, .ctxca
   .rec { padding: 6px 8px; }
   .rec-stepper li + li::before { margin: 0 3px; }
   .rec-acts .btn { flex: 1 1 auto; }
+  /* Quiet actions (Review, Dismiss) share one left-aligned row instead of each stretching across its own. */
+  .rec-acts .btn.ghost { flex: 0 1 auto; }
+  .rec-acts .btn .long { display: none; } .rec-acts .btn .short { display: inline; }
   .rec-rb .btn { flex: 1 1 auto; }
 }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-color: var(--vscode-contrastBorder, var(--border)); border-right-color: var(--vscode-contrastBorder, var(--border)); border-bottom-color: var(--vscode-contrastBorder, var(--border)); }
@@ -1631,8 +1642,15 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-co
 .pick.model .lbl.no-prov .prov, .pick.model .lbl.no-auto .auto { display: none; }
 .pick.model .where { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; vertical-align: 1px; background: var(--ok); }
 .pick.model .where.cloud { background: transparent; box-shadow: inset 0 0 0 1.5px var(--link); }
-/* The model name wins over the provider: with Auto the provider steps aside first, then the :tag, then "Auto ·". */
-@container (max-width: 520px) { .pick.model .nm-full { display: none; } .pick.model .nm-short { display: inline; } }
+/* The model name wins over the provider: with Auto the provider steps aside first, then "Auto ·"; then the name's base
+   takes the ellipsis while its :size tag stays, so the chip reads like the model menu ("qwen2.5-co…:14b"). */
+.pick.model .lbl { display: inline-flex; align-items: center; }
+.pick.model .lbl > * { flex: none; }
+.pick.model .lbl > .nm { display: inline-flex; flex: 0 1 auto; min-width: 0; }
+.pick.model .nb { min-width: 2ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick.model .nt { flex: none; white-space: nowrap; }
+.pick.model .lbl > :is(.prov, .auto) { white-space: pre; }
+@container (max-width: 260px) { .pick.model .lbl { display: none; } }
 /* The model chip keeps a readable name: below 520 px the thinking and skills pickers give up their labels before it shrinks. */
 .pick.model { min-width: 72px; }
 @container (max-width: 520px) { .pick.think .lbl, .pick.skills .lbl, .pick.think .chev, .pick.skills .chev, .ctx .txt { display: none; } .pick.think, .pick.skills { padding: 0 6px; } }
@@ -1706,13 +1724,29 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .rec { border-top-co
 .pick.model.rerouted { position: relative; }
 .pick.model.rerouted::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 1.5px var(--bg); }
 /* Typed error box: a title row (kind + Copy), the message, then the fix. */
-.error-box .err-head { display: flex; align-items: center; gap: 6px; flex-basis: 100%; min-width: 0; font-weight: 600; }
-.error-box .err-head .ico { display: inline-grid; place-items: center; flex: none; } .error-box .err-head .ico svg { width: 13px; height: 13px; }
-.error-box .err-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.error-box .err-head { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; color: var(--fg); }
+.error-box .err-head .ico { display: inline-grid; place-items: center; flex: none; color: var(--error-text); } .error-box .err-head .ico svg { width: 13px; height: 13px; }
+.error-box .err-head b { min-width: 0; overflow-wrap: anywhere; }
 .error-box .err-copy { margin-left: auto; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; color: var(--muted); flex: none; }
 .error-box .err-copy:hover { background: var(--tint-2); color: var(--fg); } .error-box .err-copy svg { width: 12px; height: 12px; }
 .error-box .msg { color: var(--fg); }
 .error-box .err-guide { flex-basis: 100%; }
+/* The provider's raw reply: folded, muted mono, wraps instead of scrolling the sidebar. */
+.err-raw { min-width: 0; font-size: var(--fs-xs); color: var(--muted); }
+.err-raw > summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; list-style: none; border-radius: var(--radius-sm); padding: 0 2px; }
+.err-raw > summary::-webkit-details-marker { display: none; }
+.err-raw > summary:hover { color: var(--fg); }
+.err-raw > summary:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.err-raw .chev { display: inline-grid; place-items: center; transition: transform .12s; } .err-raw .chev svg { width: 10px; height: 10px; }
+.err-raw[open] .chev { transform: rotate(90deg); }
+.err-raw code { display: block; margin-top: 4px; padding: 6px 8px; font-family: var(--mono); font-size: var(--fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); background: var(--tint); border-radius: var(--radius-sm); }
+/* Self-healing's next step for a model failure, said once inside the error box. */
+.err-next { display: flex; gap: 6px; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
+.err-next .k { flex: none; color: var(--muted); }
+/* A recovery about the model (retrying it, handing it back) has no code-fix stages to show. */
+.rec.model .rec-stepper { display: none; }
+/* A code-healing card that needs you: the icon and the left edge carry the colour, the sentence stays readable. */
+.rec.bad .rec-final { color: var(--fg); } .rec.bad .rec-final > svg { color: var(--error-text); }
 /* Command rows: cwd chip, Rerun / Open in terminal, the next-step line, test summary. */
 .term-acts { align-items: center; flex-wrap: wrap; }
 .term-acts .sp { flex: 1 1 0; }

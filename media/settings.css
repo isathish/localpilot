@@ -220,6 +220,20 @@ input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mi
 .prov-result.ok { color: var(--ok-text); } .prov-result.err { color: var(--error-text); }
 .prov-result .models { color: var(--fg); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
 .prov-result .models span { font-size: var(--fs-xs); padding: 1px 6px; border-radius: 6px; border: 1px solid var(--border); font-family: var(--mono); }
+/* External links in descriptions: the last word and the icon never part, so the icon never sits alone on a line. */
+.nowrap { white-space: nowrap; }
+.ext-link svg { width: .95em; height: .95em; margin-left: 3px; vertical-align: -1px; stroke-width: 1.7; }
+/* What a provider's Models / Deployments field found automatically: read-only chips under the input. */
+.field .ctl .found { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.found .chip-ro { font-size: var(--fs-xs); font-family: var(--mono); padding: 1px 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--fg); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.found .muted.small { margin-right: 2px; }
+/* Default model: the select takes the row; "Other…" adds the id field under it. */
+.dm-ctl > select, .dm-ctl > input { flex: 1 1 100%; }
+.dm-ctl > [hidden] { display: none; }
+/* Provider card, two columns: a label beside a 30 px input or select starts level with the text inside it, not 6 px above. */
+@media (min-width: 761px) { .prov-body .field:has(> .ctl > input:first-child, > .ctl > select:first-child, > .ctl > .btnrow:first-child > :is(input, select):first-child) > div:first-child { padding-top: 6px; } }
+/* A placeholder or value longer than its field ends in "…" instead of being cut mid-word. */
+.field .ctl input { text-overflow: ellipsis; }
 /* Providers: configured list split into Local / Cloud, then "Add a provider" with one kind at a time. */
 .prov-list { margin-top: 14px; }
 .prov-group { display: flex; align-items: baseline; gap: 8px; margin: 16px 0 6px; font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: .04em; }
@@ -1313,10 +1327,17 @@ body.vscode-high-contrast :is(.seg, .scope) button.on, body.vscode-high-contrast
 .heal-note svg { width: 14px; height: 14px; flex: none; margin-top: 1px; }
 .heal-pol .tblwrap, .heal-checks .tblwrap { border: 1px solid var(--border-soft); border-radius: 6px; }
 .heal-pol-tbl th[scope="row"] { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: var(--fs-sm); white-space: nowrap; }
-.heal-pol-tbl th[scope="row"] .cat { display: block; font-family: var(--mono); font-size: var(--fs-2xs); color: var(--muted); font-weight: 400; }
+.heal-pol-tbl th[scope="row"] .heal-cat { display: block; font-family: var(--mono); font-size: var(--fs-2xs); color: var(--muted); font-weight: 400; }
 .heal-pol-tbl td { vertical-align: middle; }
 .heal-pol-tbl .row.unit-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
 .heal-pol-tbl input[type="number"] { width: 64px; }
+/* Column headers stay on one line, so the header row is one line tall at every width (the table scrolls instead). */
+.heal-pol-tbl thead th { white-space: nowrap; vertical-align: bottom; padding-top: 6px; padding-bottom: 6px; }
+/* Wide enough for its "default" placeholder. */
+.heal-pol-tbl input[type="number"].tmo { width: 80px; }
+.heal-pol-tbl input { text-overflow: ellipsis; }
+/* The last row's name cell (a <th>) has no rule under it either, like the <td>s beside it. */
+.heal-pol-tbl tbody tr:last-child th { border-bottom: none; }
 .heal-pol-tbl input[type="text"] { width: 120px; font-family: var(--mono); font-size: var(--fs-sm); }
 .heal-pol-tbl tr.fixed { color: var(--muted); }
 .heal-pol-tbl td.act { width: 1%; text-align: right; }
@@ -1644,8 +1665,6 @@ table.sr-only { display: block; }
 .rec-more summary svg { width: 11px; height: 11px; transition: transform .15s ease; }
 .rec-more[open] summary svg { transform: rotate(90deg); }
 .rec-more summary:hover { color: var(--fg); }
-/* Self-healing retry table: the failure id under each name is a plain caption, not a stretched chip. */
-.heal-pol-tbl th[scope="row"] .cat { background: none; border: 0; padding: 0; }
 /* Model runtimes: three columns only when each has room for its endpoint (no mid-word URL breaks). */
 .rts { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
 .rt .t span { overflow-wrap: break-word; }
