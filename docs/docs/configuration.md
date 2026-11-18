@@ -6,12 +6,14 @@ permalink: /docs/configuration/
 
 The easiest way to configure LocalPilot is its own **Settings** screen. Click the gear icon in the chat toolbar or run *LocalPilot: Settings*. The screen has:
 
-- a sidebar with **Dashboard** pinned at the top, then collapsible groups: **Models** (Providers, Models, Model gallery), **Agent** (Agent & approvals, Skills & subagents, Inline completions), **Tools & integrations** (MCP servers, Web search, Markdown & PDF), **Data & system** (Memory & history, Telemetry, Advanced) and **Help**
+- a sidebar with **Dashboard** and **Appearance** pinned at the top, then collapsible groups: **Models** (Providers, Models, Model gallery), **Agent** (Agent & approvals, Skills & subagents, Marketplace, Customize, Inline completions), **Tools & integrations** (MCP servers, Web search, Markdown & PDF), **Data & system** (Memory & history, Continuity & sync, Secrets, Telemetry, Keyboard shortcuts, Advanced) and **Help** (run setup again, rate LocalPilot, documentation). A section that needs attention carries a mark in the sidebar: a triangle on **Providers** when an enabled provider is down or missing its key, a diamond on **Secrets** when this machine cannot store secrets
+- a header on every page with the section's group, its name and what it is for; long pages (Agent & approvals, Models, Skills & subagents…) add **On this page** links that jump to each part
+- a search box (<kbd>⌘F</kbd> / <kbd>Ctrl+F</kbd>, or <kbd>/</kbd>) that finds every setting by name, key or everyday words. Results are grouped by page under *Group › Page*, with the words you typed underlined; <kbd>↑</kbd> <kbd>↓</kbd> and <kbd>Enter</kbd> jump to the setting and highlight it. The last entry searches the same words in VS Code's Settings editor
 - a marker showing whether a value comes from your User or Workspace settings
 - a reset button for every value
 - a **provider manager** with a *Test connection* button that lists the models each server exposes
 
-Click a group header to fold it; a folded group still shows the page you are on. The buttons above the groups fold the sidebar to an icon rail and expand or collapse every group. Both choices are remembered. In a narrow editor the sidebar becomes a strip of pills with every page.
+Click a group header to fold it; a folded group still shows the page you are on. The buttons above the groups fold the sidebar to an icon rail and expand or collapse every group. Both choices are remembered. In a narrow editor or the side bar the sidebar becomes a strip of pills (the current page with its name, the others as icons) and **⋯** lists every page. The page works from a 300 px side bar to a wide editor tab.
 
 The first time LocalPilot starts without a reachable model server or default model, it opens the **Setup** wizard. The wizard detects Ollama, LM Studio, llama.cpp and vLLM, recommends a model and sets an approval preset (*Careful*, *Balanced* or *Autonomous*). Run it again any time with *LocalPilot: Open Setup*. Turn off the automatic prompt with `localpilot.showWelcomeOnStartup`.
 
@@ -27,7 +29,7 @@ Expand a provider to edit it and press **Test connection**. LocalPilot checks th
 
 ![Agent & approvals page with the Careful / Balanced / Autonomous presets and per-action Ask / Allow / Block controls]({{ '/assets/screenshots/settings-agent.png' | relative_url }})
 
-The **Agent & approvals** page also has the terminal, hooks, worktree and parallelism settings. **Skills & subagents** manages installed skills, the skill registry and the extra skill and plugin folders.
+The **Agent & approvals** page also has the terminal, hooks, worktree and parallelism settings. **Skills & subagents** manages installed skills, the skill registry, the extra skill and plugin folders and lists the subagents. **Open Agent Map** there shows the agent, its subagents and the skills and MCP servers each one can reach as a map in an editor tab (command `localpilot.openAgentMap`).
 
 ![Skills & subagents page: how registry skills are used, where they install, and the built-in skills switch]({{ '/assets/screenshots/settings-skills.png' | relative_url }})
 

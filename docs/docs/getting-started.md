@@ -46,7 +46,7 @@ Pick one:
 
 Click the LocalPilot icon in the Activity Bar, or press <kbd>⌘⇧L</kbd> (<kbd>Ctrl+Shift+L</kbd> on Windows and Linux).
 
-On first launch the **Setup** screen opens. It looks for running model servers on their default ports.
+On first launch the **Setup** screen opens. Its three steps are shown at the top (**Find server**, **Choose model**, **Approvals**), with a check mark on the steps you have finished. The first one looks for running model servers on their default ports.
 
 ![Setup step 1: LocalPilot found Ollama with 3 models and Docker Model Runner with 1; LM Studio is not running. Below the list: add a custom endpoint or use a cloud API]({{ '/assets/screenshots/setup-detect.png' | relative_url }})
 

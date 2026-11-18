@@ -109,6 +109,8 @@
     bot: '<svg viewBox="0 0 16 16"><rect x="2.5" y="5" width="11" height="8.5" rx="2"/><path d="M8 2.5V5M6 9h.01M10 9h.01M1 9v1.5M15 9v1.5"/></svg>',
     sort: '<svg viewBox="0 0 16 16"><path d="M5 6.5L8 3.5l3 3M5 9.5l3 3 3-3"/></svg>',
     sortDown: '<svg viewBox="0 0 16 16"><path d="M8 3v10M4.5 9.5L8 13l3.5-3.5"/></svg>',
+    // A team: one agent connected to two helpers (the Agent team map).
+    team: '<svg viewBox="0 0 16 16"><circle cx="8" cy="3.6" r="1.9"/><circle cx="3.6" cy="12" r="1.9"/><circle cx="12.4" cy="12" r="1.9"/><path d="M7.1 5.3L4.5 10.3M8.9 5.3l2.6 5M5.5 12h5"/></svg>',
     palette: '<svg viewBox="0 0 16 16"><path d="M8 2a6 6 0 0 0 0 12c.9 0 1.4-.6 1.4-1.3 0-.4-.2-.7-.4-1-.3-.3-.4-.6-.4-1 0-.7.6-1.2 1.3-1.2H11a3 3 0 0 0 3-3C14 4.3 11.3 2 8 2z"/><path d="M4.8 7.6h.01M6.6 5h.01M9.6 4.8h.01M11.5 7.2h.01" stroke-width="2"/></svg>',
   };
   const SECTIONS = [
@@ -124,6 +126,8 @@
     { id: 'tools', label: 'Tools & integrations', items: ['mcp', 'web', 'documents'] },
     { id: 'data', label: 'Data & system', items: ['memory', 'continuity', 'secrets', 'telemetry', 'shortcuts', 'advanced'] },
   ];
+  /** The sidebar group a section sits in (its page eyebrow and search breadcrumb); the two home entries are "Overview". */
+  const NAV_GROUP_OF = Object.fromEntries([...NAV_HOME.map((id) => [id, 'Overview']), ...NAV_GROUPS.flatMap((g) => g.items.map((id) => [id, g.label]))]);
   /** Settings search. Sections match on their name plus these words; fields match on label and key and jump to the row
    *  (`field()` tags it with data-deps). Keep FIELD_INDEX in step with the field() calls of each section. */
   const SECTION_WORDS = {
@@ -1050,15 +1054,36 @@
     let hits = []; let sel = 0;
     const close = () => { list.classList.add('hidden'); q.setAttribute('aria-expanded', 'false'); };
     const fold = () => { close(); top.classList.remove('finding'); };
+    /** The query's words highlighted in a label (each character escaped on its own, so a mark never splits an entity). */
+    const mark = (text, v) => {
+      const words = v.toLowerCase().split(/\s+/).filter(Boolean);
+      const t = String(text); const low = t.toLowerCase(); const on = new Array(t.length).fill(false);
+      for (const w of words) { for (let i = low.indexOf(w); i >= 0; i = low.indexOf(w, i + w.length)) { on.fill(true, i, i + w.length); } }
+      let out = ''; let open = false;
+      for (let i = 0; i < t.length; i++) { if (on[i] !== open) { out += open ? '</mark>' : '<mark>'; open = on[i]; } out += esc(t[i]); }
+      return out + (open ? '</mark>' : '');
+    };
     const paint = () => {
-      const v = q.value.trim(); hits = v ? [...findSettings(v), { ext: v }] : []; sel = Math.min(sel, Math.max(0, hits.length - 1));
+      const v = q.value.trim();
+      // Hits of one section sit together under a "Group › Section" heading, in the order of their best hit.
+      const found = v ? findSettings(v) : []; const order = [...new Set(found.map((h) => h.sec))];
+      hits = v ? [...order.flatMap((sec) => found.filter((h) => h.sec === sec)), { ext: v }] : []; sel = Math.min(sel, Math.max(0, hits.length - 1));
       if (!v) { close(); return; }
-      const item = (h, i) => `<div class="find-item${h.ext ? ' ext' : ''}${i === sel ? ' sel' : ''}" role="option" id="find-${i}" aria-selected="${i === sel}" data-i="${i}">${h.ext
+      const item = (h, i) => `<div class="find-item${h.ext ? ' ext' : ''}${h.key || h.ext ? '' : ' secitem'}${i === sel ? ' sel' : ''}" role="option" id="find-${i}" aria-selected="${i === sel}" data-i="${i}">${h.ext
         ? `<span class="ico">${I.external}</span><span class="txt"><b>Search “${esc(h.ext)}” in VS Code settings</b><small>All LocalPilot settings in the Settings editor</small></span>`
-        : `<span class="ico">${secName[h.sec].icon}</span><span class="txt"><b>${esc(h.label)}</b><small>${h.key ? `${esc(secName[h.sec].label)} · <code>${esc(h.key)}</code>` : 'Section'}</small></span>`}</div>`;
-      list.innerHTML = (hits.length > 1 ? '' : `<div class="find-none">No setting matches “${esc(v)}”</div>`) + hits.map(item).join('');
+        : h.key ? `<span class="txt"><b>${mark(h.label, v)}</b><small><code>${esc(h.key)}</code></small></span>`
+          : `<span class="txt"><b>${mark(h.label, v)}</b><small>Open this section</small></span><span class="find-go" aria-hidden="true">${I.chev}</span>`}</div>`;
+      let n = 0;
+      const groups = order.map((sec) => {
+        const id = `find-g-${sec}`;
+        return `<div class="find-grp" role="group" aria-labelledby="${id}"><div class="find-gh" id="${id}"><span class="ico">${secName[sec].icon}</span><span class="g">${esc(NAV_GROUP_OF[sec] || '')}</span><span class="sep" aria-hidden="true">›</span><b>${esc(secName[sec].label)}</b></div>${found.filter((h) => h.sec === sec).map((h) => item(h, n++)).join('')}</div>`;
+      }).join('');
+      const intro = found.length ? `<div class="find-count" aria-hidden="true">${found.length} ${found.length === 1 ? 'match' : 'matches'}${found.length >= 8 ? ', best first' : ''}</div>` : `<div class="find-none">${I.search}<b>No setting matches “${esc(v)}”</b><span>Try another word, or search every LocalPilot setting in VS Code.</span></div>`;
+      list.innerHTML = intro + groups + item(hits[hits.length - 1], hits.length - 1)
+        + '<div class="find-keys" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>';
       list.classList.remove('hidden'); q.setAttribute('aria-expanded', 'true');
       q.setAttribute('aria-activedescendant', `find-${sel}`);
+      const cur = list.querySelector('.find-item.sel'); if (cur) { cur.scrollIntoView({ block: 'nearest' }); }
     };
     const pick = (h) => {
       if (!h) { return; }
@@ -1107,6 +1132,22 @@
     const side = app.querySelector('.side'); const on = side && side.querySelector('[data-sec].on');
     if (side && on && side.scrollWidth > side.clientWidth + 2) { on.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'instant' }); }
     if (side) { updateNavFades(side); }
+    // Sections with something to fix carry a small mark: a shape and a tooltip, with the words for screen readers.
+    const st = navStatus();
+    app.querySelectorAll('.side [data-sec]').forEach((a) => {
+      const s = st[a.dataset.sec]; let m = a.querySelector('.navst');
+      if (!s) { if (m) { m.remove(); } return; }
+      if (!m) { m = el('span'); a.appendChild(m); }
+      m.className = `navst ${s.tone}`; m.title = s.text; m.innerHTML = `<span class="sr-only">: ${esc(s.text)}</span>`;
+    });
+  }
+  /** What the sidebar flags: enabled providers that are down or missing their key, and a keychain LocalPilot cannot open. */
+  function navStatus() {
+    const d = state.data || {}; const out = {};
+    const bad = providersList().filter((p) => p.enabled !== false).filter((p) => { const h = (d.health || {})[p.id]; return h && (h.state === 'down' || h.state === 'nokey'); });
+    if (bad.length) { out.providers = { tone: 'warn', text: `${plural(bad.length, 'provider')} not answering or missing a key` }; }
+    if (d.secrets && d.secrets.ok === false && !d.secrets.opening) { out.secrets = { tone: 'err', text: 'Secrets cannot be stored on this machine' }; }
+    return out;
   }
   function updateNavFades(side) {
     const more = side.scrollWidth > side.clientWidth + 2;
@@ -1118,9 +1159,31 @@
     const sec = el('section', 'sec');
     if (enteredSection !== state.section) { sec.classList.add('enter'); enteredSection = state.section; }
     ({ providers: secProviders, models: secModels, gallery: secGallery, marketplace: secMarketplace, skills: secSkills, customize: secCustomize, agent: secAgent, completions: secCompletions, web: secWeb, documents: secDocuments, memory: secMemory, continuity: secContinuity, secrets: secSecrets, mcp: secMcp, dashboard: secDashboard, telemetry: secTelemetry, shortcuts: secShortcuts, advanced: secAdvanced, appearance: secAppearance }[state.section] || secProviders)(sec);
+    addToc(sec);
     wireGlobal(sec);
     const old = app.querySelector('main.content > .sec');
     if (old) { old.replaceWith(sec); } else { app.querySelector('main.content').appendChild(sec); }
+  }
+  /** A subheading's own words, without its count, badges and buttons. */
+  const subLabel = (h) => [...h.childNodes].filter((n) => n.nodeType === 3 || (n.nodeType === 1 && !n.matches('.count, .act, button, .btn, .badge, .hint'))).map((n) => n.textContent).join('').replace(/\s+/g, ' ').replace(/\s*\(\d+\)\s*$/, '').replace(/[\s(·]+$/, '').trim();
+  /** "On this page": jump links to a long section's subheadings, under its lead (a scrolling strip on narrow panels). */
+  function addToc(sec) {
+    if (state.section === 'dashboard') { return; }
+    const labels = [...new Set([...sec.querySelectorAll('h2.sub')].map(subLabel).filter(Boolean))];
+    if (labels.length < 4) { return; }
+    const nav = el('nav', 'toc'); nav.setAttribute('aria-label', 'On this page');
+    nav.appendChild(el('span', 'toc-lbl', 'On this page'));
+    for (const label of labels) {
+      const b = el('button', 'toc-link', esc(label)); b.type = 'button';
+      // Looked up on click: a state push may have redrawn the heading since.
+      b.onclick = () => {
+        const h = [...app.querySelectorAll('main.content > .sec h2.sub')].find((x) => subLabel(x) === label); if (!h) { return; }
+        h.tabIndex = -1; h.scrollIntoView({ block: 'start', behavior: calm() ? 'auto' : 'smooth' }); h.focus({ preventScroll: true });
+      };
+      nav.appendChild(b);
+    }
+    const at = sec.querySelector(':scope > .policy') || sec.querySelector(':scope > .lead');
+    if (at) { at.after(nav); } else { sec.prepend(nav); }
   }
   function wireGlobal(root) {
     // Commands run in the host with no reply, so the button acknowledges the click with a short spin of its icon.
@@ -1132,7 +1195,8 @@
   }
   // An organisation policy (managed-settings.json) is shown in full where it bites (approvals, providers), and as one line elsewhere.
   const policyNote = (full) => { const m = state.data && state.data.managed; if (!m) { return ''; } return `<div class="policy" role="note">${I.shield}<div><b>Managed by your organization</b>${m.message ? ` <span class="pm">${esc(m.message)}</span>` : ''}${full && m.lines.length ? `<ul>${m.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ' Some settings here may have no effect.'}<small>${esc(m.source)}</small></div></div>`; };
-  const head = (sec, title, lead) => { sec.innerHTML = `<h1>${esc(title)}</h1><p class="lead">${lead}</p>${policyNote(['Agent & approvals', 'Providers', 'Skills & subagents', 'MCP servers', 'Web search'].includes(title))}`; };
+  /** Page header: the section's icon, its sidebar group as an eyebrow, the title and a one-line lead. */
+  const head = (sec, title, lead) => { const s = SECTIONS.find((x) => x[0] === state.section); const grp = NAV_GROUP_OF[state.section]; sec.innerHTML = `<header class="sec-head">${s ? `<span class="sec-ic" aria-hidden="true">${s[2]}</span>` : ''}<div class="sec-tt">${grp ? `<p class="eyebrow">${esc(grp)}</p>` : ''}<h1>${esc(title)}</h1></div></header><p class="lead">${lead}</p>${policyNote(['Agent & approvals', 'Providers', 'Skills & subagents', 'MCP servers', 'Web search'].includes(title))}`; };
 
   // ------------------------------------------------------------------ providers
   function providersList() { const v = ownValue('providers'); return Array.isArray(v) ? v.map((p) => ({ ...p })) : []; }
@@ -3186,12 +3250,18 @@
 
     // ---- subagents
     const agents = d.agents || [];
-    sec.appendChild(el('h2', 'sub', `Subagents (${agents.length})`));
+    sec.appendChild(el('h2', 'sub', `Subagents<span class="count">${agents.length}</span>`));
+    // The Agent team map draws the agent, its subagents and what each can use; it opens in its own editor tab.
+    sec.appendChild(el('div', 'callout', `<span class="callout-ic" aria-hidden="true">${I.team}</span><div class="callout-t"><b>Agent team map</b><span>See the agent, its subagents and the skills and MCP servers each one can reach, on one map.</span></div><button class="btn" data-cmd="localpilot.openAgentMap" title="Open the Agent team map in an editor tab">${I.team}Open Agent Map</button>`));
     if (!agents.length) {
       sec.appendChild(emptyEl(I.bot, 'No subagents found. Create <code>.localpilot/agents/&lt;name&gt;.md</code> with a description and system prompt.'));
     } else {
-      const t = el('table', 'tbl', `<thead><tr><th>Name</th><th>Description</th><th>Source</th></tr></thead><tbody>${agents.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td>${esc(r.description)}</td><td><span class="badge">${esc(SOURCE_LABEL[r.source] || r.source)}</span></td></tr>`).join('')}</tbody>`);
-      sec.appendChild(card(t));
+      // Rows rather than a table: a name, what it is for and where it comes from, readable down to a 300 px sidebar.
+      const list = el('div', 'card agents-card');
+      for (const r of agents) {
+        list.appendChild(el('div', 'mrow sk agent', `<span class="ic brand-mark sk-ic" aria-hidden="true">${I.bot}</span><div class="t"><b>${esc(r.name)}</b><span>${esc(r.description || '')}</span></div><div class="mrow-right"><div class="tags"><span class="badge">${esc(SOURCE_LABEL[r.source] || r.source)}</span></div></div>`));
+      }
+      sec.appendChild(list);
     }
     const bar = el('div', 'btnrow'); bar.style.marginTop = '12px';
     bar.innerHTML = `<button class="btn" data-cmd="localpilot.reloadSkills">${I.refresh}Reload skills, subagents & MCP</button>`;
@@ -5107,7 +5177,7 @@
     const d = state.data;
     const su = state.setup;
     const wrap = el('div', 'setup');
-    wrap.innerHTML = `<div class="hero"><img src="${LOGO}" alt=""><h1>Welcome to LocalPilot</h1><p>A coding agent that runs on your machine. Let's connect a model server — it takes about a minute.</p></div><ol class="steps" aria-label="Setup progress">${['Find server', 'Choose model', 'Approvals'].map((n, i) => `<li class="${i <= su.step ? 'on' : ''}"${i === su.step ? ` aria-current="step"><span class="sr-only">Step ${i + 1} of 3: ${n}</span>` : '>'}</li>`).join('')}</ol>`;
+    wrap.innerHTML = `<div class="hero"><img src="${LOGO}" alt=""><h1>Welcome to LocalPilot</h1><p>A coding agent that runs on your machine. Let's connect a model server — it takes about a minute.</p></div><ol class="steps" aria-label="Setup progress">${['Find server', 'Choose model', 'Approvals'].map((n, i) => `<li class="${i < su.step ? 'on done' : i === su.step ? 'on cur' : ''}"${i === su.step ? ' aria-current="step"' : ''}><span class="n" aria-hidden="true">${i < su.step ? I.check : i + 1}</span><span class="l"><span class="sr-only">Step ${i + 1} of 3: </span>${n}${i < su.step ? '<span class="sr-only"> (done)</span>' : ''}</span></li>`).join('')}</ol>`;
     const c = el('div', 'card');
     if (su.step === 0) {
       c.innerHTML = `<h3>1 · Find your model server</h3><p class="hint">LocalPilot is checking the usual local ports. Start a server if nothing shows up, then check again.</p>`;

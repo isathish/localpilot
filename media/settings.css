@@ -277,7 +277,7 @@ input.invalid, textarea.invalid, select.invalid { box-shadow: 0 0 0 2px color-mi
 .detect { display: flex; flex-direction: column; gap: 8px; }
 .srv { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
 .srv .t { flex: 1; min-width: 0; } .srv .t b { display: block; font-size: var(--fs); } .srv .t span { display: block; font-size: var(--fs-xs); color: var(--muted); font-family: var(--mono); }
-.srv .t b .tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: var(--fs-2xs); font-weight: 600; line-height: 16px; vertical-align: 1px; color: var(--brand-ink, var(--fg)); background: color-mix(in srgb, var(--brand, #f2a33a) 22%, transparent); font-family: var(--sans, inherit); }
+.srv .t b .tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: var(--fs-2xs); font-weight: 600; line-height: 16px; vertical-align: 1px; color: var(--fg); background: color-mix(in srgb, var(--brand, #f2a33a) 22%, transparent); font-family: var(--sans, inherit); }
 .srv .t span code { font-family: var(--mono); font-size: var(--fs-xs); padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .dot.warn { background: var(--warn); color: var(--warn-text); }
 .srv .n { font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; }
@@ -1215,7 +1215,6 @@ body.vscode-light svg[viewBox="0 0 16 16"], html.light body svg[viewBox="0 0 16 
 .seg button.on { box-shadow: inset 0 -2px 0 var(--accent); color: var(--fg); font-weight: 600; }
 body.vscode-light .seg button.on, html.light body .seg button.on { box-shadow: inset 0 0 0 1px var(--border), inset 0 -2px 0 var(--accent); }
 body.vscode-high-contrast :is(.seg, .scope) button.on, body.vscode-high-contrast-light :is(.seg, .scope) button.on { outline: 1px solid var(--vscode-contrastActiveBorder, var(--focus)); outline-offset: -2px; }
-body.vscode-high-contrast .steps li:not(.on), body.vscode-high-contrast-light .steps li:not(.on) { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 /* Search: the hand-off to VS Code's Settings editor sits under the matches. */
@@ -1788,6 +1787,140 @@ body.vscode-high-contrast :is(.seg, .scope), body.vscode-high-contrast-light :is
 .look-sample pre .k { color: var(--vscode-symbolIcon-keywordForeground, var(--link)); } .look-sample pre .s { color: var(--vscode-debugTokenExpression-string, var(--brand-text)); }
 body[data-density="compact"] .look-sample { gap: var(--sp-1); padding: var(--sp-2) var(--field-px) var(--sp-3); }
 .look-more { margin: var(--sp-3) 0 0; }
+
+/* ==== Redesign: one type ramp and shape scale, page headers, jump links, pills, empty states, callouts ====
+   Shared design language with chat.css (same token names where they mean the same thing): 13 / 12 / 11 px type,
+   weights 400 and 600, line-height 1.45; spacing on 4/8/12/16/24/32; radius 6 for controls, 10 for cards, 999 for
+   pills; 1 px borders; elevation only for popovers. Colours come from --vscode-* only; status tints are color-mix()es
+   of the theme's status colours. */
+:root { --radius-sm: 6px; --radius: 10px; --radius-lg: 12px; --radius-pill: 999px; --brand-ink: var(--brand-fg); --lh: 1.45; }
+body {
+  --fs-2xs: calc(11px * var(--fs-scale));
+  --ok-bg: color-mix(in srgb, var(--ok) 16%, transparent);
+  --warn-bg: color-mix(in srgb, var(--warn) 18%, transparent);
+  --err-bg: color-mix(in srgb, var(--error) 15%, transparent);
+  --info-bg: color-mix(in srgb, var(--link) 14%, transparent);
+  --label-caps: 600 var(--fs-xs) / 1.3 var(--vscode-font-family);
+  line-height: var(--lh);
+}
+body.vscode-high-contrast, body.vscode-high-contrast-light { --ok-bg: transparent; --warn-bg: transparent; --err-bg: transparent; --info-bg: transparent; }
+/* Two weights: regular for reading, semibold for names and labels. */
+.field .lbl, .prov-title b, .preset b, .mrow .t b, .find-item b, .job .t b, .mdl .t b, .srv .t b { font-weight: 600; }
+.btn { font-weight: 400; } .btn.primary, .btn.brand { font-weight: 600; }
+
+/* ---- page header: section icon, the sidebar group as an eyebrow, title, lead */
+.sec-head { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; margin: 0 0 var(--sp-2); }
+.sec-ic { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: var(--radius); color: var(--fg); background: var(--tint-2); box-shadow: inset 0 0 0 1px var(--edge); }
+.sec-ic svg { width: 18px; height: 18px; stroke-width: 1.6; }
+.sec-tt { min-width: 0; }
+.eyebrow { margin: 0 0 2px; font: var(--label-caps); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.content .sec-head h1 { margin: 0; overflow-wrap: anywhere; }
+.content .lead:empty { display: none; }
+body.vscode-high-contrast .sec-ic, body.vscode-high-contrast-light .sec-ic { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+@media (max-width: 480px) { .sec-ic { width: 30px; height: 30px; border-radius: 8px; } .sec-ic svg { width: 16px; height: 16px; } .sec-head { gap: var(--sp-2); } }
+
+/* ---- "On this page": jump links to a long section's subheadings (a scrolling strip in a sidebar) */
+.toc { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: calc(var(--sp-2) - var(--sp-6)) 0 var(--sp-6); }
+.toc-lbl { margin-right: 2px; font: var(--label-caps); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.toc-link { height: 24px; padding: 0 10px; border-radius: var(--radius-pill); border: 1px solid var(--edge); color: var(--muted); font-size: var(--fs-sm); white-space: nowrap; transition: background-color .12s, color .12s; }
+.toc-link:hover { color: var(--fg); background: var(--tint); }
+.toc-link:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+body[data-density="compact"] .toc { margin: calc(var(--sp-1) - var(--sp-4)) 0 var(--sp-4); }
+@media (max-width: 760px) {
+  .toc { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: calc(-1 * var(--page-px)); padding-inline: var(--page-px); }
+  .toc::-webkit-scrollbar { display: none; }
+  .toc-lbl { display: none; }
+}
+/* A jump lands the heading under the sticky header (and the pill strip in a sidebar), not behind it. */
+h2.sub { scroll-margin-top: calc(var(--top-h) + var(--sp-4)); }
+h2.sub:focus { outline: none; }
+@media (max-width: 760px) { h2.sub { scroll-margin-top: calc(var(--top-h) + 52px); } }
+h2.sub .count { font-weight: 400; }
+
+/* ---- status pills: one shape for every badge; the words carry the state, the tint only repeats it */
+.badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; line-height: 18px; padding: 0 7px; border-radius: var(--radius-pill); font-size: var(--fs-2xs); font-weight: 600; letter-spacing: 0; vertical-align: middle; }
+.badge.ok, .badge.on { background: var(--ok-bg); color: var(--ok-text); }
+.badge.warn { background: var(--warn-bg); color: var(--warn-text); }
+.badge.err { background: var(--err-bg); color: var(--error-text); }
+body.vscode-high-contrast .badge, body.vscode-high-contrast-light .badge { box-shadow: inset 0 0 0 1px currentColor; border: 0; }
+
+/* ---- empty states: an icon, a sentence, and the way out; quiet (dashed edge) so they never look like an error */
+.empty.has-ic { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); padding: var(--sp-6) var(--sp-4); border: 1px dashed var(--edge); border-radius: var(--radius); background: none; text-align: center; line-height: var(--lh); }
+.empty.has-ic > span:last-child { max-width: 52ch; }
+.empty-ic { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--tint-2); color: var(--muted); }
+.empty-ic svg { width: 18px; height: 18px; margin: 0; opacity: 1; }
+.card > .empty, .card > .empty.has-ic { border: 0; border-radius: 0; }
+p.empty { border-color: var(--edge); border-radius: var(--radius); }
+
+/* ---- callout: a row that points somewhere else (the Agent team map) */
+.callout { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); margin: 0 0 var(--card-gap); padding: var(--sp-3) var(--field-px); border: 1px solid var(--edge); border-radius: var(--radius); background: var(--surface); }
+.callout-ic { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 8px; background: var(--tint-2); color: var(--fg); }
+.callout-ic svg { width: 17px; height: 17px; }
+.callout-t { flex: 1 1 180px; min-width: 0; }
+.callout-t b { display: block; font-weight: 600; }
+.callout-t span { display: block; font-size: var(--fs-sm); color: var(--muted); }
+.callout .btn { flex: none; margin-left: auto; }
+body.vscode-high-contrast .callout-ic, body.vscode-high-contrast-light .callout-ic { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+/* Subagents: rows like installed skills (name, purpose, where it comes from). */
+.agents-card .mrow.agent { grid-template-columns: auto minmax(0, 1fr) auto; }
+@media (max-width: 760px) { .agents-card .mrow.agent { grid-template-columns: auto minmax(0, 1fr); } }
+
+/* Segmented choices never break a label; a strip too wide for its row wraps whole buttons instead. */
+.seg > button, .scope > button { white-space: nowrap; }
+
+/* ---- tables: a card holding a table scrolls sideways inside itself instead of sticking out */
+.card:has(> .tbl), .card:has(> table) { overflow-x: auto; }
+.tbl th { font: var(--label-caps); text-transform: uppercase; letter-spacing: .06em; }
+
+/* ---- sidebar: group labels in caps, and a status mark on sections that need attention */
+.side button.grp, .side .grp { font-size: var(--fs-2xs); letter-spacing: .06em; }
+.side a { position: relative; }
+.side a .navst { margin-left: auto; width: 8px; height: 8px; flex: none; border-radius: 50%; }
+.side a .navst.warn { width: 9px; border-radius: 0; background: var(--warn); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.side a .navst.err { border-radius: 1px; background: var(--error); transform: rotate(45deg) scale(.9); }
+.side.rail a .navst { position: absolute; top: 5px; right: 7px; margin: 0; }
+@media (max-width: 760px) { .side a .navst { margin-left: 2px; } }
+
+/* ---- settings search: hits grouped by section under a "Group › Section" heading; matched words marked */
+.find-list { min-width: min(340px, calc(100vw - 24px)); max-height: min(70vh, 520px); overflow-y: auto; padding: var(--sp-1) var(--sp-1) 0; border-radius: var(--radius); }
+.find-count { padding: 6px 8px 2px; font-size: var(--fs-xs); color: var(--muted); }
+.find-grp { padding: 2px 0 4px; }
+.find-grp + .find-grp { border-top: 1px solid var(--divider); }
+.find-gh { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 8px 3px; font: var(--label-caps); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.find-gh .ico { display: inline-grid; place-items: center; flex: none; } .find-gh .ico svg { width: 12px; height: 12px; }
+.find-gh .sep { flex: none; }
+/* The section name wins the room; the group before it is the part that shortens. */
+.find-gh .g { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-gh b { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
+.find-gh b { flex-shrink: 0; max-width: 70%; }
+.find-grp .find-item { padding-left: 26px; }
+.find-item .find-go { margin-left: auto; display: inline-grid; place-items: center; color: var(--muted); flex: none; } .find-item .find-go svg { width: 12px; height: 12px; }
+.find-item mark { background: none; color: inherit; font-weight: 600; text-decoration: underline; text-decoration-color: var(--brand); text-decoration-thickness: 2px; text-underline-offset: 2px; }
+.find-item.sel mark { text-decoration-color: currentColor; }
+.find-item.ext { margin-top: 0; }
+.find-none { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: var(--sp-4) var(--sp-3) var(--sp-3); }
+.find-none svg { width: 18px; height: 18px; opacity: .8; } .find-none b { color: var(--fg); font-weight: 600; } .find-none span { font-size: var(--fs-xs); }
+.find-keys { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 2px -4px 0; padding: 6px 12px; border-top: 1px solid var(--divider); font-size: var(--fs-xs); color: var(--muted); }
+.find-keys kbd { display: inline-block; min-width: 16px; margin-right: 2px; padding: 0 4px; border-radius: 4px; background: var(--tint-2); font-family: var(--mono); font-size: var(--fs-2xs); line-height: 16px; text-align: center; }
+@media (max-width: 480px) { .find-keys { display: none; } .find-list { padding-bottom: var(--sp-1); } }
+
+/* ---- setup wizard: a labelled stepper (number, then a check once done) */
+.steps { align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.steps li, .steps li.on { display: flex; align-items: center; gap: var(--sp-2); width: auto; height: auto; border-radius: 0; background: none; font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; }
+.steps li + li::before { content: ''; width: 24px; height: 1px; background: var(--edge); }
+.steps .n { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--edge); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.steps .n svg { width: 12px; height: 12px; stroke-width: 2.2; }
+.steps li.done .n { background: var(--tint-2); color: var(--fg); }
+.steps li.cur { color: var(--fg); font-weight: 600; }
+.steps li.cur .n { border-color: transparent; background: var(--brand); color: var(--brand-fg); }
+body.vscode-high-contrast .steps li.cur .n, body.vscode-high-contrast-light .steps li.cur .n { background: transparent; color: var(--fg); border: 2px solid var(--vscode-contrastActiveBorder, var(--focus)); }
+@media (max-width: 480px) { .steps li:not(.cur) .l { display: none; } .steps li + li::before { width: 14px; } }
+.setup .card { border-radius: var(--radius); }
+/* Model choices in a sidebar: the capability tags go under the name instead of past the card's edge. */
+.mdl { flex-wrap: wrap; } .mdl .t { flex: 1 1 140px; } .mdl .tags { flex-wrap: wrap; }
+@media (max-width: 480px) { .mdl .tags { width: 100%; padding-left: 36px; } }
+/* List rows (suggested skills, folders): the text shrinks and wraps; the actions stay inside the row. */
+.list li { flex-wrap: wrap; min-width: 0; } .list li > div { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
 
 /* ==== Motion ==== Small, purposeful, never moving content already on screen. */
 .seg button, .scope button, .chip, .btn { transition: background-color .12s, color .12s, border-color .12s, box-shadow .15s; }

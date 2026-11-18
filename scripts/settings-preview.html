@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<!-- Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|appearance|… and ?light=1 (?web=0: web search off; ?density=compact&text=large&motion=reduced: appearance) -->
+<!-- Preview harness for media/settings.js with mock VS Code state. Open ?section=providers|models|agent|appearance|… and ?light=1, ?hc=1 (high contrast; with ?light=1 high contrast light) (?web=0: web search off; ?density=compact&text=large&motion=reduced: appearance) -->
 <style>
 :root{
 --vscode-button-secondaryBackground:#313131;--vscode-button-secondaryForeground:#cccccc;--vscode-button-secondaryHoverBackground:#3c3c3c;--vscode-button-border:#ffffff12;--vscode-icon-foreground:#cccccc;
@@ -25,6 +25,25 @@ html.light{
 --vscode-textCodeBlock-background:#f0f0f0;--vscode-notifications-background:#f3f3f3;
 --vscode-charts-blue:#0a66c2;--vscode-charts-green:#388a34;--vscode-charts-red:#e51400;--vscode-charts-yellow:#bf8803;--vscode-charts-orange:#d18616;--vscode-charts-purple:#652d90;--vscode-charts-lines:#00000080;
 }
+/* ?hc=1 (with ?light=1: high contrast light): the palettes of VS Code's Dark / Light High Contrast themes. */
+html.hc{
+--vscode-editor-background:#000000;--vscode-foreground:#ffffff;--vscode-descriptionForeground:#ffffffb3;--vscode-widget-border:#6fc3df;--vscode-contrastBorder:#6fc3df;--vscode-contrastActiveBorder:#f38518;
+--vscode-sideBar-background:#000000;--vscode-editorWidget-background:#0c141f;--vscode-list-hoverBackground:transparent;
+--vscode-input-background:#000000;--vscode-input-foreground:#ffffff;--vscode-input-border:#6fc3df;
+--vscode-button-background:#000000;--vscode-button-foreground:#ffffff;--vscode-button-hoverBackground:#000000;--vscode-button-border:#6fc3df;--vscode-focusBorder:#f38518;
+--vscode-button-secondaryBackground:#000000;--vscode-button-secondaryForeground:#ffffff;
+--vscode-textLink-foreground:#21a6ff;--vscode-errorForeground:#f48771;--vscode-editorWarning-foreground:#ffd370;--vscode-testing-iconPassed:#73c991;
+--vscode-textCodeBlock-background:#000000;--vscode-notifications-background:#000000;
+--vscode-charts-blue:#3794ff;--vscode-charts-green:#89d185;--vscode-charts-red:#f48771;--vscode-charts-yellow:#ffd370;--vscode-charts-orange:#f38518;--vscode-charts-purple:#b180d7;--vscode-charts-lines:#ffffff;
+}
+html.hc.hcl{
+--vscode-editor-background:#ffffff;--vscode-foreground:#292929;--vscode-descriptionForeground:#292929b3;--vscode-widget-border:#0f4a85;--vscode-contrastBorder:#0f4a85;--vscode-contrastActiveBorder:#006bbd;
+--vscode-sideBar-background:#ffffff;--vscode-editorWidget-background:#ffffff;--vscode-list-hoverBackground:transparent;
+--vscode-input-background:#ffffff;--vscode-input-foreground:#292929;--vscode-input-border:#0f4a85;
+--vscode-button-background:#0f4a85;--vscode-button-foreground:#ffffff;--vscode-button-hoverBackground:#0f4a85;--vscode-focusBorder:#006bbd;--vscode-button-secondaryBackground:#ffffff;--vscode-button-secondaryForeground:#292929;
+--vscode-textLink-foreground:#0f4a85;--vscode-errorForeground:#b5200d;--vscode-editorWarning-foreground:#895503;--vscode-testing-iconPassed:#007100;
+--vscode-textCodeBlock-background:#ffffff;--vscode-notifications-background:#ffffff;--vscode-charts-lines:#292929;
+}
 </style>
 <link rel="stylesheet" href="../media/settings.css"></head>
 <body data-logo="../media/logo.svg">
@@ -32,10 +51,11 @@ html.light{
 <div id="toasts" role="status" aria-live="polite"></div>
 <script>
 const q = new URLSearchParams(location.search);
-if (q.get('light')) document.documentElement.classList.add('light');
+// High contrast light gets its own class: the html.light rules in settings.css are the harness's stand-in for vscode-light only.
+if (q.get('light') && !q.get('hc')) document.documentElement.classList.add('light');
 // VS Code tags the body with the active theme kind; the stylesheet keys light/HC adjustments off these.
 document.body.classList.add(q.get('hc') ? (q.get('light') ? 'vscode-high-contrast-light' : 'vscode-high-contrast') : q.get('light') ? 'vscode-light' : 'vscode-dark');
-if (q.get('hc')) document.documentElement.style.setProperty('--vscode-contrastBorder', q.get('light') ? '#0f4a85' : '#6fc3df');
+if (q.get('hc')) document.documentElement.classList.add('hc', ...(q.get('light') ? ['hcl'] : []));
 const section = q.get('section') || 'providers';
 const page = q.get('page') || 'settings';
 const providers = [
