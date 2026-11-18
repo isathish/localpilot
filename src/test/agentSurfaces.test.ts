@@ -69,7 +69,7 @@ suite('Agent surfaces: the Agents view', () => {
 
   test('groups: Needs you (waiting + changes to review) · Running · Recent, each agent once', () => {
     const sessions = [summary('wait'), summary('run'), summary('pause'), summary('review'), summary('done'), summary('old')];
-    const c = fakeController({ sessions, running: ['wait', 'run', 'pause'], paused: ['pause'], prompts: ['wait'], files: { review: 2, run: 1 }, last: { done: { status: 'done', endedAt: now - 60e3 } } });
+    const c = fakeController({ sessions, running: ['wait', 'run', 'pause'], paused: ['pause'], prompts: ['wait'], files: { review: 2, run: 1 }, last: { done: { status: 'done', endedAt: Date.now() - 60e3 } } });
     const tree = new AgentsTreeProvider(c);
     try {
       const roots = tree.getChildren();
