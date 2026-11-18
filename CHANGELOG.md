@@ -4,6 +4,8 @@ All notable changes to LocalPilot are documented here. The format follows [Keep 
 
 ## Unreleased
 
+## 1.10.2 — 2026-11-18
+
 ### Fixed
 - **Azure OpenAI lists your deployments, and each one works.** A connected Azure resource showed 0 models: its listing marks chat models `chat_completion`, which LocalPilot did not recognise, and it lists the base models the resource could deploy rather than the deployments a request has to name. LocalPilot now lists the resource's deployments (falling back to the model listing where a resource does not offer the deployment list), takes context window, vision and prices from the model behind each one, and sends Claude deployments through Anthropic's Messages API on the same resource, since they do not answer the OpenAI chat API.
 
