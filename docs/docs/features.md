@@ -148,6 +148,7 @@ See [Parallel agents & change review]({{ '/docs/parallel-agents/' | relative_url
 
   Models without native tool calling use a text protocol. See [MCP]({{ '/docs/mcp/' | relative_url }}).
 - **Skills and subagents.** 14 built-in skills load when a request matches them. Install more from GitHub, or let a recurring request become a new skill. Nine subagents are built in: `clarifier`, `explore`, `planner`, `coder`, `tester`, `debugger`, `reviewer`, `docs` and `researcher`. Add your own in `.localpilot/agents/`. See [Skills & subagents]({{ '/docs/skills-and-agents/' | relative_url }}).
+- **Agent map.** **LocalPilot: Open Agent Map** draws Auto, the modes, specialists, subagents, skills, tools and MCP servers with the model each one runs on and how work flows between them. Type a message to see the route Auto takes, and change models, skills, approvals and servers from the map ([details]({{ '/docs/skills-and-agents/#agent-map' | relative_url }})).
 - **Claude Code compatibility.** Skills, agents, custom commands, plugins, permission rules and hooks from `.claude/` work unchanged. See [Claude Code compatibility]({{ '/docs/claude-code-compatibility/' | relative_url }}).
 - **Images and browser.** Capture a region, window or screen (<kbd>⌘⌥⇧S</kbd>), or paste or drop an image. Images go to a vision model. The agent can screenshot and inspect web pages and local dev servers. See [Screenshots & images]({{ '/docs/images/' | relative_url }}).
 

@@ -96,7 +96,8 @@ function matchRule(text: string): Rule | undefined {
   return RULES.find((r) => !(build && r.incidental) && r.test.test(r.kind === 'debug' ? reported : text));
 }
 
-const BY_KIND: Record<TaskKind, { mode: Session['mode']; specialist?: SpecialistId; role: ModelRole }> = {
+/** What Auto does with each kind of task (also drawn by the Agent map). */
+export const BY_KIND: Record<TaskKind, { mode: Session['mode']; specialist?: SpecialistId; role: ModelRole }> = {
   question: { mode: 'ask', role: 'agent' },
   explain: { mode: 'ask', specialist: 'explain', role: 'agent' },
   project: { mode: 'ask', specialist: 'project', role: 'agent' },

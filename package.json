@@ -529,6 +529,12 @@
         "icon": "$(book)"
       },
       {
+        "command": "localpilot.openAgentMap",
+        "title": "Open Agent Map",
+        "category": "LocalPilot",
+        "icon": "$(type-hierarchy)"
+      },
+      {
         "command": "localpilot.reloadSkills",
         "title": "Reload Skills, Subagents & MCP Servers",
         "category": "LocalPilot"
@@ -1147,6 +1153,11 @@
         },
         {
           "command": "localpilot.queue.add",
+          "when": "view =~ /^localpilot\\.agentsView/",
+          "group": "navigation@3"
+        },
+        {
+          "command": "localpilot.openAgentMap",
           "when": "view =~ /^localpilot\\.agentsView/",
           "group": "navigation@3"
         },

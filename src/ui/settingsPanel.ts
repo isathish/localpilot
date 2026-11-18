@@ -324,7 +324,7 @@ const ALLOWED_COMMANDS = new Set([
   'localpilot.rate', 'localpilot.openChat', 'localpilot.newSession', 'localpilot.openMemory', 'localpilot.clearMemory', 'localpilot.clearHistory', 'localpilot.showSessions', 'localpilot.reloadSkills', 'localpilot.showLogs', 'localpilot.installCli',
   'localpilot.refreshModels', 'localpilot.openWelcome', 'localpilot.openSettings', 'localpilot.openMarkdownViewer', 'localpilot.openPdf', 'localpilot.openTerminal', 'workbench.action.openSettingsJson', 'workbench.action.openWorkspaceSettingsFile',
   'workbench.action.openWalkthrough', 'workbench.action.openSettings', 'workbench.action.selectTheme', 'localpilot.autoSetupModels', 'localpilot.installModel', 'localpilot.removeModel', 'localpilot.manageModels', 'localpilot.browseModelGallery',
-  'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills', 'localpilot.manageSkills',
+  'localpilot.createSkill', 'localpilot.dismissSkillTopic', 'localpilot.installSkill', 'localpilot.browseSkills', 'localpilot.manageSkills', 'localpilot.openAgentMap',
   'localpilot.editMcpConfig', 'localpilot.setupRedis', 'localpilot.telemetry.testOtlp', 'localpilot.startColibri', 'localpilot.stopColibri', 'localpilot.startGateway', 'localpilot.stopGateway',
   'localpilot.selectTerminalProfile', 'localpilot.browsePlugins', 'localpilot.managePlugins', 'workbench.action.reloadWindow', 'localpilot.setProviderApiKey',
   'localpilot.continuity.rebuildIndex', 'localpilot.continuity.backupNow', 'localpilot.continuity.restoreBackup', 'localpilot.continuity.openDataFolder', 'localpilot.continuity.openMemoryManager', 'localpilot.continuity.openContextLibrary', 'localpilot.continuity.openCheckpoints',

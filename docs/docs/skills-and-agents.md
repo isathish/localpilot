@@ -319,6 +319,36 @@ Disabled skills are filtered out at every level. A subagent without `load_skill`
 
 Read-only subagents run on a small *fast* model when routing finds one. If that model sends no first token within a minute, the subagent falls back to the parent's model instead of failing. The router then skips the unresponsive model for 10 minutes. A broken or half-downloaded small model costs one subagent one minute, not the whole run.
 
+## Agent map
+
+The Agent map shows every agent LocalPilot has and how work flows between them, on one page, and lets you configure them from there. Open it with **LocalPilot: Open Agent Map** in the Command Palette or the map button in the **Agents** view's title bar. Everything on it is read from your live settings, skills, subagent files and MCP servers, and it redraws when any of them changes.
+
+It shows five layers, left to right:
+
+- **Auto and the model roles.** How Auto routes a message: which kind of request goes to which mode or specialist and which model role (`agent`, `reasoning` or `fast`) answers it. Each role (Default model, Reasoning, Fast, Coding, Vision) shows its setting and the model it resolves to right now, which is what the router would pick with `localpilot.models.localOnly` and the installed models as they are.
+- **Modes and specialists.** Ask, Agent, Plan, Debug and Multitask, and the Architect, Review, Test, Refactor, Explain, Terminal and Project specialists, with what each may do (read, edit, run commands), the mode a specialist runs in, the subagent whose playbook it follows and the model role it uses.
+- **Subagents.** The built-in ones and yours from `.localpilot/agents/`, `.claude/agents/`, your home folder and plugins: where each comes from, its model or role, its allowed tools and the skills it preloads. Every mode can start them; in Ask and Plan they run read-only.
+- **Skills.** Built-in, workspace, user, plugin and organization skills, whether each is on, always on or disabled, who can load it, and how often it was used recently.
+- **Tools and MCP servers.** Tools grouped by kind (read, edit, delete, terminal, web, delegation) with their approval level and how many are switched off, and each MCP server with its status and tool count.
+
+Lines connect Auto to the modes it picks, specialists to their playbooks, modes to the subagents they can start, and subagents to the skills they preload. Hover over or focus a box to see all of its connections, including the skills, tools and model role it uses.
+
+**Try a message.** Type a request in the box at the top. Auto's router (the same one the chat uses, offline) classifies it as you type, highlights the path it would take and says why: for example *Auto → Review in ask mode · reasoning role → gpt-oss:20b — asks for a review*.
+
+**Configure from the map.** Click a box to open its details on the right (on a narrow window they cover the map; **Esc** closes them):
+
+| Box | What you can change | Where it is saved |
+|---|---|---|
+| Model role | The model, or Automatic | `localpilot.defaultModel`, `localpilot.routing.reasoning`, `.fast`, `.coding`, `.vision` |
+| Skill | On or off; open its `SKILL.md` | `localpilot.skills.disabled` |
+| Subagent | Open its file; for a built-in one, **Customize** copies it into `.localpilot/agents/` (or `~/.localpilot/agents/`), where it replaces the built-in | the agent file |
+| Tool group | Approval level; each tool on or off | `localpilot.approvals.*`, `localpilot.disabledTools` |
+| MCP server | On or off, restart, approval for MCP tools | the file the server is configured in (`localpilot.mcpServers` or its `mcp.json`), same as Settings → MCP servers; `localpilot.approvals.mcp` |
+
+**+ Subagent** and **+ Skill** create a starter file in this workspace's `.localpilot/` folder or in `~/.localpilot/` and open it. Changes go through the same settings as the Settings page and the `localpilot` CLI, so all three always agree. Pinning a skill is per chat: use that chat's Skills menu or `/skill`.
+
+**Graph and List.** The graph lays out the layers in columns. Drag the background or scroll to pan; pinch or <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+scroll to zoom. With a box focused, the arrow keys move between boxes, <kbd>Enter</kbd> opens its details, <kbd>+</kbd> and <kbd>−</kbd> zoom, <kbd>0</kbd> fits the map and <kbd>Shift</kbd>+arrows pan. **List** shows the same boxes as grouped lists that work with the keyboard and screen readers; the map switches to it by itself when its window is narrower than about 560 px. The filter box (<kbd>/</kbd>) matches names, kinds and sources, and **All / Agents / Skills / Tools** narrows the view.
+
 ## Understanding vague requests
 
 Many prompts are terse: *fix this*, *make it faster*, *tests?*. LocalPilot works out the intent from what you are doing instead of guessing or stopping to ask.

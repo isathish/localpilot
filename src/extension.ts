@@ -81,6 +81,7 @@ import { createShowMarkdownTool, MarkdownViewer } from './ui/markdownViewer';
 import { MarkdownCustomEditor } from './ui/markdown/customEditor';
 import { registerMarkdownCommands } from './ui/markdown/commands';
 import { SettingsPanel, SettingsSection, WELCOMED_KEY } from './ui/settingsPanel';
+import { AgentMapPanel } from './ui/agentMap';
 import { continuityView, openContinuity, registerContinuityCommands, runContinuityAction } from './ui/continuityData';
 import { ContinuityHost, registerConversationCommands, showContinuityPage } from './ui/continuityHost';
 import { registerSyncCommands, SyncHost } from './ui/syncHost';
@@ -642,6 +643,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       return { enabled: !offBecause, offBecause, endpoint: c.endpoint, fromEnv: c.fromEnv };
     });
   settingsPanel.learner = learner;
+  // Agent map: every agent, skill, tool and model role, drawn from the same settings and registries Settings uses.
+  const agentMap = new AgentMapPanel(context, providers, skills, mcp, () => tools.list(), log);
+  agentMap.learner = learner;
+  context.subscriptions.push(agentMap);
   settingsPanel.continuity = { view: () => continuityView(continuity), action: (a) => runContinuityAction(continuity.current, a, log) };
   const syncSettings = new SyncSettings(syncHost, () => openSyncManager());
   settingsPanel.sync = { view: () => syncSettings.view(), action: (a, o) => syncSettings.action(a, o) };
@@ -1622,6 +1627,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
   cmd('localpilot.manageModels', () => settingsPanel.show('settings', 'models'));
   cmd('localpilot.browseModelGallery', () => settingsPanel.show('settings', 'gallery'));
   cmd('localpilot.manageSkills', () => settingsPanel.show('settings', 'skills'));
+  // Returns the panel so the Extension Host tests can drive it (commands run in-process return the object itself).
+  cmd('localpilot.openAgentMap', () => {
+    agentMap.show();
+    return agentMap;
+  });
   cmd('localpilot.openDashboard', () => settingsPanel.show('settings', 'dashboard'));
   cmd('localpilot.setupRedis', () => setupRedis(log));
   cmd('localpilot.telemetry.testOtlp', async () => {
