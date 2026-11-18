@@ -382,6 +382,12 @@
         "icon": "$(diff)"
       },
       {
+        "command": "localpilot.reviewSession",
+        "title": "Review Changes",
+        "category": "LocalPilot",
+        "icon": "$(diff-multiple)"
+      },
+      {
         "command": "localpilot.keepChanges",
         "title": "Accept",
         "category": "LocalPilot",
@@ -1284,6 +1290,16 @@
           "group": "1_worktree@0"
         },
         {
+          "command": "localpilot.reviewSession",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-idle-changed",
+          "group": "inline@0"
+        },
+        {
+          "command": "localpilot.reviewSession",
+          "when": "view =~ /^localpilot\\.agentsView/ && viewItem =~ /^session-(idle|paused|running)[^ ]*-changed/",
+          "group": "1_open@0"
+        },
+        {
           "command": "localpilot.keepChanges",
           "when": "view =~ /^localpilot\\.agentsView/ && viewItem == session-idle-changed",
           "group": "inline@1"
@@ -1454,6 +1470,10 @@
         {
           "command": "localpilot.showDiff",
           "when": "false"
+        },
+        {
+          "command": "localpilot.reviewSession",
+          "when": "localpilot.hasChanges"
         },
         {
           "command": "localpilot.keepChanges",

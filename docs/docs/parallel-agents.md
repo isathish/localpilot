@@ -31,7 +31,7 @@ Working with tabs:
 - **Right-click:** Rename, Pin, Fork, Export, Pause / Resume, Stop, Clear messages, Close, Delete, and bulk actions (*Close other tabs*, *Close tabs to the right*, *Close finished tabs*, *Stop all agents*).
 - **Select several:** ⌘/Ctrl-click or Shift-click, then close, stop or delete them together.
 - **Keyboard:** <kbd>Alt↑</kbd> / <kbd>Alt↓</kbd> cycle tabs, <kbd>Alt1…9</kbd> jump, <kbd>←</kbd> / <kbd>→</kbd> move between focused tabs.
-- **Background strip:** agents running in other tabs appear under the tab bar with their current step. Click to switch, ⏸ to pause or resume, ■ to stop.
+- **Agents strip:** agents running in other tabs appear under the tab bar with their status, current step, elapsed time and model. Click to switch, ⏸ to pause or resume, ■ to stop. When the open chat belongs to a batch (Best of N or Run Tasks in Parallel), the strip lists every agent of the batch, including the finished ones, with what each has cost so far and a **Compare** (Best of N) or **Review** link. See [Status at a glance](#status-at-a-glance).
 
 Each tab keeps its own draft, attachments, scroll position and status line. Up to 12 tabs are shown; the rest are under **+N** / **All chats**.
 
@@ -57,6 +57,21 @@ When the last agent of a batch finishes, a notification offers **Review results*
 
 ![The Multitask launcher on Split the work: three tasks, one per row, with Add another task and ideas for this project]({{ '/assets/screenshots/multitask-launcher.png' | relative_url }})
 
+## Status at a glance
+
+Every agent surface uses the same six words, each with its own icon, so a status never depends on colour alone:
+
+| Status | Icon | Means |
+|---|---|---|
+| **Running** | breathing dot | Working on its task |
+| **Waiting for you** | triangle | Blocked on an approval or a question; open it to answer |
+| **Paused** | two bars | Holding after its current step until you resume it |
+| **Done** | check | Finished |
+| **Failed** | × | Ended with an error |
+| **Stopped** | square | You (or its batch) stopped it; not a failure |
+
+Queued workers show a hollow ring and the word *Queued*. The words are the same in the agents strip, on worker lanes, in the Workers card, in the task header above the conversation, and in the **Agents** panel.
+
 ## Best of N
 
 Best of N runs the same task on 2 to 8 models at once, so you can keep the best result.
@@ -64,7 +79,7 @@ Best of N runs the same task on 2 to 8 models at once, so you can keep the best 
 1. Open the launcher and choose **Try several models**, or run *LocalPilot: Best of N: Run One Task on Several Models…*.
 2. Enter the task and tick at least two models. The command lists only models with tool calling.
 3. Wait for the agents to finish. Each runs in its own tab.
-4. Click **Compare results** in the notification, or run *LocalPilot: Compare Best-of-N Results…*.
+4. Click **Compare** in the agents strip of any of the batch's tabs, **Compare results** in the notification, or run *LocalPilot: Compare Best-of-N Results…*. The strip shows each model's status and cost while they run.
 5. Pick a result and choose **Apply this result** or **Apply and discard the others**.
 
 Each Best-of-N agent works in its own worktree when `localpilot.worktrees.mode` is `always` or `parallel`. With `off`, or outside a git repository, all agents would edit the same files. Use Best of N in a git repository with worktrees on.
@@ -127,12 +142,12 @@ A running agent has two buttons next to the composer:
 
 **Stop** cancels the run. Files already changed stay in the changes bar for you to accept or reject.
 
-**Subagents.** Pausing or stopping the main agent also pauses or stops every subagent it started. Each lane of a parallel fan-out has its own ⏸ and ■:
+**Subagents.** Pausing or stopping the main agent also pauses or stops every subagent it started. A parallel fan-out shows a **Workers** card: its head counts the workers by status (*2 running · 1 queued · 1 done · 1 failed*) with a progress bar and *3/6*, and each lane shows its status icon, the worker's current step, and, once it ends, *Done · 4 steps · 1m 12s · 2 files* (or *Failed* with **Retry**, or *Stopped*). Each lane has its own ⏸ and ■:
 
-- Pausing a lane holds only that subagent.
-- Stopping a lane ends that subagent. The main agent continues and gets a *stopped by the user* report for that task, not a failure.
+- Pausing a lane holds only that subagent. Its lane says *Paused* and its clock stops.
+- Stopping a lane ends that subagent. The main agent continues and gets a *stopped by the user* report for that task, not a failure; the lane says *Stopped*.
 
-The same controls are in the tab's right-click menu, the background strip and the **Agents** panel. The Command Palette has *LocalPilot: Pause or Resume Agent*, *Pause All Agents*, *Resume All Agents* and *Stop All Agents*.
+The same controls are in the tab's right-click menu, the agents strip and the **Agents** panel. The Command Palette has *LocalPilot: Pause or Resume Agent*, *Pause All Agents*, *Resume All Agents* and *Stop All Agents*.
 
 <p><img src="{{ '/assets/screenshots/pause-steer.png' | relative_url }}" alt="A paused agent: its subagent lanes (docs and tester working, two coders queued), a queued steering message, Paused · message waiting and the Resume button" width="420"></p>
 
@@ -175,12 +190,14 @@ Two workers on a board of three tasks (two scripts and a README that depends on 
 
 ## The Agents panel
 
-The **Agents** view sits below the chat view (collapsed by default). It stays in the Primary Side Bar when you move the chat elsewhere, and its title bar has **Open Chat**.
+The **Agents** view sits below the chat view (collapsed by default) and gives a live overview of every agent. It stays in the Primary Side Bar when you move the chat elsewhere. Each row reads *status · elapsed · model · files changed · cost*, for example *Running 2m 05s · qwen2.5-coder:14b · 2 files changed · $0.12* (local models show tokens instead of dollars). Groups:
 
-- **Running:** live status line (for example `Running grep_search…`), Pause / Resume / Stop, and a count badge.
-- **Idle:** recent sessions with mode, message count and changed-file count.
-- Expand a session to see the files it changed. Click a file for a side-by-side diff.
-- Inline **Accept** / **Reject** on sessions and files, and **Accept All Agent Changes** / **Reject All Agent Changes** in the title menu.
+- **Needs you:** agents waiting for an approval or an answer (first), finished agents whose changes wait for your review (*3 files to review*, with inline **Review Changes**, **Accept** and **Reject**), and queued tasks that stopped short.
+- **Running:** working and paused agents with inline Pause / Resume and Stop, and a count badge on the view.
+- **Queue:** the task queue, when it has tasks.
+- **Recent:** other chats. One that ran since the window opened says how it ended (*Done in 1m 12s · 5m ago*, *Failed*, *Stopped*); older ones show their mode and when they were last used.
+
+Expand an agent to see its current step, its subagents (each with its own Pause and Stop) and the files it changed; click a file for a side-by-side diff. Isolated agents have **Apply** and **Discard** for their worktree. Hover a row for the full picture: status, model, messages, files, cost and worktree. **Accept All Agent Changes** / **Reject All Agent Changes** are in the title menu.
 
 ## Change review
 

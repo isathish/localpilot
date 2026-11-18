@@ -333,6 +333,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource};" />
 <link rel="stylesheet" href="${media('chat.css')}" />
 <link rel="stylesheet" href="${media('continuity.css')}" />
+<link rel="stylesheet" href="${media('agents.css')}" />
 <title>LocalPilot</title>
 </head>
 <body data-mermaid="${mermaidSrc}" data-density="${look.density}" data-text-size="${look.textSize}" data-motion="${look.motion}">
@@ -344,7 +345,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <button id="btnNewTab" class="ib" title="New chat — runs in parallel" aria-label="New chat">${svg('<path d="M8 3v10M3 8h10"/>')}</button>
     <button id="btnHistory" class="ib badge" data-n="0" aria-label="All chats" title="All chats">${svg('<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/>')}</button>
   </header>
-  <div id="bgruns" class="bgruns hidden" aria-label="Agents running in other tabs"></div>
+  <div id="bgruns" class="bgruns hidden" role="region" aria-label="Agents"></div>
   <div id="offline" class="offline hidden" role="status" aria-live="polite"></div>
   <main id="messages" role="log" aria-label="Conversation"></main>
   <footer id="composer">

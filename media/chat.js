@@ -1075,6 +1075,31 @@
     link.classList.toggle('hidden', !turn.querySelector(':scope > .rec.running'));
   }
 
+  // ------------------------------------------------------------------ agent surfaces
+  // One status vocabulary for every agent surface (worker lanes, the agents strip under the tabs, the Workers card):
+  // Running · Waiting for you · Paused · Done · Failed · Stopped (and Queued), each an icon + a word + a colour, so
+  // nothing is told by colour alone. chat.css/agents.css .agst draws them; the Agents view uses the same words.
+  const AGENT_ST = { running: ['Running', () => LIVE_DOT], waiting: ['Waiting for you', () => I.warn], paused: ['Paused', () => I.pause], done: ['Done', () => I.check], failed: ['Failed', () => I.x], stopped: ['Stopped', () => I.stop], queued: ['Queued', () => '<span class="dot idle"></span>'] };
+  /** The status chip; `bare` drops the icon where the row already starts with it (worker lanes). */
+  function agentSt(kind, label, bare) { const s = AGENT_ST[kind] || AGENT_ST.running; return `<span class="agst k-${kind in AGENT_ST ? kind : 'running'}">${bare ? '' : `<span class="agi" aria-hidden="true">${s[1]()}</span>`}<span class="agl">${esc(label || s[0])}</span></span>`; }
+  /** A worker's time on its task, paused stretches not counted. */
+  function laneElapsed(d, now) { return d.__t0 ? Math.max(0, (d.__t1 || now) - d.__t0 - (d.__pausedMs || 0) - (d.__pausedAt ? (d.__t1 || now) - d.__pausedAt : 0)) : 0; }
+  /** Distinct files a worker edited, counted from its own rows. */
+  function laneFiles(d) { return new Set([...d.querySelectorAll('.card.edit[data-path]')].map((c) => c.dataset.path)).size; }
+  /** A lane's right-hand facts: the live step while it works, else its status, then steps · time · files. */
+  function laneMeta(d) {
+    const m = d.querySelector(':scope > summary .meta'); if (!m) { return; }
+    const running = d.classList.contains('running'); const paused = d.classList.contains('paused');
+    const steps = Number(d.dataset.calls || 0); const ms = laneElapsed(d, Date.now()); const files = running ? 0 : laneFiles(d);
+    const facts = [steps && `${steps} step${steps === 1 ? '' : 's'}`, ms >= 1000 && `<span class="lane-el">${fmtDur(ms)}</span>`, files && `${files} file${files === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+    const kind = paused ? 'paused' : running ? '' : d.dataset.st || (d.classList.contains('error') ? 'failed' : 'done');
+    const now = running && !paused && d.__now ? `<span class="now">${esc(d.__now)}</span>` : '';
+    m.innerHTML = `${kind ? agentSt(kind, '', true) : now}${facts ? `<span class="muted">${now || kind ? ' · ' : ''}${facts}</span>` : ''}`;
+    // The row's leading icon is the same status glyph (shape, not only colour): breathing dot, bars, check, ×, square.
+    const ico = d.querySelector(':scope > summary .ico'); const k = kind || 'running';
+    if (ico && (ico.__k !== k || !ico.__n || !ico.contains(ico.__n))) { ico.__k = k; ico.innerHTML = AGENT_ST[k][1](); ico.__n = ico.firstElementChild; }
+    d.dataset.lane = k;
+  }
   // Subagent pill: "agent · task · model" with its own nested step rows streaming underneath.
   function modelName(ref) { const m = state.models.find((x) => x.id === ref); const n = m ? m.name : ref ? String(ref).split('/').pop() : ''; return n.replace(/[-_:]?(instruct|chat)\b/i, ''); }
   function subagentCard(agent, prompt, model, label) {
@@ -1106,6 +1131,8 @@
     const live = state.live.get(sid); const d = live && live.subs.get(childId);
     if (!d) { return; }
     d.classList.toggle('paused', paused);
+    if (paused && holding && !d.__pausedAt) { d.__pausedAt = Date.now(); } else if (!paused && d.__pausedAt) { d.__pausedMs = (d.__pausedMs || 0) + (Date.now() - d.__pausedAt); d.__pausedAt = 0; }
+    laneMeta(d);
     const b = d.querySelector(':scope > summary .lanectl [data-c="pause"]');
     if (b) { b.innerHTML = paused ? I.play : I.pause; b.title = paused ? (holding ? 'Resume this subagent' : 'Pausing after its current step… click to cancel') : 'Pause this subagent after its current step'; }
     const ico = d.querySelector(':scope > summary .ico'); if (ico && d.classList.contains('running')) { ico.innerHTML = paused ? I.pause : LIVE_DOT; }
@@ -1123,9 +1150,13 @@
     body.innerHTML = ''; body.appendChild(fin);
     const text = error || result || '';
     if (text) { const rep = el('details', 'report'); rep.innerHTML = `<summary><span class="chev" aria-hidden="true">${I.chev}</span>${error ? 'Error' : 'Report'}<span class="n">${text.length > 1200 ? `${(text.length / 1000).toFixed(1)}k chars` : ''}</span></summary><div class="doc-body"></div>`; lazyFill(rep, () => { rep.querySelector('.doc-body').innerHTML = error ? `<div class="error-box">${esc(error)}</div>` : renderMarkdown(String(result).slice(0, 12000)); }); body.appendChild(rep); }
-    d.querySelector(':scope > summary .meta').textContent = '';
+    // Stopped by the user (or cancelled with its batch) is not a failure: its own word, a muted square.
+    d.dataset.st = error ? (/^(Cancelled|Stopped)\b|stopped by the user/i.test(String(error)) ? 'stopped' : 'failed') : 'done';
+    if (d.__pausedAt) { d.__pausedMs = (d.__pausedMs || 0) + (Date.now() - d.__pausedAt); d.__pausedAt = 0; }
+    if (d.__t0) { d.__t1 = Date.now(); }
     const ctl = d.querySelector(':scope > summary .lanectl'); if (ctl) { ctl.remove(); }
     d.classList.remove('paused');
+    laneMeta(d);
     delete d.dataset.pending;
     const sid = state.session && state.session.id;
     if (error && sid && state.running.has(sid)) { laneRetry(d, error, sid); }
@@ -1171,7 +1202,7 @@
     }
     if (!sections.length) { return null; }
     const failed = sections.filter((s) => s.failed).length;
-    const d = stepEl(`step subhost workers ${failed === sections.length ? 'error' : 'ok'}`, `<b>${sections.length} done</b>${failed ? `<span class="muted"> · ${failed} failed</span>` : ''}`, undefined, '');
+    const d = stepEl(`step subhost workers ${failed === sections.length ? 'error' : 'ok'}`, '<b>Workers finished</b>', undefined, '');
     d.__ico = I.parallel; setState(d, failed === sections.length ? 'error' : 'ok'); d.dataset.total = String(sections.length); d.dataset.done = String(sections.length); d.dataset.tool = name; d.dataset.args = JSON.stringify(a || {});
     const c = d.querySelector(':scope > .content'); c.className = 'content subs'; c.innerHTML = '';
     for (const s of sections) {
@@ -1179,6 +1210,7 @@
       finishSubagent(card, s.failed ? '' : s.body, s.failed ? s.body : '');
       card.open = false; c.appendChild(card);
     }
+    d.querySelector(':scope > summary .label').insertAdjacentHTML('beforeend', `<span class="muted"> · ${tallyText(hostTally(d)) || `${sections.length} done`}</span>`);
     const summary = text.split('\n')[0];
     if (/^\d+\/\d+ items completed/.test(summary)) { d.querySelector(':scope > summary .meta').textContent = summary.replace(/\..*$/, ''); }
     d.open = true;
@@ -1189,21 +1221,33 @@
     const c = host.querySelector(':scope > .content');
     return { running: c ? c.querySelectorAll(':scope > .step.subagent.running').length : 0, queued: c ? c.querySelectorAll(':scope > .lane.pending').length : 0, done: Number(host.dataset.done || 0) };
   }
+  /** How the finished lanes of a Workers card ended, in the status vocabulary. */
+  function hostTally(host) {
+    const t = { done: 0, failed: 0, stopped: 0 };
+    for (const d of host.querySelectorAll(':scope > .content > .step.subagent:not(.running)')) { const k = d.dataset.st || (d.classList.contains('error') ? 'failed' : 'done'); t[k] = (t[k] || 0) + 1; }
+    return t;
+  }
+  function tallyText(t) { return [t.done && `${t.done} done`, t.failed && `${t.failed} failed`, t.stopped && `${t.stopped} stopped`].filter(Boolean).join(' · '); }
+  /** Thin progress bar + "2/4" on the Workers card head: how far the batch is, at a glance. */
+  function hostMeter(done, total) { const pct = total ? Math.round((done / total) * 100) : 0; return `<span class="wk-meter" role="progressbar" aria-label="Workers finished" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}" aria-valuetext="${done} of ${total} finished"><i style="width:${pct}%"></i></span><span class="wk-n">${done}/${total}</span>`; }
   function hostProgress(host) {
     const label = host.querySelector(':scope > summary .label'); const meta = host.querySelector(':scope > summary .meta');
     if (!host.classList.contains('running')) { return; }
     const { running, queued, done } = hostCounts(host);
-    const failed = host.querySelectorAll(':scope > .content > .step.subagent.error').length;
-    const extra = [queued && `${queued} queued`, done && `${done} done`, failed && `${failed} failed`].filter(Boolean).join(' · ');
-    if (label) { label.innerHTML = `<b>${running ? `${running} working` : queued ? 'Starting workers' : 'Finishing'}</b>${extra ? `<span class="muted"> · ${extra}</span>` : ''}`; }
-    if (meta) { meta.textContent = ''; }
+    const paused = host.querySelectorAll(':scope > .content > .step.subagent.running.paused').length;
+    const total = Math.max(Number(host.dataset.total || 0), running + queued + done);
+    const working = running - paused;
+    const head = working ? `${working} running` : paused ? `${paused} paused` : queued ? 'Starting workers' : 'Finishing';
+    const extra = [working && paused && `${paused} paused`, queued && `${queued} queued`, tallyText(hostTally(host))].filter(Boolean).join(' · ');
+    if (label) { label.innerHTML = `<b>${head}</b>${extra ? `<span class="muted"> · ${extra}</span>` : ''}`; }
+    if (meta) { meta.innerHTML = total ? hostMeter(done, total) : ''; }
   }
   /** Tool label as plain text: drops the language badge inside file chips, then all markup. */
   function plainLabel(html) { return String(html).replace(/<i class="lang[^"]*">[^<]*<\/i>/g, '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); }
   /** Current step of a worker, shown on its row like Cursor's "Exploring challenge codebase structure". */
-  function laneNow(sub, text) { const m = sub.querySelector(':scope > summary .meta'); if (!m) { return; } const steps = Number(sub.dataset.calls || 0); m.innerHTML = `<span class="now">${esc(text)}</span>${steps ? `<span class="muted"> · ${steps} step${steps === 1 ? '' : 's'}</span>` : ''}`; }
+  function laneNow(sub, text) { sub.__now = text; laneMeta(sub); }
   /** "2 workers running · 1 done" for the status line while a Workers card is live — the lanes carry each worker's own step. */
-  function workersSummary(host) { const { running, queued, done } = hostCounts(host); return [`${running} worker${running === 1 ? '' : 's'} running`, queued && `${queued} queued`, done && `${done} done`].filter(Boolean).join(' · '); }
+  function workersSummary(host) { const { running, queued } = hostCounts(host); const paused = host.querySelectorAll(':scope > .content > .step.subagent.running.paused').length; return [`${running - paused} worker${running - paused === 1 ? '' : 's'} running`, paused && `${paused} paused`, queued && `${queued} queued`, tallyText(hostTally(host))].filter(Boolean).join(' · '); }
   /** A child agent reported progress: its lane shows the step; the status line shows it directly only when there is no Workers card to show it in. */
   function childStatus(live, sid, childId, agent, text, visible) {
     const sub = live.subs.get(childId);
@@ -1295,12 +1339,13 @@
     const secs = payload.cached ? 'cached' : payload.durationMs > 800 ? `${(payload.durationMs / 1000).toFixed(1)}s` : '';
     if (node.classList.contains('subhost')) {
       setState(node, ok ? 'ok' : 'error');
-      const total = Number(node.dataset.total || 0); const failed = node.querySelectorAll(':scope > .content > .step.subagent.error').length;
-      node.querySelector(':scope > summary .label').innerHTML = total ? `<b>${total} done</b>${failed ? `<span class="muted"> · ${failed} failed</span>` : ''}` : toolLabel(node.dataset.tool, parseArgs(node.dataset.args || '{}'), false);
+      const total = Number(node.dataset.total || 0);
+      // Lanes still running are cancelled first, so the tally counts them as stopped.
+      for (const sub of node.querySelectorAll(':scope > .content > .step.subagent.running')) { finishSubagent(sub, '', 'Cancelled'); }
+      node.querySelector(':scope > summary .label').innerHTML = total ? `<b>Workers finished</b><span class="muted"> · ${tallyText(hostTally(node)) || `${total} done`}</span>` : toolLabel(node.dataset.tool, parseArgs(node.dataset.args || '{}'), false);
       node.querySelector(':scope > summary .meta').textContent = secs;
       const ctl = node.querySelector(':scope > summary .lanectl.host'); if (ctl) { ctl.remove(); }
       for (const lane of node.querySelectorAll(':scope > .content > .lane.pending')) { lane.className = 'lane ' + (ok ? 'skipped' : 'error'); }
-      for (const sub of node.querySelectorAll(':scope > .content > .step.subagent.running')) { finishSubagent(sub, '', 'Cancelled'); }
       if (payload.content && !node.querySelector(':scope > .content > .step')) { const c = node.querySelector(':scope > .content'); c.className = 'content doc'; c.innerHTML = `<div class="doc-body">${renderMarkdown(String(payload.content).slice(0, 8000))}</div>`; }
       return;
     }
@@ -2201,6 +2246,7 @@
   function tickWork() {
     let any = false;
     const now = Date.now();
+    tickBgRuns();
     for (const live of state.live.values()) {
       if (!live.work) { continue; }
       any = true;
@@ -2214,6 +2260,7 @@
         t.title = rate ? 'Model output speed over the last few seconds, and time spent working (pauses not counted)' : 'Time spent working since you sent (pauses not counted)';
         for (const n of live.tools.values()) { stepClock(n, now); }
         for (const n of live.subTools.values()) { stepClock(n, now); }
+        for (const d of live.subs.values()) { const t = d.classList.contains('running') && !d.__pausedAt && d.querySelector(':scope > summary .meta .lane-el'); if (t) { t.textContent = fmtDur(laneElapsed(d, now)); } else if (d.classList.contains('running') && !d.__pausedAt && laneElapsed(d, now) >= 1000 && !d.querySelector(':scope > summary .meta .lane-el')) { laneMeta(d); } }
         if (live.waitRow) { tickWait(live, now); }
       }
     }
@@ -3001,7 +3048,7 @@
             hostProgress(host);
           } else { live.steps.appendChild(c); }
         }
-        c.dataset.childId = e.payload.childId; live.subs.set(e.payload.childId, c);
+        c.dataset.childId = e.payload.childId; live.subs.set(e.payload.childId, c); c.__t0 = c.__t0 || Date.now();
         if (c.closest('.subhost.workers')) { c.open = false; }
         setPhase(live, 'Coordinating workers'); updateWork(live);
         childStatus(live, sid, e.payload.childId, e.payload.agent, 'starting…', visible);
@@ -3528,31 +3575,61 @@
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); for (const t of tabs) { state.selected.add(t.dataset.id); } tabSig = ''; renderTabs(); }
     else if (e.key === 'F2') { e.preventDefault(); const s = tabList().list.find((x) => x.id === tabs[i].dataset.id); if (s) { startRename(tabs[i], s); } }
   });
-  // Strip under the tab bar: agents working in *other* tabs, with their live step. Click to switch, ■ to stop.
+  // Agents strip under the tab bar: the batch the open chat belongs to (Best of N / split tasks: every sibling with its
+  // status, cost and Compare), then agents working in *other* tabs. Click a row to switch, ⏸ / ■ to pause or stop.
   let bgTimer = 0;
   let bgSig = '';
+  /** Where an agent is, in the status vocabulary: a prompt waiting outranks paused, paused outranks running. */
+  function agentKind(id) { const p = state.paused.get(id); if (!state.running.has(id)) { return 'done'; } if (p && p.paused) { return 'paused'; } return state.attention.has(id) || els.approvals.querySelector(`[data-sid="${CSS.escape(id)}"]`) ? 'waiting' : 'running'; }
+  /** The open chat's batch: its siblings in creation order (null unless it was started together with others). */
+  function batchOf(sid) {
+    const all = tabList().all; const me = sid && (all.find((x) => x.id === sid) || state.session);
+    const g = me && (me.group || (state.session && state.session.id === sid && state.session.group));
+    if (!g || !(g.size > 1)) { return null; }
+    const sibs = all.filter((x) => x.group && x.group.id === g.id).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id));
+    return sibs.length > 1 ? { g, sibs } : null;
+  }
+  function bgElapsed(id) { const live = state.live.get(id); return live && state.running.has(id) ? fmtDur(liveElapsed(live, Date.now())) : ''; }
+  function bgRow(s, name, opts) {
+    const kind = agentKind(s.id); const live = kind !== 'done';
+    const step = kind === 'running' ? state.status.get(s.id) || 'Working…' : '';
+    const cost = s.usage && s.usage.costUsd > 0 ? fmtUsd(s.usage.costUsd) : '';
+    const title = s.title || 'New chat';
+    const row = el('div', `bgrun k-${kind}${opts.current ? ' current' : ''}`, `<button class="open"${opts.current ? ' aria-current="true"' : ''}>${agentSt(kind)}<span class="t">${esc(name)}</span><span class="st">${esc(step)}</span>${live ? `<span class="el" data-sid="${esc(s.id)}">${esc(bgElapsed(s.id))}</span>` : ''}${cost ? `<span class="cost" title="Spent so far">${esc(cost)}</span>` : ''}${opts.model ? `<span class="mdl" title="Model">${esc(tabModel(s))}</span>` : ''}</button>${live ? `<button class="stop pausebtn" title="${kind === 'paused' ? 'Resume this agent' : 'Pause this agent after its current step'}" aria-label="${kind === 'paused' ? 'Resume' : 'Pause'} “${esc(title)}”">${kind === 'paused' ? I.play : I.pause}</button><button class="stop" title="Stop this agent" aria-label="Stop “${esc(title)}”">${I.stop}</button>` : ''}`);
+    const open = row.querySelector('.open');
+    open.title = `${title}\n${AGENT_ST[kind][0]}${step ? ` — ${step}` : ''}\nModel: ${tabModel(s)}${cost ? `\nSpent: ${cost}` : ''}${opts.current ? '\nThis tab' : '\nClick to open'}`;
+    open.setAttribute('aria-label', `${name}: ${AGENT_ST[kind][0]}${step ? `, ${step}` : ''}${opts.current ? ', this tab' : ''}`);
+    row.onclick = (e) => { if (e.target.closest('.pausebtn')) { post({ type: kind === 'paused' ? 'resume' : 'pause', sessionId: s.id }); return; } if (e.target.closest('.stop')) { post({ type: 'stop', sessionId: s.id }); return; } if (!opts.current) { selectTab(s.id); } };
+    return row;
+  }
   function renderBgRuns() {
     if (!els.bgruns) { return; }
     const active = activeId();
-    const runs = tabList().all.filter((s) => state.running.has(s.id) && s.id !== active);
-    els.bgruns.classList.toggle('hidden', !runs.length);
+    const batch = batchOf(active);
+    const inBatch = new Set(batch ? batch.sibs.map((x) => x.id) : []);
+    const runs = tabList().all.filter((s) => state.running.has(s.id) && s.id !== active && !inBatch.has(s.id));
+    els.bgruns.classList.toggle('hidden', !runs.length && !batch);
     // Rebuilding identical rows restarts their spinners on every store broadcast; skip when nothing visible changed.
-    const sig = runs.map((s) => `${s.id}:${s.title}:${state.status.get(s.id) || ''}:${tabModel(s)}:${state.paused.get(s.id) && state.paused.get(s.id).paused ? 'p' : ''}:${state.attention.has(s.id) ? 'w' : ''}`).join('|');
+    const rowSig = (s) => `${s.id}:${s.title}:${state.status.get(s.id) || ''}:${tabModel(s)}:${agentKind(s.id)}:${s.usage && s.usage.costUsd > 0 ? fmtUsd(s.usage.costUsd) : ''}`;
+    const sig = `${batch ? `${batch.g.id}#${active}#${batch.sibs.map(rowSig).join('|')}` : ''}##${runs.map(rowSig).join('|')}`;
     if (sig === bgSig) { return; }
     bgSig = sig;
     els.bgruns.innerHTML = '';
-    if (!runs.length) { return; }
-    for (const s of runs.slice(0, 3)) {
-      const paused = state.paused.get(s.id) && state.paused.get(s.id).paused;
-      // Waiting on an approval or answer outranks "running": the same warn triangle as its tab.
-      const waiting = !paused && state.attention.has(s.id);
-      const row = el('div', `bgrun ${paused ? 'paused' : waiting ? 'waiting' : ''}`, `<button class="open">${paused ? `<span class="pausedind">${I.pause}</span>` : waiting ? `<span class="waitind" aria-label="Waiting for you">${I.warn}</span>` : LIVE_DOT}<span class="t">${esc(s.title || 'New chat')}</span><span class="st">${esc(waiting ? 'Waiting for you' : state.status.get(s.id) || 'Working…')}</span><span class="mdl" title="Model">${esc(tabModel(s))}</span></button><button class="stop pausebtn" title="${paused ? 'Resume this agent' : 'Pause this agent after its current step'}" aria-label="${paused ? 'Resume' : 'Pause'} “${esc(s.title || 'New chat')}”">${paused ? I.play : I.pause}</button><button class="stop" title="Stop this agent" aria-label="Stop “${esc(s.title || 'New chat')}”">${I.stop}</button>`);
-      row.querySelector('.open').title = `${s.title}\n${state.status.get(s.id) || 'Working…'}\nModel: ${tabModel(s)}\nClick to open`;
-      row.onclick = (e) => { if (e.target.closest('.pausebtn')) { post({ type: paused ? 'resume' : 'pause', sessionId: s.id }); return; } if (e.target.closest('.stop')) { post({ type: 'stop', sessionId: s.id }); return; } selectTab(s.id); };
-      els.bgruns.appendChild(row);
+    if (batch) {
+      const kinds = batch.sibs.map((x) => agentKind(x.id)); const n = (k) => kinds.filter((x) => x === k).length;
+      const tally = [n('waiting') && `${n('waiting')} waiting for you`, n('running') && `${n('running')} running`, n('paused') && `${n('paused')} paused`, n('done') && `${n('done')} done`].filter(Boolean).join(' · ');
+      const best = batch.g.kind === 'bestOf'; const settled = n('done') === batch.sibs.length;
+      const head = el('div', 'bg-head', `<span class="bg-k">${best ? `Best of ${batch.sibs.length}` : `${batch.sibs.length} parallel tasks`}</span><span class="bg-tally">${esc(tally)}</span><button class="link bg-compare" type="button" title="${best ? 'Compare what each model did and apply the result you like' : 'Review what each agent did and apply its changes'}">${best ? 'Compare' : 'Review'}${settled ? ' results' : ''}</button>`);
+      head.querySelector('.bg-compare').onclick = () => post({ type: 'compareGroup', groupId: batch.g.id });
+      els.bgruns.appendChild(head);
+      for (const x of batch.sibs) { els.bgruns.appendChild(bgRow(x, best ? modelName(x.model) || tabModel(x) : x.title || 'New chat', { current: x.id === active, model: !best })); }
+      if (runs.length) { els.bgruns.appendChild(el('div', 'bg-head other', '<span class="bg-k">Other agents</span>')); }
     }
+    for (const s of runs.slice(0, 3)) { els.bgruns.appendChild(bgRow(s, s.title || 'New chat', { model: true })); }
     if (runs.length > 3) { const more = el('button', 'bgrun more', `<span class="st">+${runs.length - 3} more running</span>`); more.onclick = openHistory; els.bgruns.appendChild(more); }
   }
+  /** Elapsed time on the strip's rows, every second, without rebuilding them. */
+  function tickBgRuns() { if (!els.bgruns || els.bgruns.classList.contains('hidden')) { return; } for (const t of els.bgruns.querySelectorAll('.el[data-sid]')) { const v = bgElapsed(t.dataset.sid); if (t.textContent !== v) { t.textContent = v; } } }
   function scheduleBg() { if (bgTimer) { return; } bgTimer = setTimeout(() => { bgTimer = 0; renderBgRuns(); const t = els.tabs.querySelector('.tab.running'); if (t) { for (const tab of els.tabs.querySelectorAll('.tab.running')) { const s = tabList().all.find((x) => x.id === tab.dataset.id); if (s) { tab.title = tabTitle(s); } } } }, 120); }
   function noteStatus(sid, text) { if (text) { state.status.set(sid, text); } else { state.status.delete(sid); } scheduleBg(); }
   // ------------------------------------------------------------------ chat history ("All chats")
@@ -5961,7 +6038,9 @@
     const u = chatUsage(); const p = usageParts(u); const local = usageModelIsLocal(u);
     const row = state.sessions.find((x) => x.id === s.id); const bytes = row && row.bytes;
     const wt = s.worktree; const cwd = taskCwd.get(s.id) || '';
-    const sig = JSON.stringify([s.id, prompt, collapsed, open, p, local, wt && wt.path, cwd, bytes, s.title]);
+    // While the agent works the head says where it is (Running / Waiting for you / Paused), in the strip's words.
+    const kind = state.running.has(s.id) ? agentKind(s.id) : '';
+    const sig = JSON.stringify([s.id, prompt, collapsed, open, p, local, wt && wt.path, cwd, bytes, s.title, kind]);
     if (sig === taskHead.__sig) { return; }
     taskHead.__sig = sig;
     const where = wt
@@ -5970,7 +6049,7 @@
     const tok = p ? `<span class="pill" title="${esc(usageText(u))}">↑${fmtTok(p.input)} ↓${fmtTok(p.output)}</span>` : '';
     const cost = p && p.cost !== undefined && !local ? `<span class="pill cost" title="Cost reported by the provider">${fmtUsd(p.cost)}</span>` : '';
     taskHead.className = `taskhead${collapsed ? ' collapsed' : ''}${taskHead.classList.contains('away') ? ' away' : ''}`;
-    taskHead.innerHTML = `<div class="th-row"><button class="th-toggle" aria-expanded="${!collapsed}" title="${collapsed ? 'Show the task' : 'Fold the task away'}"><span class="chev">${I.chev}</span><span class="th-k">Task</span></button>`
+    taskHead.innerHTML = `<div class="th-row"><button class="th-toggle" aria-expanded="${!collapsed}" title="${collapsed ? 'Show the task' : 'Fold the task away'}"><span class="chev">${I.chev}</span><span class="th-k">Task</span></button>${kind ? agentSt(kind) : ''}`
       + `<span class="th-line"${collapsed ? ` title="${esc(prompt.slice(0, 400))}"` : ''}>${collapsed ? esc(prompt.split('\n')[0]) : ''}</span>${collapsed && !wt ? '' : where}${tok}${cost}`
       + `<button class="ib" data-th="copy" title="Copy the task" aria-label="Copy the task">${I.copy}</button>`
       + `<button class="ib" data-th="delete" title="Delete this chat${bytes ? ` (${fmtBytes(bytes)} on disk)` : ''}" aria-label="Delete this chat${bytes ? `, ${fmtBytes(bytes)} on disk` : ''}">${I.trash}</button></div>`
@@ -6617,7 +6696,9 @@
         case 'promptSaved': onPromptSaved(m); break;
         case 'session': if (m.session) { taskCwd.set(m.session.id, m.cwd || ''); } if (ctxMode === 'confirm') { hideCtxCard(); } renderTaskHead(); break;
         case 'sessions': renderTaskHead(); break;
+        case 'paused': case 'approval': case 'approvalResolved': case 'question': case 'questionResolved': renderTaskHead(); break;
         case 'running':
+          renderTaskHead();
           if (state.session && state.session.id === m.sessionId) { if (m.running && ctxMode === 'confirm') { hideCtxCard(); } updateCtx(); }
           // A finished run may have created files an earlier answer named: check those links again on the next render.
           if (!m.running) { for (const [k, v] of pathKnown) { if (!v && k.startsWith(`${m.sessionId}\u0000`)) { pathKnown.delete(k); } } }

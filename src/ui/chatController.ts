@@ -234,6 +234,13 @@ export type ToWebview =
   | ContinuityToWebview;
 
 /** What the Run interrupted card shows about the run that did not finish. */
+/** How a chat's last run ended (Agents view status vocabulary: Done · Failed · Stopped). */
+export interface LastRun {
+  status: 'done' | 'failed' | 'stopped';
+  endedAt: number;
+  durationMs?: number;
+}
+
 export interface RunInterruptedState {
   startedAt: number;
   /** Tool steps the run had taken since the user's last message. */
@@ -318,6 +325,8 @@ export type FromWebview =
   | { type: 'applyWorktree'; sessionId: string; files?: string[] }
   | { type: 'discardWorktree'; sessionId: string; files?: string[] }
   | { type: 'runBestOfN'; prompt: string; models: string[]; mode?: Session['mode'] }
+  /** The agents strip's Compare / Review on a batch: the compare-and-apply picker for that group. */
+  | { type: 'compareGroup'; groupId: string }
   | { type: 'suggestTasks'; more?: boolean }
   /** "Build" on the Prepared-plan card: switch to Agent mode and execute the checklist. */
   | { type: 'buildPlan'; sessionId: string }
@@ -587,6 +596,8 @@ export class ChatController implements vscode.Disposable {
   private connectivity: Extract<ToWebview, { type: 'connectivity' }> = { type: 'connectivity', offline: false, local: false };
   /** Self-healing outcome of each chat's last top-level turn that reported one. */
   private readonly outcomes = new Map<string, { outcome: TaskOutcome; interventionId?: string; report?: string }>();
+  /** How each chat's last run in this window ended, for the Agents view's Done / Failed / Stopped (not persisted). */
+  private readonly lastRuns = new Map<string, LastRun>();
   private _commands?: CommandManager;
   private commandsSub?: vscode.Disposable;
   private _mcp?: McpManager;
@@ -1205,6 +1216,16 @@ export class ChatController implements vscode.Disposable {
 
   isPaused(sessionId: string): boolean {
     return this.runs.get(sessionId)?.pausedBySelf ?? false;
+  }
+
+  /** When the session's current run started (undefined when it is not running). */
+  runStartedAt(sessionId: string): number | undefined {
+    return this.runs.has(sessionId) ? this.replays.get(sessionId)?.startedAt : undefined;
+  }
+
+  /** How the session's last run in this window ended; undefined while it runs or when it has not run since the window opened. */
+  lastRun(sessionId: string): LastRun | undefined {
+    return this.runs.has(sessionId) ? undefined : this.lastRuns.get(sessionId);
   }
 
   /** Subagent controls of a running session, for views that list them. */
@@ -2868,6 +2889,11 @@ export class ChatController implements vscode.Disposable {
         }
         await this.discardWorktree(msg.sessionId, { confirm: true });
         return;
+      case 'compareGroup':
+        if (typeof msg.groupId === 'string' && this.groupSessions(msg.groupId).length) {
+          await vscode.commands.executeCommand('localpilot.compareResults', msg.groupId);
+        }
+        return;
       case 'runBestOfN':
         await this.runBestOfN(msg.prompt, msg.models, msg.mode ?? 'agent');
         return;
@@ -3540,8 +3566,10 @@ export class ChatController implements vscode.Disposable {
     }
     this.stoppedByUser.delete(sessionId);
     const control = new RunControl(sessionId);
+    const runStartedAt = Date.now();
     this.runs.set(sessionId, control);
-    this.replays.set(sessionId, { base: session.messages.length, startedAt: Date.now(), items: [], bytes: 0, truncated: false });
+    this.lastRuns.delete(sessionId);
+    this.replays.set(sessionId, { base: session.messages.length, startedAt: runStartedAt, items: [], bytes: 0, truncated: false });
     if (this.afterTurn.list(sessionId).length) {
       // Messages still waiting behind this turn go into its replay, so a chat surface opened now shows their banner.
       this.broadcastQueue(sessionId);
@@ -3764,6 +3792,9 @@ export class ChatController implements vscode.Disposable {
         }
       }
       this.finishTrace(session, recorder, userMessage, control.aborted ? 'stopped' : turnErrored ? 'error' : 'ok');
+      if (!this.runs.has(sessionId)) {
+        this.lastRuns.set(sessionId, { status: control.aborted ? 'stopped' : turnErrored ? 'failed' : 'done', endedAt: Date.now(), durationMs: Date.now() - runStartedAt });
+      }
       this.store.save(session);
       this.broadcast({ type: 'running', sessionId, running: false });
       if (removed && !session.model && sessionId === this.activeSessionId) {

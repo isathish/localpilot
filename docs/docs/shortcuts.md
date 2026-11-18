@@ -105,7 +105,7 @@ Open the Command Palette and type "LocalPilot" to see these.
 | Chat | Open Chat · Open Chat in Editor · Move Chat To… · Show Quick Menu… · New Chat · Show Chats… · Chat Actions… · Open in Markdown Reader · Open Markdown Reader to the Side · Ask LocalPilot About This Document · Export Markdown as HTML · Export Markdown as PDF |
 | Agents | Run Tasks in Parallel… · Stop All Agents · Pause or Resume Agent · Pause All Agents · Resume All Agents |
 | Best-of-N and worktrees | Best of N: Run One Task on Several Models… · Compare Best-of-N Results… · Apply Agent's Changes to Workspace · Discard Agent's Isolated Changes |
-| Changes | Accept All Agent Changes · Reject All Agent Changes · Accept File · Reject File · Next Changed File · Previous Changed File (in a review diff) |
+| Changes | Review Changes · Accept All Agent Changes · Reject All Agent Changes · Accept File · Reject File · Next Changed File · Previous Changed File (in a review diff) |
 | Models | Select Default Model… · Refresh Models · Set Up Models Automatically · Install Model from Catalog… · Remove Local Model… · Enable / Disable Model… · Manage Models · Browse Ollama Model Gallery… · Manage Model Providers… · Set Provider API Key… · Restart Ollama with Parallel Request Slots · Tune Models From Usage · Start Colibri Server · Stop Colibri Server |
 | Skills | Install Skill… · Browse Skill Registry… · Manage Skills · Open Agent Map · Reload Skills, Subagents & MCP Servers |
 | Browser and images | Open URL in Browser View… · Screenshot a Web Page… · Inspect a Web Page (Screenshot, Console, Network)… · Capture Screenshot to Chat (Area / Window / Screen) · Attach Image to Chat… · Add File/Folder to Chat |

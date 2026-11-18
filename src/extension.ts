@@ -1564,6 +1564,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<LocalP
       void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(fsPath));
     }
   });
+  // Agents view "Review Changes": the chat's file-by-file review (diff, then Accept / Reject and on to the next file).
+  cmd('localpilot.reviewSession', async (node?: unknown) => {
+    const n = node as { sessionId?: string; session?: { id: string } } | undefined;
+    const sid = typeof node === 'string' ? node : n?.session?.id ?? n?.sessionId ?? controller.activeSession?.id ?? tracker.all()[0]?.sessionId;
+    if (sid) {
+      await controller.handle({ type: 'review', sessionId: sid, scope: 'session' });
+    }
+  });
   cmd('localpilot.keepChanges', (node?: unknown) => {
     const n = node as { sessionId?: string; fsPath?: string; session?: { id: string } } | undefined;
     const sid = n?.sessionId ?? n?.session?.id ?? controller.activeSession?.id;

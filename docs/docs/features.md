@@ -103,7 +103,8 @@ See [Models & providers]({{ '/docs/models/' | relative_url }}).
 - **Best of N.** Run one task on 2 to 8 models, compare the results and keep the best.
 - **Task queue.** *LocalPilot: Queue Agent Task…* lines tasks up, each with its own mode and model, optionally waiting for others to succeed first. They run one at a time or side by side (`localpilot.queue.concurrency`). The queue survives a reload.
 - **Several models at once.** A busy model's extra work goes to a comparable idle model that fits alongside it (`localpilot.routing.parallelModels`).
-- **Agents panel.** Running, queued and idle work, the files each run changed, and Stop, Keep and Undo.
+- **Agents panel.** A live overview: **Needs you** (waiting for an approval or an answer, or changes to review), **Running**, **Queue** and **Recent**, each agent with its status, elapsed time, model, changed files and cost, and inline Pause, Stop, Review Changes, Accept / Reject and Apply / Discard.
+- **One status vocabulary.** Running · Waiting for you · Paused · Done · Failed · Stopped, each with its own icon, in the agents strip under the tabs, on worker lanes, in the task header and in the Agents panel.
 
 See [Parallel agents & change review]({{ '/docs/parallel-agents/' | relative_url }}).
 

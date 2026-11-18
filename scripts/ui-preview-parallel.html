@@ -26,12 +26,12 @@ html.light{
 }
 body{margin:0}
 </style>
-<link rel="stylesheet" href="../media/chat.css"></head>
+<link rel="stylesheet" href="../media/chat.css"><link rel="stylesheet" href="../media/agents.css"></head>
 <body>
 <div id="app">
   <div id="progress" class="progress hidden"></div>
   <header id="tabbar" class="tabbar"><nav id="tabs" class="tabs" role="tablist"></nav><button id="btnNewTab" class="ib"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button><button id="btnHistory" class="ib badge" data-n="0" aria-label="All chats"><svg viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.2h2.2M8 5v3l2 1.5"/></svg></button></header>
-  <div id="bgruns" class="bgruns hidden"></div>
+  <div id="bgruns" class="bgruns hidden" role="region" aria-label="Agents"></div>
   <div id="offline" class="offline hidden" role="status" aria-live="polite"></div>
   <main id="messages"></main>
   <footer id="composer">
@@ -78,7 +78,7 @@ const models=[{id:'ollama/qwen2.5-coder:7b',providerId:'ollama',name:'qwen2.5-co
 const replays=new Map();
 const send=(d)=>{ const sid=d.type==='event'?d.event.sessionId:(d.type==='steerQueued'||d.type==='approval'||d.type==='paused')?d.sessionId:null; const r=sid&&replays.get(sid); if(r){ const last=r.items[r.items.length-1]; if(d.type==='event'&&(d.event.type==='assistant_delta'||d.event.type==='thinking_delta')&&last&&last.type==='event'&&last.event.type===d.event.type){ last.event.payload+=d.event.payload; } else { r.items.push(JSON.parse(JSON.stringify(d))); } } if(d.type==='approvalResolved'){ for(const rr of replays.values()){ rr.items=rr.items.filter(i=>!(i.type==='approval'&&i.id===d.id)); } } window.dispatchEvent(new MessageEvent('message',{data:d})); };
 const sessionMsg=(s)=>{ const r=replays.get(s.id); if(!r){return {type:'session',session:s};} const f=s.messages[r.base]; return {type:'session',session:s,liveFrom:f&&f.role==='user'?r.base+1:r.base}; };
-const list=()=>[...sessions.values()].map(s=>({id:s.id,title:s.title,updatedAt:s.updatedAt,createdAt:s.createdAt,messageCount:s.messages.length,mode:s.mode,pinned:s.pinned}));
+const list=()=>[...sessions.values()].map(s=>({id:s.id,title:s.title,updatedAt:s.updatedAt,createdAt:s.createdAt,messageCount:s.messages.length,mode:s.mode,pinned:s.pinned,model:s.model,group:s.group,usage:s.usage}));
 const running=new Set();
 window.acquireVsCodeApi_state=null;
 function create(title){ const s={id:'s'+(++seq),title,mode:'agent',model:'',contextTokens:0,compactions:0,messages:[],createdAt:Date.now()+seq,updatedAt:Date.now()}; sessions.set(s.id,s); send({type:'sessions',sessions:list()}); return s; }
@@ -104,8 +104,49 @@ window.sim={
   // Simulates closing and reopening the chat: a brand-new webview asks 'ready' and gets init + session + replay.
   reopen(){ sessionStorage.setItem('lp-preview', JSON.stringify({sessions:[...sessions.values()],active:active&&active.id,running:[...running],replays:[...replays.entries()],seq})); location.reload(); }
 };
+// Scenes for screenshots (agent surfaces). ?agents=1: a Best of 3 batch (one working with a Workers card, one waiting for
+// an approval, one done and costed) plus two agents in other tabs (one paused). ?launcher=tasks|bestof: the Multitask launcher.
+// ?agents=lanes: the open agent's Workers card only (lanes running, paused, done with files, failed, stopped, queued).
+function scene(){
+  const q=new URLSearchParams(location.search);
+  if(q.get('launcher')){ setTimeout(()=>{ send({type:'taskSuggestions',source:'quick',items:[{title:'Add input validation to the sign-up form',detail:'3 fields accept anything today',kind:'fix'},{title:'Write tests for utils/date.ts',detail:'no tests cover it',kind:'test'},{title:'Document the public API',kind:'docs'}],recent:[]}); send({type:'openLauncher',kind:q.get('launcher')==='bestof'?'bestof':'tasks'}); },150); return; }
+  if(!q.get('agents')) return;
+  const ev=(id,type,payload)=>send({type:'event',event:{sessionId:id,type,payload}});
+  const g={id:'g1',kind:'bestOf',prompt:'Add input validation to the sign-up form',size:3};
+  const mk=(title,model,extra)=>{ const s=create(title); Object.assign(s,{model,group:q.get('agents')==='lanes'?undefined:g},extra||{}); return s; };
+  const a=mk('Add input validation to the sign-up form','ollama/qwen2.5-coder:7b');
+  if(q.get('agents')!=='lanes'){
+    const b=mk('Add input validation to the sign-up form','anthropic/claude-sonnet-4-6',{usage:{promptTokens:42000,completionTokens:3100,cacheReadTokens:0,cacheWriteTokens:0,costUsd:0.184,requests:9}});
+    const c=mk('Add input validation to the sign-up form','ollama/gemma4:12b',{usage:{promptTokens:30000,completionTokens:2000,cacheReadTokens:0,cacheWriteTokens:0,requests:7}});
+    const d=create('Refactor the date helpers'); d.model='ollama/qwen2.5-coder:7b';
+    const e=create('Update the README examples'); e.model='ollama/qwen2.5-coder:7b';
+    send({type:'sessions',sessions:list()});
+    for(const s of [b,d,e]){ window.sim.start(s.id,s.title); }
+    ev(d.id,'status','Editing src/date.ts');
+    send({type:'paused',sessionId:e.id,paused:true,holding:true});
+    setTimeout(()=>{ ev(b.id,'tool_start',{id:'x1',name:'run_command',args:{command:'npm test'}}); send({type:'approval',id:'apb',sessionId:b.id,title:'Run command',detail:'$ npm test\nin web',kind:'terminal'}); },200);
+    c.messages.push({role:'user',content:c.title},{role:'assistant',content:'Added validation.',meta:{durationMs:94000}});
+  }
+  send({type:'sessions',sessions:list()});
+  activate(a); window.sim.start(a.id,a.title);
+  const tasks=[{agent:'coder',prompt:'Validate the email field and show an inline error'},{agent:'coder',prompt:'Validate the password strength'},{agent:'tester',prompt:'Add tests for the sign-up validation'},{agent:'docs',prompt:'Document the validation rules in README'},{agent:'explore',prompt:'Find other forms that need the same checks'},{agent:'coder',prompt:'Validate the username field'}];
+  setTimeout(()=>{ ev(a.id,'tool_start',{id:'p1',name:'run_parallel_subagents',args:{tasks}}); },100);
+  setTimeout(()=>{ ['c1','c2','c3','c4','c5'].forEach((c,i)=>ev(a.id,'subagent_start',{childId:c,agent:tasks[i].agent,prompt:tasks[i].prompt,label:tasks[i].prompt,model:'ollama/qwen2.5-coder:7b'})); },200);
+  setTimeout(()=>{
+    window.sim.subTool(a.id,'c1','coder','t1','read_file',{path:'src/signup.ts'}); window.sim.subToolEnd(a.id,'c1','coder','t1','read_file','ok',40);
+    window.sim.subTool(a.id,'c1','coder','t2','edit_file',{path:'src/signup.ts',old_text:'a',new_text:'b'});
+    ev(a.id,'status',{childId:'c1',agent:'coder',inner:'status',data:'Editing src/signup.ts'});
+    window.sim.subTool(a.id,'c2','coder','t3','grep_search',{query:'password'}); window.sim.subToolEnd(a.id,'c2','coder','t3','grep_search','3 hits',200);
+    send({type:'paused',sessionId:a.id,childId:'c2',paused:true,holding:true});
+    window.sim.subTool(a.id,'c3','tester','t4','write_file',{path:'tests/signup.test.ts',content:'x'}); window.sim.subToolEnd(a.id,'c3','tester','t4','write_file','Wrote tests/signup.test.ts',300);
+    window.sim.subTool(a.id,'c3','tester','t5','edit_file',{path:'src/validate.ts',old_text:'a',new_text:'b'}); window.sim.subToolEnd(a.id,'c3','tester','t5','edit_file','Edited',100);
+    window.sim.subEnd(a.id,'c3','tester','Added 6 tests; all pass.');
+    window.sim.subEnd(a.id,'c4','docs','','Subagent failed: README.md is read-only');
+    window.sim.subEnd(a.id,'c5','explore','','Stopped by the user');
+  },400);
+}
 window.acquireVsCodeApi=()=>({getState(){return window.acquireVsCodeApi_state;},setState(v){window.acquireVsCodeApi_state=v;},postMessage(m){
-  if(m.type==='ready'){ if(window.__reopen){ window.__reopen=false; send({type:'init',sessions:list(),activeSessionId:active.id,models,defaultModel:models[0].id,skills:[],agents:[],running:[...running],paused:[],platform:new URLSearchParams(location.search).get('platform')||'darwin'}); send(sessionMsg(active)); for(const [sid,r] of replays){ send({type:'replay',sessionId:sid,items:r.items,startedAt:r.startedAt,status:'Working…',truncated:false}); } return; } const a=create('Add input validation'); create('Write tests for utils'); send({type:'init',sessions:list(),activeSessionId:a.id,models,defaultModel:models[0].id,skills:[],agents:[],running:[],platform:new URLSearchParams(location.search).get('platform')||'darwin'}); activate(a); }
+  if(m.type==='ready'){ if(window.__reopen){ window.__reopen=false; send({type:'init',sessions:list(),activeSessionId:active.id,models,defaultModel:models[0].id,skills:[],agents:[],running:[...running],paused:[],platform:new URLSearchParams(location.search).get('platform')||'darwin'}); send(sessionMsg(active)); for(const [sid,r] of replays){ send({type:'replay',sessionId:sid,items:r.items,startedAt:r.startedAt,status:'Working…',truncated:false}); } return; } const a=create('Add input validation'); create('Write tests for utils'); send({type:'init',sessions:list(),activeSessionId:a.id,models,defaultModel:models[0].id,skills:[],agents:[],running:[],platform:new URLSearchParams(location.search).get('platform')||'darwin'}); activate(a); scene(); }
   else if(m.type==='selectSession'){ activate(sessions.get(m.id)); }
   else if(m.type==='newSession'){ const s=create(m.text?m.text.slice(0,60):'New chat'); activate(s); if(m.text){ window.sim.start(s.id,m.text); setTimeout(()=>{window.sim.text(s.id,'Working on it…'); window.sim.end(s.id);},1500); } }
   else if(m.type==='runParallel'){ const made=m.tasks.map(t=>create(t.slice(0,60))); made.forEach((s,i)=>{ window.sim.start(s.id,m.tasks[i]); setTimeout(()=>{window.sim.text(s.id,'Done: '+m.tasks[i]); window.sim.end(s.id);},2500+i*1500); }); activate(made[0]); }

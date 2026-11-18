@@ -1,0 +1,162 @@
+@charset "UTF-8";
+/* ════ Agent surfaces: everything about running agents, loaded after chat.css (and continuity.css) so it can
+   settle the shared look of the agents strip under the tabs, worker lanes and the Workers card, tool cards, the
+   approval card, the run summary, the Run interrupted card, the review panel, the Multitask launcher and the trace
+   sheet. Chat core (welcome, composer, message bubbles, navigator, continuity pages) is styled in chat.css.
+
+   One status vocabulary everywhere (chat.js agentSt / AGENT_ST, the Agents view's AGENT_STATUS):
+     Running = breathing dot, --st-running · Waiting for you = triangle, --st-waiting · Paused = two bars, --st-paused
+     Done = check, --st-done (quiet) · Failed = ×, --st-failed · Stopped = square, --st-stopped (quiet) · Queued = ring.
+   Each is an icon + a word, so nothing is told by colour alone. Tokens live on body (like --fs): they refer to the
+   theme-adjusted --*-text colours, which light themes redefine below :root. */
+body {
+  --st-running: var(--brand-text);
+  --st-waiting: var(--warn-text);
+  --st-paused: var(--brand-text);
+  --st-done: var(--muted);
+  --st-failed: var(--error-text);
+  --st-stopped: var(--muted);
+  --radius-card: 10px;
+  --radius-ctl: 6px;
+  --radius-pill: 999px;
+  --fs-label: calc(11px * var(--fs-scale, 1));
+  --ease-out: cubic-bezier(.2, .7, .3, 1);
+  --t-fast: .12s;
+  --t-med: .2s;
+}
+
+/* ---- Status chip: icon + word ---- */
+.agst { display: inline-flex; align-items: center; gap: 5px; flex: none; min-width: 0; font-size: var(--fs-label); font-weight: 600; line-height: 16px; white-space: nowrap; color: var(--st-running); }
+.agst .agi { display: inline-grid; place-items: center; width: 12px; height: 12px; flex: none; }
+.agst .agi svg { width: 12px; height: 12px; }
+.agst .agi .dot.live { width: 7px; height: 7px; }
+.agst .agl { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.agst.k-waiting { color: var(--st-waiting); }
+.agst.k-paused { color: var(--st-paused); } .agst.k-paused .agi svg { stroke-width: 2.4; width: 11px; height: 11px; }
+.agst.k-done { color: var(--st-done); font-weight: 400; } .agst.k-done .agi svg { stroke-width: 2; }
+.agst.k-failed { color: var(--st-failed); }
+.agst.k-stopped { color: var(--st-stopped); font-weight: 400; } .agst.k-stopped .agi svg { width: 10px; height: 10px; }
+.agst.k-queued { color: var(--muted); font-weight: 400; }
+/* Waiting for you is the one state that asks for the user: a soft pill so it is found first in a list. */
+.agst.k-waiting { padding: 0 7px 0 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+
+/* ---- Agents strip under the tab bar: the open chat's batch (Best of N / split tasks) and agents in other tabs ---- */
+/* A long batch scrolls inside the strip instead of pushing the conversation off a short side bar. */
+.bgruns { gap: 2px; padding: 6px 8px; background: color-mix(in srgb, var(--brand) 4%, transparent); max-height: min(34vh, 232px); overflow-y: auto; overscroll-behavior: contain; }
+.bg-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 2px 4px 2px; }
+.bg-head .bg-k { flex: none; font-size: var(--fs-label); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.bg-head .bg-tally { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--muted); }
+.bg-head .bg-compare { flex: none; font-size: var(--fs-xs); color: var(--link); padding: 0 2px; border-radius: 4px; }
+.bg-head .bg-compare:hover { text-decoration: underline; }
+.bg-head.other { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border-soft); }
+.bgrun { min-height: 26px; gap: 4px; padding: 0 2px 0 4px; font-size: var(--fs-sm); transition: background var(--t-fast) var(--ease-out); }
+.bgrun .open { display: grid; grid-template-columns: minmax(0, auto) minmax(0, max-content) minmax(0, 1fr) auto auto auto; align-items: center; column-gap: 8px; min-height: 26px; }
+.bgrun .open > .agst { min-width: 0; }
+.bgrun .t { max-width: none; font-weight: 500; }
+.bgrun .st { color: var(--muted); font-size: var(--fs-xs); }
+.bgrun .el, .bgrun .cost { flex: none; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bgrun .el:empty { display: none; }
+.bgrun .mdl { line-height: 18px; border-radius: var(--radius-pill); font-size: var(--fs-xs); }
+.bgrun.current { background: var(--tint-2); color: var(--fg); cursor: default; }
+.bgrun.current .t::after { content: ' · this tab'; font-weight: 400; color: var(--muted); }
+.bgrun.k-done .t { font-weight: 400; color: var(--fg-2); }
+.bgrun .stop { width: 22px; height: 22px; border-radius: var(--radius-ctl); }
+.bgrun .stop svg { width: 12px; height: 12px; }
+.bgrun .open:focus-visible, .bgrun .stop:focus-visible, .bg-head .bg-compare:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+/* Narrow strip: the status keeps its icon (its shape tells it apart) and the word moves to the tooltip for the busy
+   states; Waiting for you keeps its word. The step text and the model give way before the name does. */
+@container bgruns (max-width: 420px) {
+  .bgrun .open { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+  .bgrun .st, .bgrun .mdl { display: none; }
+  .bgrun:not(.k-waiting) .agst .agl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .bgrun.current .t::after { content: ''; }
+}
+@container bgruns (max-width: 300px) { .bgrun .cost { display: none; } .bg-head .bg-tally { display: none; } }
+
+/* ---- Worker lanes (run_subagent / run_parallel_subagents) and the Workers card ---- */
+/* The lane's leading icon is the status glyph (chat.js laneMeta): running dot, pause bars, check, ×, stop square. */
+.step.subagent > summary .ico { color: var(--st-running); }
+/* Status glyphs never spin: inside a running Workers card the generic `.step.running .ico svg` spin would turn a done lane's check. */
+.step.subagent > summary .ico svg { animation: none; }
+.step.subagent[data-lane="paused"] > summary .ico { color: var(--st-paused); }
+.step.subagent[data-lane="done"] > summary .ico { color: var(--st-done); } .step.subagent[data-lane="done"] > summary .ico svg { stroke-width: 2; width: 13px; height: 13px; }
+.step.subagent[data-lane="failed"] > summary .ico { color: var(--st-failed); }
+.step.subagent[data-lane="stopped"] > summary .ico { color: var(--st-stopped); } .step.subagent[data-lane="stopped"] > summary .ico svg { width: 11px; height: 11px; }
+.step.subagent > summary .meta { gap: 0; color: var(--muted); }
+.step.subagent > summary .meta .agst { line-height: inherit; }
+.step.subagent > summary .meta .muted { white-space: pre; }
+.step.subagent[data-lane="done"] > summary .lane-task, .step.subagent[data-lane="stopped"] > summary .lane-task { color: var(--muted); }
+.step.subagent[data-lane="done"] > summary .pill b, .step.subagent[data-lane="stopped"] > summary .pill b { font-weight: 500; color: var(--fg-2); }
+.step.subagent.error > summary .pill { border-color: var(--border-soft); }
+.step.subagent.paused > summary .pill { border-style: solid; }
+/* Workers card: one calm card, the head says how far the batch is (count + a thin bar), rows separated by space. */
+.step.subhost.workers { border-radius: var(--radius-card); margin: 8px 0; }
+.step.subhost.workers > summary { min-height: 36px; padding: 4px 8px 4px 10px; }
+.step.subhost.workers > summary .meta { gap: 8px; }
+.wk-meter { display: inline-block; width: 48px; height: 4px; border-radius: var(--radius-pill); background: var(--tint-2); overflow: hidden; flex: none; }
+.wk-meter i { display: block; height: 100%; background: var(--brand); border-radius: inherit; transition: width var(--t-med) var(--ease-out); }
+.wk-n { font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.step.subhost.workers > .content.subs { gap: 0; padding: 2px 6px 8px; }
+.step.subhost.workers > .content.subs > .step.subagent > summary, .step.subhost.workers .lane { border-radius: var(--radius-ctl); }
+.step.subhost.workers .lane.pending .ico .dot.idle { opacity: .8; }
+.step.subhost.workers .lane.pending::after { content: 'Queued'; font-size: var(--fs-label); color: var(--muted); }
+.lane-retry { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: var(--radius-ctl); border: 1px solid var(--border-soft); font-size: var(--fs-xs); color: var(--fg); }
+.lane-retry:hover { background: var(--tint); }
+.lane-retry svg { width: 12px; height: 12px; }
+.lanectl button { width: 22px; height: 22px; border-radius: var(--radius-ctl); }
+.lanectl.host button { height: 24px; border-radius: var(--radius-ctl); }
+/* Narrow: the count says how far the batch is; the bar gives its room to the head label. */
+@container messages (max-width: 380px) { .wk-meter { display: none; } }
+
+/* ---- Run summary ("Worked for …") and step groups ---- */
+.work { border-radius: var(--radius-ctl); transition: background var(--t-fast) var(--ease-out); }
+.work.done:hover { background: var(--tint); }
+.work.stopped .ico { color: var(--st-stopped); }
+.work.failed .ico { color: var(--st-failed); }
+.work.paused .ico { color: var(--st-paused); }
+
+/* ---- Tool cards (read / edit / run / search): controls share the 6 px control radius ---- */
+.step > summary { border-radius: var(--radius-ctl); transition: background var(--t-fast) var(--ease-out); }
+.step .content { border-radius: var(--radius-ctl); }
+.card.edit { border-radius: var(--radius-card); }
+
+/* ---- Approval and question cards: the card that waits for you ---- */
+.approval { border-radius: var(--radius-card); }
+.approval .head { min-height: 34px; }
+.approval .actions .btn, .approval .split > .btn { border-radius: var(--radius-ctl); }
+.approval .split > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.approval .split > .split-more { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+
+/* ---- Run interrupted / recovery cards ---- */
+.rec { border-radius: var(--radius-card); }
+.rec .rec-head .t { font-weight: 600; }
+.rec .rec-vh, .tr-k { letter-spacing: .06em; }
+
+/* ---- Tasks and review panels (file-by-file Accept / Reject) ---- */
+#tasks.panel, #changes.panel { border-radius: var(--radius-card); }
+.change { min-height: 26px; border-radius: var(--radius-ctl); }
+.change .acts button { height: 22px; border-radius: var(--radius-ctl); }
+
+/* ---- Multitask launcher (popover) ---- */
+.par-card { border-radius: var(--radius-card); transition: border-color var(--t-fast) var(--ease-out), background var(--t-fast) var(--ease-out); }
+.par .lbl { font-size: var(--fs-label); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.par .lbl i { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.par-models .chip { border-radius: var(--radius-pill); }
+.task-row input.task { border-radius: var(--radius-ctl); }
+/* A 300 px side bar: the launcher fits the popover (it used to keep 300 px and push Start past the edge). */
+.par { min-width: 0; container: par / inline-size; }
+@container par (max-width: 320px) { .par-cards { grid-template-columns: 1fr; } .par-card { grid-template-rows: auto; } }
+
+/* ---- High contrast: the strip and chips keep their edges, the waiting pill an outline ---- */
+body.vscode-high-contrast .agst.k-waiting, body.vscode-high-contrast-light .agst.k-waiting { background: none; outline: 1px solid var(--vscode-contrastBorder, var(--st-waiting)); outline-offset: -1px; }
+body.vscode-high-contrast .bgrun.current, body.vscode-high-contrast-light .bgrun.current { background: none; outline: 1px dashed var(--vscode-contrastBorder, var(--border)); outline-offset: -1px; }
+body.vscode-high-contrast .wk-meter, body.vscode-high-contrast-light .wk-meter { background: none; outline: 1px solid var(--vscode-contrastBorder, var(--border)); }
+
+/* ---- Reduced motion (the flag chat.css raises from the OS preference and localpilot.appearance.motion) ---- */
+@container style(--motion-reduced: 1) {
+  .wk-meter i, .bgrun, .work, .step > summary, .par-card { transition: none; }
+}
+
+/* ---- Task header: the open agent's status beside "Task" while it works ---- */
+.taskhead .th-row > .agst { flex: none; margin-right: 2px; }
+@container (max-width: 330px) { .taskhead .th-row > .agst:not(.k-waiting) .agl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } }

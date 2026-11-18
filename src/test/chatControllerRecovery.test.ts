@@ -18,6 +18,7 @@ suite('Chat controller: self-healing wiring', () => {
       replays: new Map(),
       offers: new Map(),
       outcomes: new Map(),
+      lastRuns: new Map(),
       traceRecorders: new Map(),
       traces: new TraceStore(undefined),
       stoppedByUser: new Set(),

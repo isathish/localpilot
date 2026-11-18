@@ -77,7 +77,7 @@ You describe the outcome. The agent then acts as a coordinator:
 
 The coordinator has no file-editing or delete tools, so every change goes through a worker.
 
-In the chat the fan-out appears as a **Working** card with one row per worker: its task and current step. Expand a row to see the worker's full trace. Use **Stop All** for the whole batch, or ⏸ / ■ on a row for one worker. The status line counts workers (*2 workers running · 1 queued · 1 done*).
+In the chat the fan-out appears as a **Workers** card with one row per worker: its status icon, task and current step. The card's head counts the workers by status (*2 running · 1 queued · 1 done · 1 failed*) next to a progress bar and *3/6*. A finished row says how it ended and what it did, for example *Done · 4 steps · 1m 12s · 2 files*; a failed one has **Retry**, and one you stopped says *Stopped* rather than *Failed*. Expand a row to see the worker's full trace. Use **Stop all** for the whole batch, or ⏸ / ■ on a row for one worker. The status line counts workers the same way (*2 workers running · 1 queued · 1 done*). The words and icons are those of [Status at a glance]({{ '/docs/parallel-agents/#status-at-a-glance' | relative_url }}).
 
 Small models sometimes say they delegated without starting anything. LocalPilot marks that sentence as **retracted**, asks the model to act, and shows the real answer in a new block.
 
