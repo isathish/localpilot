@@ -323,6 +323,8 @@ Read-only subagents run on a small *fast* model when routing finds one. If that 
 
 The Agent map shows every agent LocalPilot has and how work flows between them, on one page, and lets you configure them from there. Open it with **LocalPilot: Open Agent Map** in the Command Palette or the map button in the **Agents** view's title bar. Everything on it is read from your live settings, skills, subagent files and MCP servers, and it redraws when any of them changes.
 
+<p><img src="{{ '/assets/screenshots/agent-map.png' | relative_url }}" alt="The Agent map: Auto routes a message to the Review specialist on the reasoning model; the Agent mode inspector lists the subagents it can start and the skills it can load" width="900"></p>
+
 It shows five layers, left to right:
 
 - **Auto and the model roles.** How Auto routes a message: which kind of request goes to which mode or specialist and which model role (`agent`, `reasoning` or `fast`) answers it. Each role (Default model, Reasoning, Fast, Coding, Vision) shows its setting and the model it resolves to right now, which is what the router would pick with `localpilot.models.localOnly` and the installed models as they are.

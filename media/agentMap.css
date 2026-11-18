@@ -107,7 +107,9 @@ body.vscode-high-contrast :is(.chips, .seg) button.on, body.vscode-high-contrast
 .edges .k-skill, .edges .k-tool { stroke-dasharray: 2 4; }
 .edges .k-playbook, .edges .k-preload { stroke-width: 1.8; }
 .graph.has-hot .edges path:not(.hot):not(.path) { opacity: .08; }
-.edges path.hot { opacity: 1; stroke: var(--edge-hot); stroke-width: 1.8; }
+/* A selected node's edges are solid and fine: dozens of dashed curves leaving one point stacked their dashes into a
+   comb of ticks. Dashes stay on resting edges, where they tell the edge kinds apart. */
+.edges path.hot { opacity: .7; stroke: var(--edge-hot); stroke-width: 1.2; stroke-dasharray: none; }
 .edges path.path { opacity: 1; stroke: var(--k-auto); stroke-width: 2.6; stroke-dasharray: none; }
 .edges path.dim { opacity: .05; }
 .col-head { position: absolute; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; color: var(--muted); padding: 6px 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

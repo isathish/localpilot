@@ -92,6 +92,9 @@ const SHOTS = [
   { file: 'rating-card.png', url: harness('ui-preview.html', 'live=0&rate=hot'), size: [471, 836], wait: 1600, clip: 'viewport' },
   { file: 'settings-continuity.png', url: settings('section=continuity'), size: [900, 760], clip: 'viewport' },
   { file: 'settings-sync.png', url: settings('section=continuity&scroll=sync'), size: [900, 760], wait: 1800, clip: 'viewport' },
+  // The Agent map: Auto routing a message (path highlighted) with a mode's inspector open, and the list view in a side bar.
+  { file: 'agent-map.png', url: harness('agent-map-preview.html', 'motion=reduced&sel=mode:agent&try=' + encodeURIComponent('Review my changes before I open the PR')), size: [1400, 860], wait: 1500, clip: 'viewport' },
+  { file: 'agent-map-list.png', url: harness('agent-map-preview.html', 'motion=reduced&view=list'), size: [320, 860], wait: 1200, clip: 'viewport' },
 ];
 
 // ------------------------------------------------------------------ DevTools Protocol

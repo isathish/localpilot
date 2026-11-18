@@ -212,10 +212,14 @@
     if (!S.model || !L) { return; }
     const focus = new Set([S.hot, S.sel].filter(Boolean));
     const near = new Set(); const ps = pathSet();
+    const colOf = new Map(S.model.nodes.map((n) => [n.id, n.col]));
     els.edges.querySelectorAll('path').forEach((p) => {
       const e = S.model.edges[+p.dataset.i];
-      const hot = focus.has(e.from) || focus.has(e.to);
-      if (hot) { near.add(e.from); near.add(e.to); }
+      const linked = focus.has(e.from) || focus.has(e.to);
+      if (linked) { near.add(e.from); near.add(e.to); }
+      // Only edges into the next column are drawn: a long edge crosses the cards of the columns between and shows only
+      // in their gaps, as a comb of ticks. Farther neighbours still light up, and the inspector lists them.
+      const hot = linked && Math.abs((colOf.get(e.from) ?? 0) - (colOf.get(e.to) ?? 0)) <= 1;
       p.classList.toggle('hot', hot); p.classList.toggle('path', onPathEdge(e));
     });
     els.graph.classList.toggle('has-hot', focus.size > 0);
